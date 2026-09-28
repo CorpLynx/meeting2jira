@@ -1,0 +1,7 @@
+"Subject","Start Date","Start Time","End Date","End Time","All day event","Reminder on/off","Reminder Date","Reminder Time","Meeting Organizer","Required Attendees","Optional Attendees","Meeting Resources","Billing Information","Categories","Description","Location","Mileage","Priority","Private","Sensitivity","Show time as"
+"Sprint Planning","9/21/2026","10:00:00 AM","9/21/2026","11:00:00 AM","False","True","9/21/2026","9:45:00 AM","Alex Kim","Alex Kim;Jordan Doe",,,,"","Agenda:
+- review backlog
+- commit","Microsoft Teams Meeting",,"Normal","False","Normal","2"
+"Canceled: Architecture review","9/23/2026","3:00:00 PM","9/23/2026","4:00:00 PM","False","False",,,"Sam Lee","Sam Lee;Jordan Doe",,,,"","",,,"Normal","False","Normal","0"
+"Dentist","9/22/2026","3:00:00 PM","9/22/2026","4:00:00 PM","False","True","9/22/2026","2:45:00 PM","","",,,,"","",,,"Normal","True","Private","3"
+"Broken row","not a date","10:00:00 AM","9/22/2026","11:00:00 AM","False","False",,,"","",,,,"","",,,"Normal","False","Normal","2"

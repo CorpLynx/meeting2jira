@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.dpapi
+state.db
+exports/
+logs/
+*.csv
+!tests/fixtures/*.csv
+
+# Terraform (infra/windows-test-vm).
+# State is the important one: it holds the lab VM's local-account password in plaintext,
+# along with the bucket name and instance id. It must never be committed.
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+# .terraform.lock.hcl is intentionally NOT ignored: pinning provider versions is the same
+# discipline this project applies to every other dependency.
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc

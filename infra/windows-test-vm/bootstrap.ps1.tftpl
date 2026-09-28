@@ -1,0 +1,82 @@
+<powershell>
+# First-boot setup for the meeting2jira test VM. Runs as SYSTEM under EC2Launch v2.
+# Terraform renders this file, so PowerShell's $${name} and %%{...} forms are avoided
+# throughout; plain $name and ForEach-Object are used instead.
+
+$ErrorActionPreference = 'Stop'
+$root = 'C:\m2j'
+New-Item -ItemType Directory -Force -Path $root | Out-Null
+Start-Transcript -Path (Join-Path $root 'bootstrap.log') -Append | Out-Null
+
+function Say($text) {
+    Write-Host ('[{0:HH:mm:ss}] {1}' -f (Get-Date), $text)
+}
+
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    # ---- Python ----------------------------------------------------------------------------
+    # InstallLauncherAllUsers gives us py.exe, which is the launcher Resolve-Python prefers.
+    $pyVersion = '${python_version}'
+    $pyInstaller = Join-Path $env:TEMP ('python-' + $pyVersion + '-amd64.exe')
+    $pyUrl = 'https://www.python.org/ftp/python/' + $pyVersion + '/python-' + $pyVersion + '-amd64.exe'
+    Say ('Downloading Python ' + $pyVersion)
+    Invoke-WebRequest -Uri $pyUrl -OutFile $pyInstaller -UseBasicParsing
+
+    Say 'Installing Python'
+    $pyArgs = @('/quiet', 'InstallAllUsers=1', 'PrependPath=1', 'Include_launcher=1',
+        'InstallLauncherAllUsers=1', 'Include_test=0', 'Include_doc=0', 'SimpleInstall=1')
+    $proc = Start-Process -FilePath $pyInstaller -ArgumentList $pyArgs -Wait -PassThru
+    Say ('Python installer exit code: ' + $proc.ExitCode)
+
+    # ---- AWS CLI ---------------------------------------------------------------------------
+    # Used to pull the repo from the lab bucket and push results back.
+    Say 'Installing AWS CLI v2'
+    $cliMsi = Join-Path $env:TEMP 'AWSCLIV2.msi'
+    Invoke-WebRequest -Uri 'https://awscli.amazonaws.com/AWSCLIV2.msi' -OutFile $cliMsi -UseBasicParsing
+    Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', $cliMsi, '/quiet', '/norestart') -Wait
+
+    # ---- A non-administrator account -------------------------------------------------------
+    # SSM commands run as SYSTEM. Any check that claims to prove the "no admin rights"
+    # requirement has to run as this account instead.
+    $userName = '${standard_user_name}'
+    $securePass = ConvertTo-SecureString '${standard_user_pass}' -AsPlainText -Force
+    if (-not (Get-LocalUser -Name $userName -ErrorAction SilentlyContinue)) {
+        Say ('Creating non-admin user ' + $userName)
+        New-LocalUser -Name $userName -Password $securePass -PasswordNeverExpires -AccountNeverExpires | Out-Null
+        Add-LocalGroupMember -Group 'Users' -Member $userName
+        # Deliberately NOT added to Administrators, and added to Remote Desktop Users so the
+        # interactive Task Scheduler checks can be done over an SSM port-forward.
+        Add-LocalGroupMember -Group 'Remote Desktop Users' -Member $userName -ErrorAction SilentlyContinue
+    }
+
+    # ---- Cost guard ------------------------------------------------------------------------
+    # Re-arms on every boot, because the trigger is AtStartup with a delay rather than a
+    # one-shot time. The instance is configured to stop, not terminate, on shutdown.
+    $stopHours = ${auto_stop_hours}
+    if ($stopHours -gt 0) {
+        Say ('Arming auto-stop ' + $stopHours + 'h after each boot')
+        $action = New-ScheduledTaskAction -Execute 'shutdown.exe' -Argument '/s /t 0 /c "meeting2jira lab auto-stop"'
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $trigger.Delay = 'PT' + $stopHours + 'H'
+        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
+        Register-ScheduledTask -TaskName 'm2j-auto-stop' -Action $action -Trigger $trigger `
+            -Principal $principal -Force | Out-Null
+    }
+
+    # ---- Where the checks will look ---------------------------------------------------------
+    $env:M2J_BUCKET = '${bucket}'
+    [Environment]::SetEnvironmentVariable('M2J_BUCKET', '${bucket}', 'Machine')
+    [Environment]::SetEnvironmentVariable('AWS_DEFAULT_REGION', '${region}', 'Machine')
+
+    Say 'Bootstrap complete'
+    'ok' | Set-Content -Path (Join-Path $root 'bootstrap-complete.txt') -Encoding ascii
+} catch {
+    Say ('BOOTSTRAP FAILED: ' + $_.Exception.Message)
+    $_ | Out-String | Add-Content -Path (Join-Path $root 'bootstrap-error.txt')
+    throw
+} finally {
+    Stop-Transcript | Out-Null
+}
+</powershell>
+<persist>true</persist>

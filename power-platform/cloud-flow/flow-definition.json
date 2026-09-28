@@ -1,0 +1,199 @@
+{
+  "_comment": [
+    "BLUEPRINT, NOT AN IMPORTABLE ARTEFACT.",
+    "Power Automate solution packages carry connection references, environment ids and API versions",
+    "specific to your tenant, so a hand-written definition generally will not import cleanly. Use this",
+    "to see the intended shape, the ordering, and the settings that matter, then build it in the",
+    "designer. The settings worth copying exactly are marked _why below.",
+    "",
+    "Placeholders to replace: <JIRA_BASE_URL>, <GATEWAY_ID>, <DEFAULT_PARENT>, <SUBTASK_TYPE>.",
+    "The Jira credential must come from a connection or Key Vault, never inline in the definition."
+  ],
+
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+
+    "parameters": {
+      "daysBack": {
+        "type": "int",
+        "defaultValue": 1,
+        "metadata": {
+          "_why": "Re-scanning yesterday is free once label dedupe works, and it catches meetings that ended after the previous run. Widen this rather than building a deferred-meeting queue."
+        }
+      },
+      "maxCreatesPerRun": {
+        "type": "int",
+        "defaultValue": 40,
+        "metadata": { "_why": "Safety valve against a misconfigured first run filling Jira." }
+      },
+      "logWork": { "type": "bool", "defaultValue": false }
+    },
+
+    "triggers": {
+      "Weekday_recurrence": {
+        "type": "Recurrence",
+        "recurrence": {
+          "frequency": "Week",
+          "interval": 1,
+          "schedule": { "weekDays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], "hours": [16], "minutes": [0] },
+          "timeZone": "Eastern Standard Time"
+        },
+        "metadata": { "_why": "Shortly after the tour of duty ends, so the day's meetings have finished." }
+      }
+    },
+
+    "actions": {
+      "Window_start": {
+        "type": "Compose",
+        "runAfter": {},
+        "inputs": "@{formatDateTime(addDays(startOfDay(utcNow()), mul(-1, parameters('daysBack'))), 'yyyy-MM-ddTHH:mm:ssZ')}"
+      },
+
+      "Get_calendar_events": {
+        "type": "ApiConnection",
+        "runAfter": { "Window_start": ["Succeeded"] },
+        "inputs": {
+          "host": { "connection": { "name": "@parameters('$connections')['office365']['connectionId']" } },
+          "method": "get",
+          "path": "/datasets/calendars/v4/tables/@{encodeURIComponent('Calendar')}/items",
+          "queries": {
+            "startDateTime": "@outputs('Window_start')",
+            "endDateTime": "@{formatDateTime(utcNow(), 'yyyy-MM-ddTHH:mm:ssZ')}",
+            "$orderby": "start asc"
+          }
+        },
+        "metadata": {
+          "_why": "V4 expands recurring series into individual instances. Verify that: the whole series sharing one id is the classic cause of 'only one standup ever appeared'.",
+          "_warning": "This can return local times with offsets. Convert to UTC before hashing or every label will be wrong."
+        }
+      },
+
+      "For_each_event": {
+        "type": "Foreach",
+        "runAfter": { "Get_calendar_events": ["Succeeded"] },
+        "foreach": "@body('Get_calendar_events')?['value']",
+        "runtimeConfiguration": {
+          "concurrency": { "repetitions": 1 }
+        },
+        "metadata": {
+          "_why": "Concurrency MUST be 1. Parallel iterations race on the dedupe search: two events can both see 'not found' and both create."
+        },
+
+        "actions": {
+          "Skip_unless_eligible": {
+            "type": "If",
+            "expression": {
+              "and": [
+                { "less": ["@items('For_each_event')?['end']", "@utcNow()"] },
+                { "equals": ["@items('For_each_event')?['isCancelled']", false] },
+                { "equals": ["@items('For_each_event')?['isAllDay']", false] },
+                { "equals": ["@items('For_each_event')?['sensitivity']", "normal"] },
+                { "not": { "equals": ["@items('For_each_event')?['showAs']", "free"] } },
+                { "not": { "equals": ["@items('For_each_event')?['responseType']", "declined"] } }
+              ]
+            },
+            "metadata": {
+              "_why": "Only ended meetings, because a worklog must reflect time actually spent. See parity-checklist.md for the full filter set, including the text exclusions (OOO, PTO) this skeleton omits."
+            },
+
+            "actions": {
+              "Compute_dedupe_label": {
+                "type": "Compose",
+                "inputs": "m2j-<FIRST 10 HEX OF sha256(lower(collapse_whitespace(subject)) | startUtc | endUtc)>",
+                "metadata": {
+                  "_why": "Power Automate has no SHA-256 expression. Use an Office Script 'Run script' action, or let the existing tool own the hash. See dedupe.md for the exact normalisation rules; a byte-level mismatch means two sub-tasks per meeting.",
+                  "_blocking": true
+                }
+              },
+
+              "Find_existing_subtask": {
+                "type": "Http",
+                "runAfter": { "Compute_dedupe_label": ["Succeeded"] },
+                "inputs": {
+                  "method": "GET",
+                  "uri": "<JIRA_BASE_URL>/rest/api/2/search",
+                  "queries": { "jql": "labels = \"@{outputs('Compute_dedupe_label')}\"", "fields": "key", "maxResults": "5" },
+                  "headers": { "Accept": "application/json" },
+                  "authentication": { "type": "Raw", "value": "Bearer @{body('Get_jira_pat')?['value']}" }
+                },
+                "runtimeConfiguration": { "staticResult": { "staticResultOptions": "Disabled" } },
+                "metadata": {
+                  "_why": "A GET is safe to retry, unlike the create below.",
+                  "_gateway": "For an on-prem Jira this needs the on-premises data gateway: <GATEWAY_ID>."
+                }
+              },
+
+              "Decide_on_search_result": {
+                "type": "Switch",
+                "runAfter": { "Find_existing_subtask": ["Succeeded"] },
+                "expression": "@length(body('Find_existing_subtask')?['issues'])",
+                "cases": {
+                  "Already_synced": {
+                    "case": 1,
+                    "actions": {
+                      "Skip_it": { "type": "Compose", "inputs": "EXISTS @{first(body('Find_existing_subtask')?['issues'])?['key']}" }
+                    }
+                  },
+                  "Not_yet_created": {
+                    "case": 0,
+                    "actions": {
+                      "Create_subtask": {
+                        "type": "Http",
+                        "inputs": {
+                          "method": "POST",
+                          "uri": "<JIRA_BASE_URL>/rest/api/2/issue",
+                          "headers": { "Content-Type": "application/json" },
+                          "body": {
+                            "fields": {
+                              "project": { "key": "<PROJECT_KEY>" },
+                              "parent": { "key": "<DEFAULT_PARENT>" },
+                              "issuetype": { "name": "<SUBTASK_TYPE>" },
+                              "summary": "Meeting: @{items('For_each_event')?['subject']}",
+                              "description": "Logged automatically from my calendar.",
+                              "labels": ["meeting", "@{outputs('Compute_dedupe_label')}"]
+                            }
+                          }
+                        },
+                        "runtimeConfiguration": {
+                          "retryPolicy": { "type": "none" }
+                        },
+                        "metadata": {
+                          "_why": "retryPolicy MUST be none. Power Automate retries failed actions by default; a retried timeout on a create is a duplicate issue, because Jira may have applied the first attempt and lost the response. This is the platform's default actively causing the bug meeting2jira was fixed to avoid.",
+                          "_blocking": true
+                        }
+                      },
+
+                      "Recover_if_create_was_ambiguous": {
+                        "type": "Http",
+                        "runAfter": { "Create_subtask": ["Failed", "TimedOut"] },
+                        "inputs": {
+                          "method": "GET",
+                          "uri": "<JIRA_BASE_URL>/rest/api/2/search",
+                          "queries": { "jql": "labels = \"@{outputs('Compute_dedupe_label')}\"", "fields": "key", "maxResults": "5" }
+                        },
+                        "metadata": {
+                          "_why": "A timeout or 502/503/504 on the create may have been applied anyway. Exactly one match means it worked; none means it is safe next run; several or a failed search means report it and change nothing. Never create again without checking."
+                        }
+                      }
+                    }
+                  }
+                },
+                "default": {
+                  "actions": {
+                    "Report_ambiguous_match": {
+                      "type": "Compose",
+                      "inputs": "AMBIGUOUS: @{outputs('Compute_dedupe_label')} matches several issues. Resolve by hand; nothing was changed.",
+                      "metadata": { "_why": "Several matches means a human decides. Guessing here creates or corrupts the wrong issue." }
+                    }
+                  }
+                }
+              }
+            },
+            "else": { "actions": {} }
+          }
+        }
+      }
+    }
+  }
+}
