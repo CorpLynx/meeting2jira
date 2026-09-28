@@ -12,14 +12,26 @@ variable "name" {
 
 variable "subnet_id" {
   description = <<-EOT
-    Existing subnet to launch into. Must auto-assign public IPs and route 0.0.0.0/0 to an
-    internet gateway (or otherwise have outbound HTTPS), since SSM and the installers need
-    it. Defaults to the public subnet already in this account's vpc-09d04c6eb9b424f9e
-    (10.20.1.0/24, us-east-1a). Override if that subnet ever changes or you'd rather use a
-    different VPC.
+    Existing subnet to launch into. Deliberately has no default: it is account-specific, so a
+    hardcoded value would neither work for anyone else nor belong in a shared repository.
+
+    The subnet must reach the internet outbound, because SSM and the Python/AWS CLI installers
+    need it. A public subnet that auto-assigns public IPs and routes 0.0.0.0/0 to an internet
+    gateway is the cheap option. Find a candidate with:
+
+      aws ec2 describe-subnets \
+        --query 'Subnets[?MapPublicIpOnLaunch].{id:SubnetId,az:AvailabilityZone,vpc:VpcId}' \
+        --output table
+
+    Then confirm its route table has a 0.0.0.0/0 route to an igw-*, and pass it as
+    -var subnet_id=subnet-xxxxxxxx (or put it in a gitignored *.tfvars file).
   EOT
   type        = string
-  default     = "subnet-0ac0b218bf9d0e695"
+
+  validation {
+    condition     = can(regex("^subnet-[0-9a-f]+$", var.subnet_id))
+    error_message = "subnet_id must look like subnet-0123456789abcdef0."
+  }
 }
 
 variable "instance_type" {

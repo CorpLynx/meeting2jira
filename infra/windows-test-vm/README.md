@@ -91,7 +91,7 @@ anything about the no-admin requirement.
 
 | Variable | Default | Why change it |
 |---|---|---|
-| `subnet_id` | the account's existing public subnet | A different VPC, or if that subnet is gone. |
+| `subnet_id` | **required** | No default: it is account-specific. The variable's description has a one-liner to find a suitable public subnet. |
 | `python_version` | `3.12.10` | Set `3.8.10` to test the version floor the project promises. |
 | `auto_stop_hours` | `4` | `0` disables the auto-stop. |
 | `instance_type` | `t3.large` | Smaller struggles with Windows plus the installers. |
