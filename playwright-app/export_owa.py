@@ -54,6 +54,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="include the organizer name (extra personal data; off by default)")
     p.add_argument("--timeout", type=int, default=60,
                    help="seconds to wait for the calendar request (default 60)")
+    p.add_argument("--retention-days", type=int, default=7,
+                   help="delete exports older than this many days (default 7, 0 disables). They "
+                        "contain meeting subjects, so they should not pile up indefinitely.")
     p.add_argument("--raw-out", help="also write the unmapped events, for debugging the mapping")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
@@ -66,6 +69,36 @@ def data_dir() -> Path:
 def default_out_path() -> Path:
     from datetime import datetime
     return data_dir() / "exports" / f"owa_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+
+def prune_old_exports(retention_days: int, now=None) -> int:
+    """Delete exports older than retention_days. Returns how many were removed.
+
+    Exports hold calendar data: subjects, locations, sometimes the organizer. The entry point deletes
+    them after a successful push, but a failed push keeps one for diagnosis and `export` keeps them
+    on purpose - so without this they accumulate in the profile indefinitely. The COM path writes to
+    the same directory, so this prunes both.
+
+    Best effort: a file that cannot be removed must never stop an export.
+    """
+    from datetime import datetime, timedelta
+    if retention_days <= 0:
+        return 0
+    folder = data_dir() / "exports"
+    if not folder.is_dir():
+        return 0
+    cutoff = (now or datetime.now()) - timedelta(days=retention_days)
+    removed = 0
+    for path in folder.glob("*.json"):
+        try:
+            if datetime.fromtimestamp(path.stat().st_mtime) < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError as exc:
+            log.debug("Could not remove %s: %s", path, exc)
+    if removed:
+        log.info("Removed %d export(s) older than %d day(s).", removed, retention_days)
+    return removed
 
 
 def write_last_export(ok: bool, detail: str, captured: int = 0, exported: int = 0) -> None:
@@ -111,6 +144,9 @@ def main(argv=None) -> int:
         # trace anywhere, and `status` would keep reporting the last successful push.
         write_last_export(False, "playwright is not installed")
         return 2
+
+    # Before anything else, so housekeeping still happens on a run that then fails to export.
+    prune_old_exports(args.retention_days)
 
     profile_dir = Path(args.profile)
     profile_dir.mkdir(parents=True, exist_ok=True)

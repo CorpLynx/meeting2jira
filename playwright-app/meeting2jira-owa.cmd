@@ -27,7 +27,7 @@ rem  Set M2J_APP_DIR if the COM app does not sit at ..\app.
 rem
 rem  No -ExecutionPolicy Bypass here either.
 rem =============================================================================================
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
@@ -43,13 +43,21 @@ rem pass the action through twice.
 set "ACTION=%~1"
 set "ARGS="
 set "ARG1="
+set "EXPORTFLAGS="
 set "IDX=0"
 if not "%ACTION%"=="" shift
 :collect
 if "%~1"=="" goto :dispatch
-set /a IDX+=1
-if %IDX%==1 set "ARG1=%~1"
-set "ARGS=%ARGS% %1"
+rem Recognised exporter flags are pulled out here rather than being treated as a day count. The COM
+rem path has -IncludeOrganizer and -Verbose, so this path offers the same.
+if /i "%~1"=="-IncludeOrganizer" (set "EXPORTFLAGS=%EXPORTFLAGS% --include-organizer") else ^
+if /i "%~1"=="--include-organizer" (set "EXPORTFLAGS=%EXPORTFLAGS% --include-organizer") else ^
+if /i "%~1"=="-Verbose" (set "EXPORTFLAGS=%EXPORTFLAGS% -v") else ^
+if /i "%~1"=="-v" (set "EXPORTFLAGS=%EXPORTFLAGS% -v") else (
+    set /a IDX+=1
+    if !IDX!==1 set "ARG1=%~1"
+    set "ARGS=%ARGS% %1"
+)
 shift
 goto :collect
 
@@ -251,7 +259,7 @@ if not exist "%EXPORTDIR%" mkdir "%EXPORTDIR%" >nul 2>&1
 rem A per-run filename, so two runs cannot overwrite each other mid-flight.
 set "EXPORTFILE=%EXPORTDIR%\owa_%RANDOM%%RANDOM%.json"
 pushd "%ROOT%"
-%PYCMD% "%EXPORTER%" --days-back %1 --out "%EXPORTFILE%"
+%PYCMD% "%EXPORTER%" --days-back %1 --out "%EXPORTFILE%"%EXPORTFLAGS%
 set "RC=%ERRORLEVEL%"
 popd
 if not "%RC%"=="0" (
@@ -362,6 +370,10 @@ echo   meeting2jira-owa schedule        register the weekday scheduled task
 echo   meeting2jira-owa unschedule      remove the scheduled task
 echo   meeting2jira-owa selftest        mapping tests plus the COM app's tests
 echo   meeting2jira-owa cli  [args]     Python CLI passthrough
+echo.
+echo Extra flags accepted by the export commands:
+echo   -IncludeOrganizer    include the organizer name ^(extra personal data; off by default^)
+echo   -Verbose             more detail, including the endpoint that was discovered
 echo.
 echo Jira app:  %M2J_APP_DIR%
 echo Config:    %LOCALAPPDATA%\meeting2jira\config.json
