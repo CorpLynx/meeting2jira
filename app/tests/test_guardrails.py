@@ -34,6 +34,29 @@ class GuardrailWiringTests(unittest.TestCase):
     every protection in this file. These assertions fail loudly instead.
     """
 
+    def test_resolve_python_copies_are_identical(self):
+        """Resolve-Python is duplicated on purpose; make sure the copies never drift.
+
+        Dot-sourcing can fail across AppLocker trust levels, so each script carries its own copy.
+        That was cheap when the function was five lines. It is now the piece that decides whether
+        the tool runs at all on a locked-down machine, so a fix applied to one copy and not the
+        others would mean the sync works and the environment check disagrees, or vice versa.
+        """
+        pattern = re.compile(r"^function Resolve-Python\(\[string\]\$Override\) \{.*?^\}",
+                             re.DOTALL | re.MULTILINE)
+        bodies = {}
+        for path in sorted(ROOT.glob("src/windows/*.ps1")) + sorted(ROOT.glob("tools/*.ps1")):
+            text = path.read_text(encoding="utf-8")
+            match = pattern.search(text)
+            if match:
+                bodies[path.name] = match.group()
+
+        self.assertGreaterEqual(len(bodies), 3, f"expected several copies, found {sorted(bodies)}")
+        distinct = set(bodies.values())
+        if len(distinct) != 1:
+            differing = sorted(bodies)
+            self.fail("Resolve-Python has drifted between copies: " + ", ".join(differing))
+
     def test_paths_point_at_real_code(self):
         self.assertTrue(PACKAGE.is_dir(), f"{PACKAGE} is not a directory")
         self.assertTrue(PS_DIR.is_dir(), f"{PS_DIR} is not a directory")

@@ -177,6 +177,7 @@ The config file is `%LOCALAPPDATA%\meeting2jira\config.json`. It's JSON, and any
 | `assign_to_me` | `true` | Uses `/myself` and sets the assignee by `name`. |
 | `log_work` | `false` | Adds a worklog equal to the meeting's length, dated at the meeting's start. |
 | `transition_to` | `null` | e.g. `"Done"`. Matches either the transition name or the target status. |
+| `warn_token_expiry_days` | `14` | Warn this many days before the personal access token expires, so the first sign is not a run of 401s. Reads `/rest/pat/latest/tokens`; older Data Center versions do not expose it, in which case the check quietly does nothing. `0` disables. |
 | `dedupe_label` | `true` | Adds a deterministic `m2j-<hash>` label to every sub-task. It is what lets a create that failed ambiguously be resolved with an exact JQL lookup instead of a guess. Turning it off means an ambiguous create is reported for you to sort out by hand. |
 | `extra_fields` | `{}` | Merged into the create payload for required custom fields, e.g. `{"customfield_10010": {"value": "Overhead"}}`. |
 | `max_creates_per_run` | `40` | Safety cap per run. Must be at least 1: there is no setting for "unlimited", because the cap is what stops a misconfigured first run from filling Jira. For a one-off backfill pass a large `--max`. |
@@ -224,6 +225,25 @@ Two things it doesn't know about:
 
 - **Holidays.** A holiday falling on a listed working day still counts as inside the tour; there's no holiday calendar available offline. Review the dry run if it matters.
 - **Which timezone you're in.** Comparisons use the machine's local time, which is the right answer when your laptop's clock matches your duty station. If you travel with it, meetings are classified against wherever the machine thinks it is.
+
+**`notify`**: making a hidden failure visible. A scheduled task has no window, so `last_run.json`,
+`status` and `doctor` all require you to go and look. This pushes a failure into view instead.
+
+| Key | Default | Notes |
+|---|---|---|
+| `desktop_alert` | `true` | On failure, write `ATTENTION-meeting2jira.txt` to your Desktop (OneDrive-relocated Desktops are handled), falling back to the data directory. Deleted automatically by the next successful run. |
+| `alert_after_failures` | `1` | Consecutive failed runs before alerting. `2` rides out a one-off network blip. Tracked as `consecutive_failures` in `last_run.json`. |
+| `use_msg_exe` | `false` | Additionally try `msg.exe`. Absent on some Windows builds, so failure is silent. |
+
+A failure *before* Python runs — a missing config, or an Outlook export that produced nothing — is
+alerted by `Invoke-MeetingSync.ps1` on the first occurrence, since in that case not one meeting was
+even attempted and there is no streak to weigh.
+
+Why it is a file and not a notification: Windows toast needs WinRT type loading, which Constrained
+Language Mode blocks, and the orchestrator has to stay CLM-safe. BurntToast needs the PowerShell
+Gallery. `mshta.exe` would work with no dependencies but is a well-known living-off-the-land binary
+that endpoint protection and AppLocker commonly block — using it would make this tool look like the
+thing those controls exist to stop. A file on the Desktop is unglamorous and works everywhere.
 
 **`rules`**: evaluated in order, and the first match wins. Every condition inside `match` must hold (AND).
 

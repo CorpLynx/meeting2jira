@@ -34,6 +34,7 @@ import getpass
 import json
 import logging
 import logging.handlers
+import os
 import shutil
 import sqlite3
 import sys
@@ -149,6 +150,21 @@ def cmd_check(args: argparse.Namespace) -> int:
         report("FAIL", f"authentication: {exc}")
         return 1
 
+    # Token expiry. Absent on older Data Center versions, so "not available" is reported as INFO
+    # rather than as a problem: it is a nicety, not a requirement.
+    try:
+        tokens = client.personal_access_tokens()
+        if tokens is None:
+            report("INFO", "this Jira does not expose token expiry dates; check them in Jira directly")
+        else:
+            warning = token_expiry_warning(tokens, int(j.get("warn_token_expiry_days") or 0))
+            if warning:
+                report("WARN", warning)
+            else:
+                report("OK", f"{len(tokens)} personal access token(s), none expiring soon")
+    except JiraError as exc:
+        report("INFO", f"could not read token expiry: {exc}")
+
     for parent in sorted(router.parents()):
         try:
             issue = client.get_issue(parent)
@@ -191,6 +207,17 @@ def cmd_push(args: argparse.Namespace) -> int:
     if not args.dry_run:
         token, _ = load_token(data_dir)
         client = JiraClient.from_config(cfg["jira"], token)
+        # One extra GET, and only a nicety: a token that expires unnoticed turns into a run of 401s.
+        # Any failure here is swallowed, because this must never be why a sync does not happen.
+        try:
+            warning = token_expiry_warning(client.personal_access_tokens(),
+                                           int(cfg["jira"].get("warn_token_expiry_days") or 0))
+            if warning:
+                log.warning("TOKEN: %s", warning)
+        except (JiraError, ValueError, TypeError, AttributeError) as exc:
+            # AttributeError included on purpose: a stubbed or older client without this method
+            # must not be able to stop a sync over an advisory warning.
+            log.debug("Token expiry check skipped: %s", exc)
 
     with State(data_dir / "state.db") as state:
         result = run(meetings, cfg, state, client, dry_run=args.dry_run)
@@ -211,6 +238,12 @@ def cmd_push(args: argparse.Namespace) -> int:
 
     exit_code = 1 if result.errors else 0
     if not args.dry_run:
+        # Carry the failure streak forward, so a single network blip does not have to raise an
+        # alarm while a run of failures does.
+        previous = _read_last_run(data_dir) or {}
+        streak = int(previous.get("consecutive_failures") or 0)
+        streak = streak + 1 if exit_code != 0 else 0
+
         # A scheduled run is hidden; this is what `status` and Test-Environment.ps1 read to tell
         # you it stopped working, without anyone having to open a log file.
         _write_last_run(data_dir, {
@@ -224,13 +257,67 @@ def cmd_push(args: argparse.Namespace) -> int:
             "errors": len(result.errors),
             "warnings": len(result.warnings),
             "worklogs_retried": result.worklogs_retried,
+            "consecutive_failures": streak,
             "first_error": result.errors[0] if result.errors else None,
         })
+
+        # Push the outcome into view, or take the notice down now that it is working again.
+        if exit_code == 0:
+            clear_alert(data_dir)
+        else:
+            write_alert(cfg, data_dir,
+                        summary=f"The last sync finished with {len(result.errors)} error(s).",
+                        detail=result.errors[0] if result.errors else "No detail recorded.",
+                        consecutive_failures=streak)
     return exit_code
 
 
 LAST_RUN_FILE = "last_run.json"
+ALERT_FILE = "ATTENTION-meeting2jira.txt"
 STALE_AFTER_DAYS = 4   # a weekday schedule can legitimately be quiet over a long weekend
+
+
+def token_expiry_warning(tokens: Optional[list], within_days: int,
+                         now: Optional[datetime] = None) -> Optional[str]:
+    """Build a warning if a personal access token is expiring soon, else None.
+
+    Pure so it can be tested without a Jira. `tokens` is whatever
+    JiraClient.personal_access_tokens returned, including None for "this Jira does not expose them".
+
+    The response never says which token is the one in use, so the message must not pretend to know.
+    With a single token that is unambiguous; with several, the soonest expiry is reported and named.
+    """
+    if not tokens or within_days <= 0:
+        return None
+    now = now or datetime.now(timezone.utc)
+
+    soonest = None
+    for token in tokens:
+        raw = token.get("expiringAt") or token.get("expiringAtMillis")
+        if not raw:
+            continue          # a token with no expiry cannot expire
+        try:
+            expires = parse_utc(str(raw))
+        except (ValueError, TypeError):
+            continue
+        if soonest is None or expires < soonest[0]:
+            soonest = (expires, str(token.get("name") or "unnamed"))
+
+    if not soonest:
+        return None
+    expires, name = soonest
+    days = (expires - now).days
+    if days > within_days:
+        return None
+
+    which = "your token" if len(tokens) == 1 else f"the soonest-expiring of your {len(tokens)} tokens, {name!r},"
+    if days < 0:
+        return (f"{which} expired on {expires:%Y-%m-%d}. Create a new one in Jira "
+                "(Profile > Personal Access Tokens) and run set-token.")
+    when = "expires today" if days == 0 else f"expires in {days} day(s), on {expires:%Y-%m-%d}"
+    tail = "" if len(tokens) == 1 else " Jira does not reveal which token a request used, so check the name."
+    return (f"{which} {when}. Create a replacement in Jira (Profile > Personal Access Tokens) "
+            f"and run set-token before then.{tail}")
 
 
 def _write_last_run(data_dir: Path, summary: Dict[str, Any]) -> None:
@@ -245,6 +332,95 @@ def _write_last_run(data_dir: Path, summary: Dict[str, Any]) -> None:
             json.dump(summary, fh, indent=2)
     except OSError as exc:
         log.debug("Could not write %s: %s", LAST_RUN_FILE, exc)
+
+
+def _desktop_dir() -> Optional[Path]:
+    """The user's Desktop, if it can be found. Nothing here is worth failing a run over."""
+    candidates = []
+    profile = os.environ.get("USERPROFILE") or str(Path.home())
+    if profile:
+        candidates.append(Path(profile) / "Desktop")
+        # OneDrive Known Folder Move relocates the Desktop, which is common on managed machines.
+        for key in ("OneDrive", "OneDriveCommercial", "OneDriveConsumer"):
+            root = os.environ.get(key)
+            if root:
+                candidates.append(Path(root) / "Desktop")
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def write_alert(cfg: Dict[str, Any], data_dir: Path, summary: str, detail: str,
+                consecutive_failures: int) -> None:
+    """Put a failure somewhere the user cannot miss it, and stop once it is fixed.
+
+    A file on the Desktop is unglamorous, but it is the only mechanism that works for a standard
+    user, under Constrained Language Mode, with no modules, and without using a binary that
+    endpoint protection treats as an attack tool. See config.DEFAULTS["notify"] for what was
+    rejected and why.
+    """
+    notify = cfg.get("notify") or {}
+    if not notify.get("desktop_alert"):
+        return
+    threshold = max(1, int(notify.get("alert_after_failures") or 1))
+    if consecutive_failures < threshold:
+        log.debug("Not alerting yet: %d consecutive failure(s), threshold %d",
+                  consecutive_failures, threshold)
+        return
+
+    body = (
+        "meeting2jira needs attention\n"
+        "============================\n\n"
+        f"{summary}\n\n"
+        f"Consecutive failed runs: {consecutive_failures}\n"
+        f"Last attempt (UTC):      {iso_utc(datetime.now(timezone.utc))}\n\n"
+        "Details\n-------\n"
+        f"{detail}\n\n"
+        "What to do\n----------\n"
+        "  1. Open a PowerShell window in the meeting2jira folder\n"
+        "  2. Run:  .\\meeting2jira check\n"
+        "     That reports the specific problem: an expired token, a moved parent issue,\n"
+        "     a proxy intercepting the API, or a certificate that is not trusted.\n"
+        "  3. Fix what it names, then:  .\\meeting2jira\n\n"
+        "Meetings are not lost. Nothing has been pushed twice either: re-running is safe,\n"
+        "because already-synced meetings are recognised and skipped.\n\n"
+        "This file is deleted automatically on the next successful run.\n"
+        f"Logs: {data_dir / 'logs'}\n"
+    )
+
+    for folder in (d for d in (_desktop_dir(), data_dir) if d):
+        try:
+            (folder / ALERT_FILE).write_text(body, encoding="utf-8")
+            log.info("Wrote %s", folder / ALERT_FILE)
+            break
+        except OSError as exc:
+            log.debug("Could not write the alert to %s: %s", folder, exc)
+
+    if notify.get("use_msg_exe"):
+        _try_msg_exe(summary)
+
+
+def _try_msg_exe(summary: str) -> None:
+    """Best-effort console message. msg.exe is absent on some Windows builds, so failure is fine."""
+    import subprocess
+    try:
+        subprocess.run(["msg.exe", "*", f"meeting2jira: {summary}"],
+                       timeout=10, capture_output=True, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.debug("msg.exe unavailable: %s", exc)
+
+
+def clear_alert(data_dir: Path) -> None:
+    """Remove the alert once a run succeeds, so a stale file never causes a false alarm."""
+    for folder in (d for d in (_desktop_dir(), data_dir) if d):
+        path = folder / ALERT_FILE
+        try:
+            if path.exists():
+                path.unlink()
+                log.info("Cleared %s", path)
+        except OSError as exc:
+            log.debug("Could not remove %s: %s", path, exc)
 
 
 def _read_last_run(data_dir: Path) -> Optional[Dict[str, Any]]:
@@ -273,6 +449,13 @@ def _report_last_run(data_dir: Path) -> None:
         return
     if age > timedelta(days=STALE_AFTER_DAYS):
         log.warning("  that was %d days ago; the scheduled task may not be running.", age.days)
+    streak = int(last.get("consecutive_failures") or 0)
+    if streak > 1:
+        log.warning("  %d consecutive failed runs.", streak)
+    for folder in (d for d in (_desktop_dir(), data_dir) if d):
+        if (folder / ALERT_FILE).exists():
+            log.warning("  an alert is outstanding: %s", folder / ALERT_FILE)
+            break
 
 
 def cmd_status(args: argparse.Namespace) -> int:

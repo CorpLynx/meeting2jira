@@ -63,6 +63,10 @@ DEFAULTS: Dict[str, Any] = {
         "dedupe_label": True,
         "extra_fields": {},            # merged into the create payload (required custom fields, etc.)
         "max_creates_per_run": 40,     # safety valve against a runaway first run
+        # Warn when the personal access token is close to expiring, so the first sign is not a run
+        # of 401s. Jira Data Center exposes /rest/pat/latest/tokens; older versions and some
+        # configurations do not, in which case the check quietly does nothing. 0 disables it.
+        "warn_token_expiry_days": 14,
         "ca_bundle": None,             # extra PEM bundle; Windows cert store is always used
         "proxy": None,                 # e.g. "http://proxy.agency.gov:8080"; None = Windows settings
         "timeout_seconds": 30,
@@ -91,6 +95,25 @@ DEFAULTS: Dict[str, Any] = {
         "skip_location_contains": [],
         "skip_categories": [],          # whole category names, compared case-insensitively
         "skip_subject_patterns": [],
+    },
+    # Making a hidden failure visible.
+    #
+    # A scheduled task runs with no window. last_run.json plus `status` and `doctor` already record
+    # what happened, but all three require the user to go and look. These settings push a failure
+    # into view instead.
+    #
+    # What is deliberately NOT here, and why:
+    #   * Windows toast notifications need WinRT type loading, which Constrained Language Mode
+    #     blocks outright - and the orchestrator has to stay CLM-safe.
+    #   * BurntToast and friends need the PowerShell Gallery, which is unavailable.
+    #   * mshta.exe can raise a dialog with no dependencies, but it is a well-known
+    #     living-off-the-land binary that endpoint protection and AppLocker commonly block. Using it
+    #     would make this tool look like the thing the controls exist to stop.
+    # What is left is unglamorous and works everywhere: leave a file where the user will see it.
+    "notify": {
+        "desktop_alert": True,         # write ATTENTION-meeting2jira.txt to the Desktop on failure
+        "alert_after_failures": 1,     # consecutive failed runs before alerting; 2 rides out a blip
+        "use_msg_exe": False,          # additionally try msg.exe, which is absent on some builds
     },
     # Tour of duty: your scheduled working hours, in local wall-clock time.
     #

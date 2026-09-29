@@ -188,6 +188,30 @@ class JiraClient:
     def create_issue(self, fields: Dict[str, Any]) -> str:
         return self.request("POST", "/rest/api/2/issue", {"fields": fields})["key"]
 
+    def personal_access_tokens(self) -> Optional[List[Dict[str, Any]]]:
+        """The current user's personal access tokens, or None if this Jira does not expose them.
+
+        Data Center only, and only reasonably recent versions: the endpoint arrived with PATs and is
+        absent or restricted elsewhere. Returns None rather than raising for every "not available"
+        case, because a token-expiry warning is a nicety and must never be the reason a sync fails.
+
+        Note what this cannot do: the response never echoes the token itself, so there is no way to
+        tell which entry is the one in use. The caller has to say so rather than implying certainty.
+        """
+        try:
+            data = self.request("GET", "/rest/pat/latest/tokens")
+        except JiraError as exc:
+            # 404 = version predates the endpoint. 403/401 = present but not permitted here.
+            if exc.status in (401, 403, 404, 405):
+                log.debug("This Jira does not expose personal access tokens (HTTP %s)", exc.status)
+                return None
+            raise
+        if isinstance(data, dict):
+            data = data.get("values") or data.get("tokens") or []
+        if not isinstance(data, list):
+            return None
+        return [token for token in data if isinstance(token, dict)]
+
     def search_issue_keys(self, jql: str, max_results: int = 5) -> List[str]:
         """Return issue keys matching a JQL query.
 

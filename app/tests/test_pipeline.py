@@ -29,6 +29,9 @@ class FakeJira:
     def myself(self):
         return {"name": "jdoe", "displayName": "Jordan Doe"}
 
+    def personal_access_tokens(self):
+        return None      # mirrors a Jira that does not expose token expiry
+
     def create_issue(self, fields):
         self.created.append(fields)
         return f"{fields['project']['key']}-{900 + len(self.created)}"

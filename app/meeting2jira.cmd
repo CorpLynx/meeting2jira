@@ -217,22 +217,65 @@ echo Run this first:  meeting2jira setup
 exit /b 1
 
 :resolvepython
-rem Prefer the py.exe launcher, then a real python.exe. The Microsoft Store alias stub is skipped
-rem because it opens the Store instead of running Python. Mirrors Resolve-Python in the .ps1 files.
-where py.exe >nul 2>&1
-if not errorlevel 1 (
-    set "PYCMD=py -3"
+rem Mirrors Resolve-Python in the .ps1 files. Existence is not proof: a real agency install often has
+rem py.exe present with no 3.x registered (so `py -3` fails), or a working Python that was never added
+rem to PATH, or a 2.x on PATH ahead of a 3.x. So every candidate is executed against a probe script
+rem and must report 3.8+. The first that actually works wins, and PYTHONTRIED records the rest.
+rem
+rem PYCMD is quoted, because an install under "C:\Program Files\..." otherwise breaks on the space.
+if defined PYCMD exit /b 0
+set "PYCMD="
+set "PYTHONTRIED="
+set "PYPROBE=%TEMP%\m2j-pyprobe-%RANDOM%.py"
+> "%PYPROBE%" echo import sys
+>>"%PYPROBE%" echo sys.exit(0 if sys.version_info ^>= (3, 8) else 3)
+
+rem 1. the launcher, verified to actually produce a 3.x
+for /f "delims=" %%I in ('where py.exe 2^>nul') do call :trypython "%%I" "-3" && goto :resolvedpython
+rem 2. anything on PATH
+for /f "delims=" %%I in ('where python3.exe 2^>nul') do call :trypython "%%I" "" && goto :resolvedpython
+for /f "delims=" %%I in ('where python.exe 2^>nul') do call :trypython "%%I" "" && goto :resolvedpython
+rem 3. the registry, where an installer records itself even when PATH was left alone
+for /f "tokens=2,*" %%A in ('reg query "HKCU\SOFTWARE\Python\PythonCore" /s /v ExecutablePath 2^>nul ^| find /i "ExecutablePath"') do call :trypython "%%B" "" && goto :resolvedpython
+for /f "tokens=2,*" %%A in ('reg query "HKLM\SOFTWARE\Python\PythonCore" /s /v ExecutablePath 2^>nul ^| find /i "ExecutablePath"') do call :trypython "%%B" "" && goto :resolvedpython
+for /f "tokens=2,*" %%A in ('reg query "HKLM\SOFTWARE\WOW6432Node\Python\PythonCore" /s /v ExecutablePath 2^>nul ^| find /i "ExecutablePath"') do call :trypython "%%B" "" && goto :resolvedpython
+rem 4. the usual directories, for an install that registered nothing
+for /d %%D in ("%LOCALAPPDATA%\Programs\Python\Python3*") do call :trypython "%%~fD\python.exe" "" && goto :resolvedpython
+for /d %%D in ("%ProgramFiles%\Python3*") do call :trypython "%%~fD\python.exe" "" && goto :resolvedpython
+for /d %%D in ("C:\Python3*") do call :trypython "%%~fD\python.exe" "" && goto :resolvedpython
+
+del "%PYPROBE%" >nul 2>&1
+echo ERROR: no working Python 3.8+ found. Candidates tried:
+if defined PYTHONTRIED echo %PYTHONTRIED%
+echo.
+echo Searched PATH, the registry, and the usual install directories.
+echo Install Python 3.8+ from your agency software catalog, then run:  meeting2jira doctor
+exit /b 1
+
+:resolvedpython
+del "%PYPROBE%" >nul 2>&1
+exit /b 0
+
+:trypython
+rem %1 = candidate exe, %2 = prefix ("-3" or ""). Sets PYCMD and returns 0 only if it really runs.
+if defined PYCMD exit /b 0
+set "CAND=%~1"
+set "PRE=%~2"
+if "%CAND%"=="" exit /b 1
+rem The Store alias stub reports success to `where` but opens the Store instead of running Python.
+echo "%CAND%" | find /i "\WindowsApps\" >nul && exit /b 1
+if not exist "%CAND%" exit /b 1
+"%CAND%" %PRE% "%PYPROBE%" >nul 2>&1
+set "PYRC=%ERRORLEVEL%"
+if "%PYRC%"=="0" (
+    set "PYCMD="%CAND%" %PRE%"
     exit /b 0
 )
-for /f "delims=" %%I in ('where python.exe 2^>nul') do (
-    echo %%I | find /i "\WindowsApps\" >nul
-    if errorlevel 1 (
-        set "PYCMD=%%I"
-        exit /b 0
-    )
+if "%PYRC%"=="3" (
+    set "PYTHONTRIED=%PYTHONTRIED%  old  %CAND% %PRE% ^(needs 3.8+^)"
+) else (
+    set "PYTHONTRIED=%PYTHONTRIED%  fail %CAND% %PRE% ^(exit %PYRC%^)"
 )
-echo ERROR: Python 3 was not found ^(checked py.exe and python.exe^).
-echo Install it from your agency software catalog, then run:  meeting2jira doctor
 exit /b 1
 
 :usage

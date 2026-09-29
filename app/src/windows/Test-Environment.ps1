@@ -37,15 +37,104 @@ function Write-Check([string]$Status, [string]$Message) {
     Write-Host ('[{0,-4}] {1}' -f $Status, $Message) -ForegroundColor $color
 }
 
-# Duplicated from Invoke-MeetingSync.ps1 on purpose (dot-sourcing can fail under AppLocker).
+# Duplicated verbatim in src/windows/Invoke-MeetingSync.ps1, src/windows/Test-Environment.ps1,
+# tools/Invoke-WindowsChecks.ps1 and power-platform/power-bi/report.ps1 on purpose: dot-sourcing can
+# fail across AppLocker trust levels. tests/test_guardrails.py asserts the copies stay identical, so
+# change one and you must change all of them.
+#
+# Existence is not proof. A real agency install routinely has py.exe present with no 3.x registered
+# (so `py -3` fails), or a working Python that was never added to PATH, or a 2.x on PATH ahead of a
+# 3.x. So candidates are gathered from PATH, the registry and the usual install directories, then
+# each is *executed* and made to report its version. The first that actually works wins.
+# $script:M2JPythonAttempts records every candidate tried, which is what makes a failure diagnosable.
 function Resolve-Python([string]$Override) {
-    if ($Override) { return @{ Exe = $Override; Prefix = @() } }
-    $launcher = Get-Command py.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($launcher) { return @{ Exe = $launcher.Source; Prefix = @('-3') } }
-    foreach ($name in @('python.exe', 'python3.exe')) {
-        $cmd = Get-Command $name -All -ErrorAction SilentlyContinue |
-            Where-Object { $_.Source -notmatch '\\WindowsApps\\' } | Select-Object -First 1
-        if ($cmd) { return @{ Exe = $cmd.Source; Prefix = @() } }
+    $script:M2JPythonAttempts = @()
+    $candidates = @()
+
+    if ($Override) { $candidates += @{ Exe = $Override; Prefix = @() } }
+
+    # The launcher, but only if it can really produce a 3.x - that is verified below, not assumed.
+    foreach ($found in @(Get-Command 'py.exe' -All -ErrorAction SilentlyContinue)) {
+        $candidates += @{ Exe = "$($found.Source)"; Prefix = @('-3') }
+    }
+    # Anything on PATH. The Microsoft Store alias stub is skipped: it opens the Store instead of
+    # running Python, and it reports success to `where`.
+    foreach ($name in @('python3.exe', 'python.exe')) {
+        foreach ($found in @(Get-Command $name -All -ErrorAction SilentlyContinue)) {
+            if ("$($found.Source)" -notmatch '\\WindowsApps\\') {
+                $candidates += @{ Exe = "$($found.Source)"; Prefix = @() }
+            }
+        }
+    }
+    # The registry, which is where an installer records itself even when PATH was left alone.
+    $hives = @(
+        'Registry::HKEY_CURRENT_USER\SOFTWARE\Python\PythonCore',
+        'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Python\PythonCore',
+        'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Python\PythonCore'
+    )
+    foreach ($hive in $hives) {
+        if (-not (Test-Path $hive)) { continue }
+        foreach ($version in @(Get-ChildItem -Path $hive -ErrorAction SilentlyContinue)) {
+            $installKey = Join-Path "$($version.PSPath)" 'InstallPath'
+            if (-not (Test-Path $installKey)) { continue }
+            $install = Get-ItemProperty -Path $installKey -ErrorAction SilentlyContinue
+            if (-not $install) { continue }
+            if ($install.ExecutablePath) {
+                $candidates += @{ Exe = "$($install.ExecutablePath)"; Prefix = @() }
+            }
+            $installRoot = "$($install.'(default)')"
+            if ($installRoot) {
+                $candidates += @{ Exe = (Join-Path $installRoot 'python.exe'); Prefix = @() }
+            }
+        }
+    }
+    # The usual directories, for an install that registered nothing at all.
+    $globs = @()
+    if ($env:LOCALAPPDATA) { $globs += (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python3*\python.exe') }
+    if ($env:ProgramFiles) { $globs += (Join-Path $env:ProgramFiles 'Python3*\python.exe') }
+    $globs += 'C:\Python3*\python.exe'
+    foreach ($glob in $globs) {
+        foreach ($found in @(Get-ChildItem -Path $glob -ErrorAction SilentlyContinue)) {
+            $candidates += @{ Exe = "$($found.FullName)"; Prefix = @() }
+        }
+    }
+
+    $seen = @()
+    foreach ($candidate in $candidates) {
+        if (-not $candidate.Exe) { continue }
+        $label = (@($candidate.Exe) + $candidate.Prefix) -join ' '
+        if ($seen -contains $label) { continue }
+        $seen += $label
+        if (-not (Test-Path -LiteralPath $candidate.Exe)) {
+            $script:M2JPythonAttempts += "gone $label"
+            continue
+        }
+        $argv = @()
+        $argv += $candidate.Prefix
+        # Single-quoted so no double quote ever reaches the native command: Windows PowerShell 5.1
+        # mangles embedded double quotes in native arguments. Exit 3 marks "runs, but too old".
+        $argv += @('-c', 'import sys; print(sys.version.split()[0]); sys.exit(0 if sys.version_info >= (3, 8) else 3)')
+        $previousEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        $reported = ''
+        $code = 9
+        try {
+            $reported = & $candidate.Exe @argv 2>&1
+            $code = $LASTEXITCODE
+        } catch {
+            $reported = "$($_.Exception.Message)"
+        } finally {
+            $ErrorActionPreference = $previousEap
+        }
+        $reportedVersion = "$(@($reported) | Select-Object -First 1)".Trim()
+        if ($code -eq 0) {
+            $script:M2JPythonAttempts += "ok   $label -> $reportedVersion"
+            return @{ Exe = $candidate.Exe; Prefix = $candidate.Prefix; Version = $reportedVersion }
+        } elseif ($code -eq 3) {
+            $script:M2JPythonAttempts += "old  $label -> $reportedVersion (needs 3.8+)"
+        } else {
+            $script:M2JPythonAttempts += "fail $label -> $reportedVersion"
+        }
     }
     return $null
 }
@@ -81,24 +170,36 @@ if ($blocked) {
 $py = Resolve-Python $Python
 $pythonOk = $false
 if (-not $py) {
-    Write-Check FAIL 'Python 3 not found (checked py.exe, python.exe, python3.exe; ignored the Store alias)'
+    Write-Check FAIL 'No working Python 3.8+ found. Every candidate tried is listed below.'
+    Write-Check INFO 'Searched PATH (py.exe, python3.exe, python.exe), the registry, and the usual install directories.'
+    Write-Check INFO 'If one of these is the Python you expect, the reason it was rejected is the thing to fix.'
+    Write-Check INFO 'Escape hatch: pass -Python C:\path\to\python.exe'
 } else {
+    # Resolve-Python already proved this one runs and is 3.8+, so only the module check is left.
+    # ssl, sqlite3 and ctypes are not optional here: Jira calls, dedupe state, and DPAPI need them,
+    # and a trimmed-down agency build can be missing them.
     $probe = @()
     $probe += $py.Prefix
-    $probe += @('-c', 'import sys, ssl, sqlite3, ctypes, json; print(sys.version.split()[0])')
-    $out = & $py.Exe @probe 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        $version = "$($out | Select-Object -First 1)".Trim()
-        $parts = $version -split '\.'
-        if (([int]$parts[0] -gt 3) -or ([int]$parts[0] -eq 3 -and [int]$parts[1] -ge 8)) {
-            Write-Check OK "Python $version at $($py.Exe) (ssl, sqlite3, ctypes present)"
-            $pythonOk = $true
-        } else {
-            Write-Check FAIL "Python $version is too old; need 3.8+"
-        }
-    } else {
-        Write-Check FAIL "Python at $($py.Exe) failed to run: $out"
+    $probe += @('-c', 'import ssl, sqlite3, ctypes, json; print("modules ok")')
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $py.Exe @probe 2>&1
+        $moduleCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousEap
     }
+    if ($moduleCode -eq 0) {
+        Write-Check OK "Python $($py.Version) at $($py.Exe) (ssl, sqlite3, ctypes present)"
+        $pythonOk = $true
+    } else {
+        Write-Check FAIL "Python $($py.Version) at $($py.Exe) is missing a required module: $(($out | Out-String).Trim())"
+    }
+}
+# Always show the search trail. When discovery works this explains *which* Python was chosen and why,
+# which matters on a machine with several installed; when it fails it is the whole diagnosis.
+foreach ($attempt in @($script:M2JPythonAttempts)) {
+    Write-Check INFO "  python candidate: $attempt"
 }
 if ($pythonOk) {
     $previousPythonPath = $env:PYTHONPATH
@@ -166,6 +267,25 @@ if (Test-Path $lastRunPath) {
     }
 } else {
     Write-Check INFO 'No sync has run yet (no last_run.json)'
+}
+
+# An outstanding alert file means a failure was surfaced and not yet resolved. Worth reporting here
+# too, because this is where someone looks when they suspect a problem.
+$alertName = 'ATTENTION-meeting2jira.txt'
+$alertFound = $null
+foreach ($base in @($env:OneDrive, $env:OneDriveCommercial, $env:USERPROFILE)) {
+    if ($base -and -not $alertFound) {
+        $candidate = Join-Path (Join-Path $base 'Desktop') $alertName
+        if (Test-Path -LiteralPath $candidate) { $alertFound = $candidate }
+    }
+}
+if (-not $alertFound) {
+    $candidate = Join-Path $dataDir $alertName
+    if (Test-Path -LiteralPath $candidate) { $alertFound = $candidate }
+}
+if ($alertFound) {
+    Write-Check WARN "An unresolved alert is outstanding: $alertFound"
+    Write-Check INFO '  It is removed automatically by the next successful run.'
 }
 
 # --- Verdict --------------------------------------------------------------------------------

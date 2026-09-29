@@ -228,8 +228,22 @@ A scheduled task is invisible when it breaks, so check on it now and then:
 .\meeting2jira status
 ```
 
-That leads with the last run's result and warns if it was a failure or if nothing has run for
-several days. `.\meeting2jira doctor` reports the same thing alongside the environment check.
+That leads with the last run's result and warns if it was a failure, if nothing has run for several
+days, or if there is an unresolved alert. `.\meeting2jira doctor` reports the same thing alongside
+the environment check.
+
+You should not have to remember to check, though. **If a run fails, a file named
+`ATTENTION-meeting2jira.txt` appears on your Desktop**, naming the error and the command that
+diagnoses it. It is deleted automatically by the next successful run. To ride out a one-off network
+blip instead of being told immediately:
+
+```json
+"notify": { "alert_after_failures": 2 }
+```
+
+The token is also watched: you get a warning starting 14 days before your personal access token
+expires (`jira.warn_token_expiry_days`), so the first sign of trouble is not a week of failed runs.
+Some older Jira versions do not expose expiry dates, in which case the check silently does nothing.
 
 ---
 
@@ -281,7 +295,7 @@ so the two paths will not duplicate each other.
 | Symptom | Fix |
 |---|---|
 | `No config found` | Run `.\meeting2jira setup`. |
-| `Python 3 was not found` | Install from the software catalog, then `.\meeting2jira doctor`. If only the Microsoft Store stub is present, install real Python. |
+| `No working Python 3.8+ found` | The message lists every candidate it tried and why each was rejected — start there. Discovery searches PATH, the registry, and the usual install directories, and **runs** each candidate rather than trusting that it exists. Common causes: `py.exe` installed with no 3.x registered, only the Microsoft Store stub present, or a 2.x. Escape hatch: `.\meeting2jira sync -Python "C:\path\to\python.exe"`. |
 | Scripts won't run at all | `.\meeting2jira doctor` reports execution policy and the internet-zone mark. Use `Unblock-File`, never `-ExecutionPolicy Bypass`. |
 | `...returned 'text/html' instead of JSON` | An SSO or proxy page is intercepting the API. Ask the Jira admins which URL accepts token-authenticated REST calls. |
 | Certificate errors | Export your agency CA chain as PEM and set `jira.ca_bundle`. Never disable verification. |

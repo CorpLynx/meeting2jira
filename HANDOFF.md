@@ -49,7 +49,7 @@ The README's "Design notes" section explains why each alternative (Graph, EWS, I
 | PowerShell syntax / 5.1 compatibility | **Parses; no PS7-only syntax** | `tools/Test-PowerShellSyntax.ps1` under pwsh 7.6, mutation-tested |
 | PS → Python JSON handoff | **Verified in pwsh 7** for 0, 1, and 2 items; 5.1 array quirk guarded on both sides | Manual; `unwrap_ps_array` has a test |
 | `Invoke-MeetingSync.ps1` CSV path | **Ran** under pwsh 7 on Linux | Manual |
-| Outlook COM export | **Unverified**: never run against a real Outlook | — |
+| Outlook COM export | **VERIFIED on the target workstation**: ran against a real Outlook profile and produced sub-tasks in Jira Data Center. This was the largest unverified risk in the project. | User-reported, on-prem |
 | DPAPI token storage (ctypes) | **Verified**: round trip on Windows Server 2022, PowerShell 5.1.20348.5622 | `tools/Invoke-WindowsChecks.ps1` on the AWS lab VM (`infra/windows-test-vm/`); ciphertext confirmed to not contain the plaintext token |
 | Windows PowerShell 5.1 runtime behavior | **Partially verified**: real parsing, CLM enforcement, and the CLI push path confirmed under actual 5.1.20348.5622 (not just parse-only) | `tools/Invoke-WindowsChecks.ps1`; the array-wrapping quirk (risk #4) did **not** reproduce on this build - `unwrap_ps_array` still guards it, but the quirk itself may be build/hotfix-specific rather than universal to 5.1 |
 | Scheduled task registration and run | **Partially verified**: the `-At` derivation from `tour_of_duty.end` runs correctly under 5.1 (15:30 + 30m = 16:00). The `Register-ScheduledTask` call itself is still unverified: the task uses `LogonType Interactive`, and under SSM the caller is SYSTEM, whose `USERDOMAIN\USERNAME` is the machine account with no interactive SID ("No mapping between account names and security IDs"). Needs a workstation or an RDP session. | check 8 in `tools/Invoke-WindowsChecks.ps1` |
@@ -80,6 +80,7 @@ Python compatibility: `vermin` reports a minimum of 3.7. The project promises 3.
 | **Tour of duty** | New `tour_of_duty` section classifies each meeting as `inside` / `partial` / `outside` against local working hours, and applies `include` / `label` / `route` / `skip` to wholly-outside ones. Overnight tours and the previous day's window are handled. `Register-MeetingSyncTask.ps1` derives its run time from the end of the tour. | `tests/test_tour_of_duty.py` (15) |
 | CLM guardrail widened | The banned-pattern regex only caught `[System.X]::`, so a bare `[math]::Floor` would have passed review and then failed under Constrained Language Mode on the target machine. It now catches any `[Type]::Member` and `New-Object`, while ignoring provider paths like `Registry::`. Mutation-tested. | `test_clm_safe_scripts` |
 
+| **Python discovery was too brittle for a real install** | Found on the target workstation: discovery checked whether a candidate *existed* and never proved it ran. `where py.exe` succeeding returned `py -3` blindly, but the launcher is routinely installed with no 3.x registered. Only PATH was searched, so an SCCM install under `C:\Program Files\Python312` was invisible. There was no version check, and the batch version set `PYCMD` unquoted so a path containing a space broke. Now candidates come from PATH, the registry (`PythonCore\*\InstallPath`, incl. WOW6432Node) and the usual directories, and **each is executed and must report 3.8+**. Every rejected candidate and its reason is reported. | `test_resolve_python_copies_are_identical`; needs a re-run of `doctor` on the workstation |
 | **Stale-run age was computed across mismatched time frames** | `Test-Environment.ps1` did `(Get-Date).ToUniversalTime() - [datetime]$when`. PowerShell casts an ISO-8601 `Z` string to a **local** DateTime, so the age was overstated by the UTC offset (5–8 hours here) and a run 3.7 days old could warn falsely. Now compares local to local. Found by reasoning, confirmed on the lab. | check 7 asserts no false warning for a run that just happened, and that a 9-day-old run *is* flagged |
 
 62 unit tests, all passing, and **8/8 checks green on the Windows lab VM** under PowerShell
@@ -148,13 +149,32 @@ Priority order: P0 before anything else, then P1s in order.
 **Approach:** driven by pasted results. Prefer small, targeted fixes. If the `Restrict` locale issue shows up, keep `ToString('g')` as the default and add a fallback strategy rather than replacing it outright.
 **Done when:** every checklist item passes, and the "Unverified" rows in section 3 are updated with evidence.
 
-### P1-B: Visible health for scheduled runs
+### P1-B: Visible health for scheduled runs — DONE
 **Problem:** the scheduled task runs hidden. An expired PAT or a moved parent issue will fail silently every day.
 **Done:** `last_run.json` (timestamp, counts, exit code, first error) is written by `cmd_push` on every real run, surfaced by `status` and by `Test-Environment.ps1` (which flags a failure or a run older than 4 days), and `Invoke-MeetingSync.ps1` prunes `sync_*.log` older than `-TranscriptRetentionDays` (default 30).
 
-**Still open in this item:**
-- Surface failures more actively. Candidates are a Windows notification or a message to self, but each must work for a standard user and under CLM, with no modules to install. Research first and propose options before building.
-- Warn before the PAT expires if the Jira version exposes that for the current user. Investigate; don't assume the endpoint exists.
+**Also done, closing this item:**
+- **Active failure surfacing.** On failure, `ATTENTION-meeting2jira.txt` is written to the Desktop
+  (OneDrive relocation handled, data-directory fallback), naming the error and the command that
+  diagnoses it, and stating that re-running is safe so the user does not fear duplicates. Removed
+  automatically on the next success. Gated on `notify.alert_after_failures` consecutive failures, so
+  a single blip need not raise an alarm; the streak lives in `last_run.json`. Failures that happen
+  before Python runs — missing config, an export that produced nothing — are alerted by
+  `Invoke-MeetingSync.ps1` on the first occurrence, because in that case nothing was attempted at all.
+  `doctor` reports an outstanding alert.
+
+  *Researched and rejected:* Windows toast (needs WinRT type loading, which CLM blocks, and the
+  orchestrator must stay CLM-safe), BurntToast (PowerShell Gallery unavailable), `mshta.exe` (works
+  with no dependencies, but is a well-known living-off-the-land binary that endpoint protection and
+  AppLocker commonly block — it would make this tool resemble what those controls exist to stop),
+  `Send-MailMessage` (deprecated, needs an SMTP relay), Outlook COM mail (FullLanguage only, new
+  scope, risks a security prompt).
+- **Token expiry warning.** The endpoint does exist on Data Center: `GET /rest/pat/latest/tokens`
+  returns `expiringAt` per token. Surfaced in `check` and as a `TOKEN:` warning during `push`,
+  configurable via `jira.warn_token_expiry_days` (default 14, `0` disables). Degrades silently to
+  nothing on 401/403/404/405, so older versions are unaffected. One honest limitation encoded in the
+  message: the response never echoes the token in use, so with several tokens it reports the
+  soonest-expiring by name and says it cannot know which one a request used.
 
 ### P2-A: Edits to meetings that were already synced
 **Context:** because only *ended* meetings are pushed, this matters less than the README's roadmap implies. It only happens when a past meeting is edited afterwards.

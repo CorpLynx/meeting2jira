@@ -1,0 +1,10 @@
+# Pinned exactly, not ranged: this installs from an internal mirror, and a floating version would
+# make a broken run impossible to reproduce.
+#
+#   pip install -r requirements.txt
+#   playwright install msedge      # or: playwright install chromium
+#
+# `playwright install msedge` registers the Edge already on the machine rather than downloading a
+# browser, which is both faster and avoids introducing an unsigned binary. Chromium is the fallback
+# when Edge is absent.
+playwright==1.49.1
