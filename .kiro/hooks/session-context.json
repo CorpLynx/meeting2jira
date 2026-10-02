@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Session context",
+      "description": "At session start, adds about 5-15 lines to context: git branch, uncommitted files, the last test result line and .kiro/HANDOFF.md if present. This saves the agent several exploratory commands at the start of each fresh session.",
+      "trigger": "SessionStart",
+      "timeout": 20,
+      "action": { "type": "command", "command": "python tools/hooks/session_context.py" }
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+# Dev and test tooling for working on this repo (your dev machine, not the target workstation).
+# The app itself stays stdlib-only; nothing here is needed to run it.
+pytest>=7
+pytest-timeout>=2
+pytest-cov>=4
+ruff>=0.5

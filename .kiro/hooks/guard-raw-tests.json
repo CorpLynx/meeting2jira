@@ -1,0 +1,13 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Route tests through the compact runner",
+      "description": "Blocks shell commands that run `python -m unittest` (or pytest) directly, so the suite's raw verbose output never lands in the main model's context. The agent is told to use tools/run_tests.py or the test-runner subagent instead. Commands that mention run_tests.py, pip, install, --version or --help are allowed. Set KIRO_ALLOW_RAW_TESTS=1 or enabled to false to turn this off.",
+      "trigger": "PreToolUse",
+      "matcher": "shell|bash|pwsh|powershell|execute",
+      "timeout": 15,
+      "action": { "type": "command", "command": "python tools/hooks/guard_raw_tests.py" }
+    }
+  ]
+}

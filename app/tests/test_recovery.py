@@ -4,7 +4,6 @@ A POST that times out or returns 502/503/504 may have been applied by Jira anywa
 blindly duplicates the sub-task; giving up duplicates it on the *next* run. So the create is
 followed by an exact lookup for a deterministic marker label.
 """
-import json
 import shutil
 import tempfile
 import unittest

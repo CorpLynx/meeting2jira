@@ -1,0 +1,30 @@
+# Development tooling only: pytest and ruff config for working on this repo.
+# Nothing here is needed at runtime. app/ stays stdlib-only and installs by copying the folder;
+# this file is not a package definition and app/ never reads it.
+# Install the tools with: python -m pip install -r requirements-dev.txt
+
+[tool.pytest.ini_options]
+testpaths = ["app/tests"]
+# The same layout the entry points use: app/src for `meeting2jira`, app/ for `tests.*` imports.
+pythonpath = ["app/src", "app"]
+# The tests stay plain unittest so they still run on the workstation with no pip; pytest is the
+# dev runner (better failure output, timeouts, coverage).
+addopts = "-q --strict-markers"
+xfail_strict = true
+# A hung test (e.g. a local HTTP server waiting forever) must not stall an agent loop.
+timeout = 60
+
+[tool.coverage.run]
+source = ["app/src/meeting2jira"]
+branch = true
+
+[tool.ruff]
+target-version = "py38"
+line-length = 120
+extend-exclude = [".test-output", "infra"]
+
+[tool.ruff.lint]
+# Bug-finding rules only. The code is not ruff-formatted and keeps typing.List/Optional for 3.8,
+# so the import-order and pyupgrade families stay off.
+select = ["E", "W", "F", "B"]
+ignore = ["E501"]  # long lines exist on purpose (regexes, messages); not worth churn

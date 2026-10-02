@@ -386,7 +386,9 @@ app/                             ← copy this folder to install
 ARCHITECTURE.md                  file-interaction and per-meeting flow diagrams
 INSTALL.md                       step-by-step setup walkthrough
 HANDOFF.md                       status, risks, backlog, and prompts for continued development (Kiro)
-.kiro/steering/                  project rules Kiro loads automatically (product, tech, structure, PowerShell)
+.kiro/                          Kiro steering (project rules), subagents and hooks; see KIRO_SETUP.md
+tools/                          Kiro dev tooling (compact test runner, hook scripts); never shipped
+pyproject.toml, requirements-dev.txt   dev-only pytest/ruff setup; the app itself needs neither
 infra/windows-test-vm/           Terraform for a throwaway Windows host to run those checks on
 power-platform/                  Power Automate / Power BI alternatives: feasibility, blockers, blueprints
 ```

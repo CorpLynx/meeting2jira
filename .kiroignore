@@ -1,0 +1,49 @@
+# Files Kiro's agent should never read or search. Fewer files to wade through means fewer tokens.
+# NOTE: in the Kiro IDE, add ".kiroignore" to Settings > "Agent Ignore Files" (kiroAgent.agentIgnoreFiles)
+# or this file is ignored. Uses .gitignore syntax.
+
+# Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+*.egg-info/
+
+# Build output and coverage
+build/
+dist/
+htmlcov/
+.coverage
+coverage.xml
+
+# Machine-generated test XML (the agent reads .test-output/last-run.log instead, when needed)
+.test-output/*.xml
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pfx
+*.pem
+*.key
+
+# meeting2jira runtime data and secrets (also in .gitignore). Real exports and CSVs contain the
+# user's calendar; *.dpapi is the encrypted Jira token. The agent never needs to open them.
+*.dpapi
+state.db
+exports/
+logs/
+*.csv
+!app/tests/fixtures/*.csv
+
+# Terraform state holds the lab VM's local-account password in plaintext.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json

@@ -15,8 +15,9 @@ Read it together with `README.md` (user-facing design, setup, and config) and th
 ## 1. How to use this (for the human)
 
 1. **Open the repo folder in Kiro.**
-   - The `.kiro/steering/` files (`product.md`, `tech.md`, `structure.md`, and `powershell.md` for `.ps1` files) load into every session.
+   - The `.kiro/steering/` files load automatically: `product.md`, `tech.md`, `structure.md` and `workflow.md` in every session; `powershell.md` and `python-testing.md` when editing those files; `debug-playbook.md` when the agent is stuck; `handoff.md` on `/handoff`.
    - Check the *Agent Steering* panel to confirm they're listed.
+   - First time only: follow `KIRO_SETUP.md` (enable `.kiroignore`, confirm the subagent model IDs, check the hooks load).
 2. **Start with the orientation prompt** in [section 8](#8-starter-prompts). It makes the agent read everything and run the checks before touching code.
 3. **Use a Kiro spec for each backlog item** in [section 6](#6-backlog). The backlog entries are written so they can be pasted into a spec request as-is.
 4. **You are the only one who can run the Windows target-machine checks** in [section 5](#5-target-machine-validation-checklist-human). Paste the results back into Kiro; that's what drives the P0 fixes.
