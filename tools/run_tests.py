@@ -1,152 +1,118 @@
 #!/usr/bin/env python3
-"""Compact unittest runner for AI agents (Kiro). Development support only; never shipped.
+"""Compact pytest runner for AI agents (Kiro). Development support only; never shipped.
 
-Runs the app/ test suite the same way the verify command in .kiro/steering/tech.md does (cwd app/,
-app/src on PYTHONPATH, stdlib unittest), keeps the full output in .test-output/last-run.log, and
-prints a short summary with failures grouped by root cause, so the model reads ~20 lines instead of
-hundreds. Standard library only, so it also works on a workstation with no pip.
+Runs the app/ test suite through pytest (config in pyproject.toml), keeps the full output in
+.test-output/last-run.log, and prints a short summary with failures grouped by root cause, so the
+model reads ~20 lines instead of hundreds.
 
-Usage (run from anywhere; paths are resolved against the repo):
+The tests themselves stay plain unittest so they still run on the workstation without pip; this
+runner is the dev path. Needs `python -m pip install -r requirements-dev.txt`.
+
+Usage (run from anywhere; anything it doesn't recognize is passed straight to pytest):
     python tools/run_tests.py                          # full suite
     python tools/run_tests.py test_pipeline            # one module (also app/tests/test_pipeline.py)
-    python tools/run_tests.py test_state.StateTests.test_reopen
-    python tools/run_tests.py -k worklog               # unittest -k: substring or fnmatch pattern
-    python tools/run_tests.py --lf                     # only the tests that failed last run
-    python tools/run_tests.py -x                       # stop at the first failure
+    python tools/run_tests.py test_state.StateTests.test_reopen     # unittest-style id works too
+    python tools/run_tests.py "app/tests/test_state.py::StateTests::test_reopen"
+    python tools/run_tests.py -k worklog               # pytest -k expression
+    python tools/run_tests.py --lf                     # only last failures (subTests included)
+    python tools/run_tests.py -x                       # stop at first failure
     python tools/run_tests.py --changed                # tests that cover git-changed files
-    python tools/run_tests.py test_x --trace-lines 60  # more traceback for one failure
+    python tools/run_tests.py --cov                    # add a coverage report (pytest-cov)
+    python tools/run_tests.py test_x --tb long --trace-lines 60
 
-Exit code: 0 all passed, 1 failures/errors, 5 nothing ran.
+Exit code is pytest's exit code (0 pass, 1 failures, 5 no tests collected).
 """
 
 from __future__ import annotations
 
 import argparse
 import fnmatch
-import json
-import os
+import importlib.util
 import re
 import subprocess
 import sys
 import time
-import unittest
+import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent  # repo root
-APP = ROOT / "app"
-SRC = APP / "src"
-TESTS = APP / "tests"
-PACKAGE = SRC / "meeting2jira"
-
-OUT_DIR = ROOT / ".test-output"
-LOG_FILE = OUT_DIR / "last-run.log"
-RESULT_FILE = OUT_DIR / "last-run.json"
-SUMMARY_FILE = OUT_DIR / "last-summary.txt"
+TESTS = ROOT / "app" / "tests"
+TESTS_REL = "app/tests"
 
 # Files that can't be mapped to tests by import. Keys are repo-relative globs, values are test
-# module names. Static PowerShell rules live in test_guardrails; PS runtime behavior can't be
-# tested here at all (see tools/Test-PowerShellSyntax.ps1 and tools/Invoke-WindowsChecks.ps1).
+# files. Static PowerShell rules live in test_guardrails; PS runtime behavior can't be tested here
+# at all (see app/tools/Test-PowerShellSyntax.ps1 and app/tools/Invoke-WindowsChecks.ps1).
 EXTRA_TEST_MAP: Dict[str, List[str]] = {
-    "app/src/windows/*.ps1": ["test_guardrails"],
-    "app/tools/*.ps1": ["test_guardrails"],
-    "app/config.example.json": ["test_pipeline"],
-    "app/tests/fixtures/*": ["test_pipeline", "test_recovery"],
+    "app/src/windows/*.ps1": ["app/tests/test_guardrails.py"],
+    "app/tools/*.ps1": ["app/tests/test_guardrails.py"],
+    "app/config.example.json": ["app/tests/test_pipeline.py"],
+    "app/tests/fixtures/*": ["app/tests/test_pipeline.py", "app/tests/test_recovery.py"],
 }
 # Changed files under these globs are never reported as "no test mapping".
 UNMAPPED_IGNORE = ["tools/*", ".kiro/*", "infra/*", "playwright-app/*", "power-platform/*", "*.md"]
+
+OUT_DIR = ROOT / ".test-output"
+LOG_FILE = OUT_DIR / "last-run.log"
+XML_FILE = OUT_DIR / "last-run.xml"
+SUMMARY_FILE = OUT_DIR / "last-summary.txt"
+# Our own last-failed list. pytest's --lf cache misses unittest subTest failures (pytest 9 records
+# the parent test as passed), so --lf is implemented here from the junit XML instead.
+FAILED_FILE = OUT_DIR / "last-failed.txt"
 
 MAX_TESTS_PER_GROUP = 5
 LOG_TAIL_ON_CRASH = 30
 
 _HEX = re.compile(r"0x[0-9a-fA-F]+")
-_TMP = re.compile(r"(?:/tmp/|[A-Za-z]:\\[^'\" ]*\\Temp\\)[^'\" ]+")
-_FRAME = re.compile(r'^\s*File "(?P<file>[^"]+)", line (?P<line>\d+)')
-_NUM = re.compile(r"\b\d+(?:\.\d+)?\b")
-_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+_TMP = re.compile(r"(?:/tmp/|[A-Za-z]:\\[^'\" ]*\\Temp\\)[^'\" ]+|pytest-of-[^\\/]+[\\/]pytest-\d+")
+_LOCATION = re.compile(r"^(?P<loc>[^\s:][^:]*\.(?:py|ps1|psm1):\d+):?")
+_CARETS = re.compile(r"^\s*[\^~]+\s*$")  # Python 3.11+ error-position markers: pure noise here
 _IMPORT = re.compile(r"^\s*(?:from\s+meeting2jira(?:\.(\w+))?\s+import\s+([\w\s,()]+)|"
                      r"import\s+meeting2jira\.(\w+))", re.M)
+_SUBFAILED = re.compile(r"^SUBFAILED\((?P<params>.*?)\) (?P<node>\S+)")
+_NUM = re.compile(r"\b\d+(?:\.\d+)?\b")
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
 
 
-# --------------------------------------------------------------------------------------------
-# Worker: runs inside a child process so test output and logging go to the log file.
-# --------------------------------------------------------------------------------------------
-
-class _BadName(unittest.TestCase):
-    """Stands in for a test name that can't be loaded, so it's reported like an import error."""
-
-    def __init__(self, name: str, exc: Exception) -> None:
-        super().__init__("runTest")
-        self._name, self._exc = name, exc
-
-    def runTest(self) -> None:
-        raise ImportError(f"cannot load test {self._name!r}: {self._exc}")
-
-    def id(self) -> str:
-        return f"unittest.loader._FailedTest.{self._name}"
+def _strip_root(text: str) -> str:
+    """Make absolute paths inside the repo relative; saves tokens on every line."""
+    for prefix in {str(ROOT), ROOT.as_posix()}:
+        text = text.replace(prefix + "\\", "").replace(prefix + "/", "").replace(prefix, ".")
+    return text
 
 
-def _rerun_id(test: unittest.TestCase) -> str:
-    """A name loadTestsFromName accepts, for --lf. Subtests rerun their parent test."""
-    inner = getattr(test, "test_case", test)
-    tid = inner.id()
-    if tid.startswith("unittest.loader._FailedTest."):
-        return tid.rsplit(".", 1)[-1]  # import/collection error: rerun the whole module
-    return tid
-
-
-def worker(names: List[str], patterns: List[str], failfast: bool) -> int:
-    os.chdir(APP)
-    sys.path[:0] = [str(SRC), str(APP), str(TESTS)]
-    loader = unittest.TestLoader()
-    if patterns:
-        loader.testNamePatterns = [p if "*" in p else f"*{p}*" for p in patterns]
-    if names:
-        suite = unittest.TestSuite()
-        for name in names:
-            try:
-                suite.addTests(loader.loadTestsFromName(name))
-            except Exception as exc:  # bad name: report it as a collection error, not a crash
-                suite.addTest(_BadName(name, exc))
-    else:
-        suite = loader.discover("tests", top_level_dir=None)
-
-    runner = unittest.TextTestRunner(stream=sys.stdout, verbosity=2, failfast=failfast)
-    result = runner.run(suite)
-
-    bad = []
-    for kind, items in (("failure", result.failures), ("error", result.errors)):
-        for test, tb in items:
-            collection = test.id().startswith("unittest.loader._FailedTest.")
-            bad.append({"id": test.id(), "rerun": _rerun_id(test), "kind": kind,
-                        "collection": collection, "tb": tb})
-    for test in result.unexpectedSuccesses:
-        bad.append({"id": test.id(), "rerun": _rerun_id(test), "kind": "unexpected success",
-                    "collection": False, "tb": "AssertionError: unexpected success (expectedFailure)"})
-    payload = {
-        "run": result.testsRun,
-        "skipped": len(result.skipped),
-        "xfail": len(result.expectedFailures),
-        "bad": bad,
-    }
-    RESULT_FILE.write_text(json.dumps(payload, indent=1), encoding="utf-8")
-    if result.testsRun == 0:
-        return 5
-    return 0 if result.wasSuccessful() else 1
+def _configure_stdout() -> None:
+    # Windows consoles may not be UTF-8; never crash on an odd character.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
 
 # --------------------------------------------------------------------------------------------
 # Target selection
 # --------------------------------------------------------------------------------------------
 
-def _normalize_target(arg: str) -> str:
-    """Accept test_x, test_x.Class.test_m, app/tests/test_x.py, tests/test_x.py::Class::test_m."""
-    arg = arg.replace("\\", "/")
-    path_part, _, rest = arg.partition("::")
+def normalize_target(arg: str) -> str:
+    """Turn the short forms into pytest node ids; leave real paths and options alone.
+
+    test_state                         -> app/tests/test_state.py
+    test_state.StateTests.test_reopen  -> app/tests/test_state.py::StateTests::test_reopen
+    tests/test_state.py::X             -> app/tests/test_state.py::X
+    """
+    if arg.startswith("-"):
+        return arg
+    fixed = arg.replace("\\", "/")
+    path_part, sep, rest = fixed.partition("::")
     if path_part.endswith(".py"):
-        module = Path(path_part).stem
-        return ".".join([module] + [p for p in rest.split("::") if p])
+        if not (ROOT / path_part).exists() and (TESTS / Path(path_part).name).exists():
+            path_part = f"{TESTS_REL}/{Path(path_part).name}"
+        return path_part + sep + rest
+    head, _, tail = fixed.partition(".")
+    if re.fullmatch(r"test_\w+", head) and (TESTS / f"{head}.py").exists():
+        return "::".join([f"{TESTS_REL}/{head}.py"] + [p for p in tail.split(".") if p])
     return arg
 
 
@@ -161,10 +127,11 @@ def _git(*args: str) -> List[str]:
 
 
 def _import_map() -> Dict[str, List[str]]:
-    """meeting2jira module name -> test modules that import it."""
+    """meeting2jira module name -> test files that import it."""
     result: Dict[str, List[str]] = {}
     for test_file in sorted(TESTS.glob("test_*.py")):
         text = test_file.read_text(encoding="utf-8", errors="replace")
+        target = f"{TESTS_REL}/{test_file.name}"
         for m in _IMPORT.finditer(text):
             if m.group(1) or m.group(3):
                 mods = [m.group(1) or m.group(3)]
@@ -172,13 +139,13 @@ def _import_map() -> Dict[str, List[str]]:
                 mods = [n.strip() for n in re.split(r"[,()\s]+", m.group(2) or "") if n.strip()]
             for mod in mods:
                 result.setdefault(mod, [])
-                if test_file.stem not in result[mod]:
-                    result[mod].append(test_file.stem)
+                if target not in result[mod]:
+                    result[mod].append(target)
     return result
 
 
 def changed_targets() -> Tuple[List[str], List[str]]:
-    """Map git-changed files to test modules. Returns (targets, unmapped_files)."""
+    """Map git-changed files to test files. Returns (targets, unmapped_files)."""
     changed = set(_git("diff", "--name-only", "HEAD"))
     changed |= set(_git("ls-files", "--others", "--exclude-standard"))
     imports = _import_map()
@@ -192,16 +159,16 @@ def changed_targets() -> Tuple[List[str], List[str]]:
         for pattern, mapped in EXTRA_TEST_MAP.items():
             if fnmatch.fnmatch(rel, pattern):
                 hit.extend(mapped)
-        if rel.startswith("app/tests/") and path.name.startswith("test_") and path.suffix == ".py":
+        if rel.startswith(TESTS_REL + "/") and path.name.startswith("test_") and path.suffix == ".py":
             if path.exists():
-                hit.append(path.stem)
+                hit.append(rel)
         elif rel.startswith("app/src/meeting2jira/") and path.suffix == ".py":
             hit.extend(imports.get(path.stem, []))
             # __main__ and helpers are reached through the CLI; the pipeline test drives main().
             if not hit:
-                hit.append("test_pipeline")
+                hit.append(f"{TESTS_REL}/test_pipeline.py")
         if rel.startswith("app/src/"):
-            hit.append("test_guardrails")  # cheap, and guards the non-negotiables
+            hit.append(f"{TESTS_REL}/test_guardrails.py")  # cheap, and guards the non-negotiables
         if hit:
             targets.extend(hit)
         elif path.suffix in (".py", ".ps1", ".cmd") and not any(
@@ -211,51 +178,24 @@ def changed_targets() -> Tuple[List[str], List[str]]:
     return list(OrderedDict.fromkeys(targets)), unmapped
 
 
-def last_failed() -> List[str]:
-    try:
-        data = json.loads(RESULT_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    return list(OrderedDict.fromkeys(b["rerun"] for b in data.get("bad", [])))
-
-
 # --------------------------------------------------------------------------------------------
 # Summary
 # --------------------------------------------------------------------------------------------
 
-def _strip_root(text: str) -> str:
-    """Make absolute paths inside the repo relative; saves tokens on every line."""
-    for prefix in {str(ROOT), ROOT.as_posix()}:
-        text = text.replace(prefix + "\\", "").replace(prefix + "/", "").replace(prefix, ".")
-    return text
-
-
-def _signature(tb: str) -> Tuple[str, str]:
-    """Return (exception line, deepest frame in our code) for a traceback."""
-    lines = tb.rstrip().splitlines()
-    last_frame = -1
-    loc = ""
-    for i, line in enumerate(lines):
-        m = _FRAME.match(line)
-        if m:
-            last_frame = i
-            path = Path(m.group("file"))
-            try:
-                rel = path.resolve().relative_to(ROOT).as_posix()
-            except (ValueError, OSError):
-                continue
-            loc = f"{rel}:{m.group('line')}"
-    err = ""
-    for line in lines[last_frame + 1:]:
-        if line and not line[0].isspace():
-            err = line.strip()
-            break
-    if not err:
-        err = lines[-1].strip() if lines else "(no message)"
-    err = _TMP.sub("<tmp>", _HEX.sub("0x?", err))
-    if len(err) > 160:
-        err = err[:157] + "..."
-    return err, loc
+def _nodeid(case: ET.Element) -> str:
+    name = case.get("name", "?")
+    classname = case.get("classname", "") or ""
+    file_attr = (case.get("file") or "").replace("\\", "/")
+    if not classname:  # collection errors: name is the dotted module path
+        as_path = name.replace(".", "/") + ".py"
+        return as_path if (ROOT / as_path).exists() else name
+    if file_attr:
+        module = file_attr[:-3].replace("/", ".") if file_attr.endswith(".py") else file_attr
+        cls = classname[len(module) + 1:] if classname.startswith(module + ".") else ""
+        if not cls and "." in classname:  # module imported by basename (rootdir-relative path differs)
+            cls = classname.rsplit(".", 1)[-1] if classname.split(".")[0].startswith("test_") else ""
+        return "::".join(p for p in (file_attr, cls, name) if p)
+    return f"{classname}::{name}"
 
 
 def _group_key(err: str, loc: str) -> Tuple[str, str]:
@@ -263,57 +203,117 @@ def _group_key(err: str, loc: str) -> Tuple[str, str]:
 
     Assertions: same failing line + same shape of message (numbers/strings ignored), so subTest
     cases of one bug collapse into one group. Other exceptions: same message wherever they
-    surfaced, so e.g. one ImportError across many test modules is one group.
+    surfaced, so e.g. one ImportError across many test files is one group.
     """
-    if err.startswith("AssertionError"):
+    if err.startswith(("assert ", "AssertionError")):
         return ("A", loc + "|" + _NUM.sub("#", _QUOTED.sub("'?'", err)))
     return ("X", err)
 
 
-def summarize(data: dict, args: argparse.Namespace, duration: float, rc: int, shown: str) -> str:
-    bad = data.get("bad", [])
-    failed = sum(1 for b in bad if b["kind"] != "error")
-    errors = len(bad) - failed
-    # testsRun counts test methods, but each failing subTest is its own entry in `bad`.
-    broken = len({b["rerun"] for b in bad})
-    passed = max(0, data["run"] - broken - data["skipped"] - data["xfail"])
+def _signature(text: str, message: str) -> Tuple[str, str]:
+    """Return (error line, deepest location) for a failure."""
+    lines = text.splitlines()
+    err = ""
+    loc = ""
+    for i, line in enumerate(lines):
+        if line.startswith("E "):
+            err = line[1:].strip()
+            for back in range(i - 1, -1, -1):
+                m = _LOCATION.match(lines[back].strip())
+                if m:
+                    loc = m.group("loc").replace("\\", "/")
+                    break
+            break
+    if not err:
+        err = message.strip().splitlines()[0] if message.strip() else "(no message)"
+    err = _TMP.sub("<tmp>", _HEX.sub("0x?", err))
+    if len(err) > 160:
+        err = err[:157] + "..."
+    return err, loc
+
+
+def _subtest_labels() -> Dict[str, List[str]]:
+    """node id -> subTest params, in order, from pytest's short summary in the log."""
+    labels: Dict[str, List[str]] = {}
+    for line in LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = _SUBFAILED.match(line)
+        if m:
+            labels.setdefault(m.group("node"), []).append(m.group("params"))
+    return labels
+
+
+def summarize(xml_path: Path, args: argparse.Namespace, duration: float, rc: int, cmd: str) -> str:
+    tree = ET.parse(xml_path)
+    labels = _subtest_labels()
+    failed_ids: List[str] = []
+    counts = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}
+    groups: "OrderedDict[Tuple[str, str], dict]" = OrderedDict()
+    collection_errors = 0
+
+    for case in tree.iter("testcase"):
+        bads = case.findall("failure")
+        kind = "failed"
+        if not bads:
+            bads = case.findall("error")
+            kind = "errors"
+        if not bads:
+            if case.find("skipped") is not None:
+                counts["skipped"] += 1
+            else:
+                counts["passed"] += 1
+            continue
+        counts[kind] += 1
+        is_collection = not case.get("classname")
+        collection_errors += is_collection
+        node = _nodeid(case)
+        failed_ids.append(node)
+        params = labels.get(node, []) if len(bads) > 1 else []
+        for i, bad in enumerate(bads):  # subTest failures put several entries on one testcase
+            text = _strip_root(bad.text or "")
+            err, loc = _signature(text, _strip_root(bad.get("message", "")))
+            group = groups.setdefault(_group_key(err, loc),
+                                      {"err": err, "loc": loc, "coll": is_collection, "cases": []})
+            label = f"{node} [{params[i]}]" if i < len(params) else node
+            group["cases"].append((label, text))
+
+    if rc not in (2, 3, 4):  # an interrupted or broken run says nothing about what passed
+        try:
+            FAILED_FILE.write_text("\n".join(OrderedDict.fromkeys(failed_ids)) + "\n", encoding="utf-8")
+        except OSError:
+            pass
+
+    if rc in (2, 3, 4):  # interrupted, internal error, usage error: the log says why
+        return ""
     status = "PASS" if rc == 0 else ("NO TESTS" if rc == 5 else "FAIL")
-    head = (f"RESULT: {status} | {passed} passed, {failed} failed, {errors} errors, "
-            f"{data['skipped']} skipped | {duration:.1f}s")
+    head = (f"RESULT: {status} | {counts['passed']} passed, {counts['failed']} failed, "
+            f"{counts['errors']} errors, {counts['skipped']} skipped | {duration:.1f}s")
     out = [head]
     if status == "PASS":
-        return "\n".join(out)
-    out.append(f"cmd: {shown}")
-    out.append(f"full log: {LOG_FILE.relative_to(ROOT).as_posix()}")
-    if status == "NO TESTS":
-        out.append("No tests ran. Check the module name, -k pattern, or --changed mapping.")
+        if args.cov:
+            out += _coverage_lines()
         return "\n".join(out)
 
-    groups: "OrderedDict[Tuple[str, str], dict]" = OrderedDict()
-    for b in bad:
-        tb = _strip_root(b["tb"])
-        err, loc = _signature(tb)
-        group = groups.setdefault(_group_key(err, loc),
-                                  {"err": err, "loc": loc, "coll": b["collection"], "cases": []})
-        group["cases"].append((b["id"], tb))
-    if any(g["coll"] for g in groups.values()):
-        out.append("NOTE: a test module failed to import. Fix that group first; it hides every "
-                   "test in the module.")
+    out.append(f"cmd: {cmd}")
+    out.append(f"full log: {LOG_FILE.relative_to(ROOT).as_posix()}")
+    if status == "NO TESTS":
+        out.append("No tests were collected. Check the path, -k expression or --changed mapping.")
+        return "\n".join(out)
+    if collection_errors:
+        out.append(f"NOTE: {collection_errors} test file(s) failed to import. Fix those first; "
+                   "they hide every test in the file.")
 
     ordered = sorted(groups.values(), key=lambda g: (not g["coll"], -len(g["cases"])))
     for idx, group in enumerate(ordered[: args.max_groups], start=1):
-        cases = group["cases"]
+        err, loc, cases = group["err"], group["loc"], group["cases"]
         out.append("")
-        out.append(f"[{idx}] {len(cases)} test{'s' if len(cases) != 1 else ''} | {group['err']}")
-        if group["loc"]:
-            out.append(f"    at {group['loc']}")
-        for tid, _ in cases[:MAX_TESTS_PER_GROUP]:
-            out.append(f"    {tid}")
+        out.append(f"[{idx}] {len(cases)} test{'s' if len(cases) != 1 else ''} | {err}")
+        if loc:
+            out.append(f"    at {loc}")
+        for nodeid, _ in cases[:MAX_TESTS_PER_GROUP]:
+            out.append(f"    {nodeid}")
         if len(cases) > MAX_TESTS_PER_GROUP:
             out.append(f"    (+{len(cases) - MAX_TESTS_PER_GROUP} more with the same error)")
-        trace = [ln for ln in cases[0][1].splitlines()
-                 if ln.strip() and not ln.startswith("Traceback (most recent call last)")
-                 and not re.match(r"^\s*[\^~]+\s*$", ln)]
+        trace = [ln for ln in cases[0][1].splitlines() if ln.strip() and not _CARETS.match(ln)]
         if trace and args.trace_lines > 0:
             out.append(f"    trace ({cases[0][0]}):")
             for ln in trace[-args.trace_lines:]:
@@ -326,99 +326,112 @@ def summarize(data: dict, args: argparse.Namespace, duration: float, rc: int, sh
     return "\n".join(out)
 
 
-def _configure_stdout() -> None:
-    # Windows consoles may not be UTF-8; never crash on an odd character.
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(errors="replace")  # type: ignore[attr-defined]
-        except Exception:
-            pass
+def _coverage_lines() -> List[str]:
+    """The TOTAL line plus the least-covered modules, from the coverage table in the log."""
+    rows = []
+    total = ""
+    for line in LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines():
+        parts = line.split()
+        pct = next((p for p in parts if re.fullmatch(r"\d+%", p)), None)
+        if not parts or pct is None:
+            continue
+        if parts[0] == "TOTAL":
+            total = pct
+        elif parts[0].endswith(".py"):
+            missing = " ".join(parts[parts.index(pct) + 1:])
+            rows.append((int(pct.rstrip("%")), _strip_root(parts[0]), missing))
+    out = [f"coverage: {total} total (branch); lowest:" if total
+           else "coverage: no report (is pytest-cov installed?)"]
+    for pct, name, missing in sorted(rows)[:5]:
+        if len(missing) > 70:
+            missing = missing[:67] + "..."
+        out.append(f"  {pct:3d}%  {name}  missing {missing}" if missing else f"  {pct:3d}%  {name}")
+    return out
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main() -> int:
     _configure_stdout()
-    parser = argparse.ArgumentParser(description="Compact unittest runner for app/tests.",
-                                     allow_abbrev=False)
-    parser.add_argument("targets", nargs="*", help="test modules, ids, or test file paths")
-    parser.add_argument("-k", dest="patterns", action="append", default=[],
-                        help="only tests whose name matches (unittest -k semantics)")
-    parser.add_argument("-x", "--failfast", action="store_true", help="stop at the first failure")
-    parser.add_argument("--lf", action="store_true", help="rerun only last run's failures")
+    parser = argparse.ArgumentParser(
+        description="Compact pytest runner. Unknown args go to pytest.", allow_abbrev=False)
     parser.add_argument("--changed", action="store_true",
                         help="run only tests that cover git-changed files")
+    parser.add_argument("--lf", action="store_true", help="rerun only last run's failures")
+    parser.add_argument("--cov", action="store_true", help="add a coverage summary (pytest-cov)")
+    parser.add_argument("--tb", default="short", choices=["short", "long", "line", "native", "no"],
+                        help="pytest traceback style (default: short)")
     parser.add_argument("--max-groups", type=int, default=8,
                         help="max failure groups to print (default 8)")
     parser.add_argument("--trace-lines", type=int, default=12,
-                        help="traceback lines shown per group (default 12, 0 to hide)")
-    parser.add_argument("--_worker", action="store_true", help=argparse.SUPPRESS)
-    args = parser.parse_args(argv)
+                        help="trace lines shown per group (default 12, 0 to hide)")
+    args, passthrough = parser.parse_known_args()
 
-    targets = [_normalize_target(t) for t in args.targets]
-    if args._worker:
-        return worker(targets, args.patterns, args.failfast)
+    if importlib.util.find_spec("pytest") is None:
+        print("RESULT: ERROR | pytest is not installed for this Python\n"
+              "fix: python -m pip install -r requirements-dev.txt\n"
+              "(on a machine without pip, run the stdlib suite from app/ instead: "
+              "python -m unittest discover -s tests)")
+        return 4
 
+    passthrough = [normalize_target(a) for a in passthrough]
     notes: List[str] = []
-    if args.lf:
-        previous = last_failed()
-        if not previous:
-            print("RESULT: NOTHING TO RUN | no failures recorded from the last run")
-            return 0
-        targets += previous
     if args.changed:
-        mapped, unmapped = changed_targets()
+        targets, unmapped = changed_targets()
         if unmapped:
             notes.append("note: no test mapping for " + ", ".join(unmapped[:8])
                          + (" ..." if len(unmapped) > 8 else "")
                          + " (run the full suite before finishing)")
         if any(p.endswith((".ps1", ".cmd")) for p in _git("diff", "--name-only", "HEAD")):
-            notes.append("note: PowerShell/batch changed; also run tools\\Test-PowerShellSyntax.ps1 "
+            notes.append("note: PowerShell/batch changed; also run app/tools/Test-PowerShellSyntax.ps1 "
                          "and say what still needs target-machine verification")
-        if not mapped and not targets:
+        if not targets:
             print("RESULT: NOTHING TO RUN | no changed files map to tests")
             for n in notes:
                 print(n)
             return 0
-        targets += mapped
-    targets = list(OrderedDict.fromkeys(targets))
+        passthrough = targets + passthrough
+    if args.lf:
+        try:
+            previous = [ln for ln in FAILED_FILE.read_text(encoding="utf-8").splitlines() if ln]
+        except OSError:
+            previous = []
+        previous = [n for n in previous if (ROOT / n.split("::", 1)[0]).exists()]  # files since deleted
+        if not previous:
+            print("RESULT: NOTHING TO RUN | no failures recorded from the last run")
+            return 0
+        passthrough = previous + passthrough
+    if args.cov:
+        passthrough += ["--cov", "--cov-report=term-missing:skip-covered"]
 
     OUT_DIR.mkdir(exist_ok=True)
     try:
-        RESULT_FILE.unlink()
+        XML_FILE.unlink()
     except FileNotFoundError:
         pass
 
-    passthrough: List[str] = list(targets)
-    for p in args.patterns:
-        passthrough += ["-k", p]
-    if args.failfast:
-        passthrough.append("-x")
-    cmd = [sys.executable, str(Path(__file__).resolve()), "--_worker", *passthrough]
-    shown = "run_tests.py " + " ".join(passthrough) if passthrough else "run_tests.py (full suite)"
+    cmd = [sys.executable, "-m", "pytest", *passthrough, f"--tb={args.tb}", "--color=no", "-q",
+           f"--junitxml={XML_FILE}", "-o", "junit_family=xunit1"]
+    shown = "pytest " + " ".join(passthrough) if passthrough else "pytest"
 
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join([str(SRC)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
-    env.setdefault("PYTHONIOENCODING", "utf-8")
     start = time.monotonic()
     with LOG_FILE.open("w", encoding="utf-8", errors="replace") as log:
         log.write("$ " + " ".join(cmd) + "\n\n")
         log.flush()
-        proc = subprocess.run(cmd, cwd=APP, stdout=log, stderr=subprocess.STDOUT, env=env)
+        proc = subprocess.run(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
     duration = time.monotonic() - start
     rc = proc.returncode
 
     summary = ""
-    try:
-        data = json.loads(RESULT_FILE.read_text(encoding="utf-8"))
-        summary = summarize(data, args, duration, rc, shown)
-    except (OSError, ValueError):
-        pass
+    if XML_FILE.exists():
+        try:
+            summary = summarize(XML_FILE, args, duration, rc, shown)
+        except ET.ParseError:
+            summary = ""
     if not summary:
         tail = _strip_root(LOG_FILE.read_text(encoding="utf-8", errors="replace")).splitlines()
-        tail = [ln for ln in tail[1:] if ln.strip()][-LOG_TAIL_ON_CRASH:]
-        summary = "\n".join([f"RESULT: ERROR | the test process exited {rc} before reporting "
-                             f"results | {duration:.1f}s", f"cmd: {shown}", "log tail:"]
+        tail = [ln for ln in tail[1:] if ln.strip()][-LOG_TAIL_ON_CRASH:]  # [1:] skips "$ cmd"
+        summary = "\n".join([f"RESULT: ERROR | pytest exited {rc} before producing results | "
+                             f"{duration:.1f}s", f"cmd: {shown}", "log tail:"]
                             + ["  " + ln for ln in tail])
-        rc = rc or 1
 
     if notes:
         summary += "\n" + "\n".join(notes)

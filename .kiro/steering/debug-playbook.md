@@ -7,14 +7,16 @@ description: Debugging playbook and known meeting2jira gotchas. Use when a test 
 
 ## Narrow it down
 1. Rerun just the one test with more traceback:
-   `python tools/run_tests.py test_module.Class.test_name --trace-lines 60`
+   `python tools/run_tests.py test_module.Class.test_name --tb long --trace-lines 60`
 2. Find the deepest frame in OUR code (`app/src/meeting2jira`), not the stdlib; look there.
 3. State one hypothesis, check it with the smallest possible change or a temporary log line, then
    remove it. Never print or log the Jira token while debugging.
 
 ## Known gotchas in this project
-- `ModuleNotFoundError: meeting2jira` or `tests`: the cwd must be `app/` with `app/src` on
-  PYTHONPATH. `tools/run_tests.py` does this; a hand-rolled command from the repo root won't.
+- `ModuleNotFoundError: meeting2jira` or `tests`: under pytest, `pyproject.toml` puts `app/src` and
+  `app/` on the path. Plain unittest needs cwd `app/` with `app/src` on PYTHONPATH.
+- A test passes under pytest but fails under plain unittest on the workstation (or the reverse): it
+  leaned on pytest behavior (rootdir cwd, assertion rewriting, a fixture). Shipped tests must pass both ways.
 - `init` can't find files: `__main__.py` uses `Path(__file__).resolve().parents[2]` to reach `app/`.
   Count the parents again if anything moved.
 - Guardrail tests passing suspiciously after a move: they assert "no offenders found", which passes

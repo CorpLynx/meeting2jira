@@ -3,7 +3,7 @@
   "hooks": [
     {
       "name": "Lint Python on save",
-      "description": "Reports ruff findings (rules in ruff.toml) for the saved file only, or a stdlib syntax check when ruff isn't installed. Prints nothing when clean, so a clean save costs no tokens. It doesn't auto-fix, because rewriting the file mid-edit breaks the agent's next edit. On Windows, if `python` isn't on PATH in Kiro's shell, change it to `py -3`.",
+      "description": "Reports ruff findings (rules in pyproject.toml) for the saved file only, or a stdlib syntax check when ruff isn't installed. Prints nothing when clean, so a clean save costs no tokens. It doesn't auto-fix, because rewriting the file mid-edit breaks the agent's next edit. On Windows, if `python` isn't on PATH in Kiro's shell, change it to `py -3`.",
       "trigger": "PostFileSave",
       "matcher": "\\.py$",
       "timeout": 30,

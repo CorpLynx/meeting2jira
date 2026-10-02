@@ -41,6 +41,7 @@ app/                      THE DELIVERABLE. Self-contained; copy this folder and 
 infra/windows-test-vm/    Terraform for a throwaway Windows host to run those checks on.
                           Dev tooling, never shipped. SSM only, no inbound rules. Syncs app/ alone.
 tools/                    Kiro dev tooling, never shipped (not app/tools): run_tests.py, hooks/*.py
+pyproject.toml requirements-dev.txt   dev-only pytest/ruff config and tools; not a package definition
 .kiro/steering/           these rules; agents/ (test-runner, code-scout) and hooks/ beside it
 README.md INSTALL.md ARCHITECTURE.md HANDOFF.md KIRO_SETUP.md    docs; not needed at runtime
 ```

@@ -2,7 +2,8 @@
 """Kiro PostFileSave hook: report lint problems for the file the agent just saved.
 
 - *.py         -> ruff check (no auto-fix; changing the file mid-edit breaks the agent's next edit).
-                  Without ruff (e.g. on the no-pip workstation) it falls back to a stdlib syntax check.
+                  ruff is a dev requirement (requirements-dev.txt); without it the hook falls back to a
+                  stdlib syntax check and says so on stderr.
 - *.ps1/psm1   -> PowerShell parser errors (always) + PSScriptAnalyzer (if installed). Prefers
                   Windows PowerShell 5.1 over pwsh, because 5.1 is the target and its parser rejects
                   PS7-only syntax that pwsh would accept.
@@ -50,6 +51,8 @@ def lint_python(files: list[Path]) -> list[str]:
         return []
     ruff = ruff_cmd()
     if not ruff:
+        print("lint hook: ruff not installed (python -m pip install -r requirements-dev.txt); "
+              "syntax check only", file=sys.stderr)
         return syntax_check(files)
     proc = subprocess.run(
         [*ruff, "check", "--no-fix", "--output-format=concise", "--quiet", *map(str, files)],

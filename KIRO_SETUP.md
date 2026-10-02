@@ -6,8 +6,10 @@ credits, or by subagents on cheaper models.
 
 It started from a generic Python + PowerShell scaffold and was adapted to this project:
 
-- **Tests are stdlib `unittest`, not pytest.** The runner drives unittest directly, so nothing new
-  has to be installed, including on the no-pip workstation.
+- **Tests are written as stdlib `unittest` but run with pytest in dev.** They ship in `app/tests`
+  and must still run on the no-pip workstation, so they can't use pytest features. On your dev
+  machine, pytest + ruff (from `requirements-dev.txt`) give better failure output, per-test timeouts,
+  coverage and linting.
 - **PowerShell calls Python here, not the other way round.** That's why there is no
   `fake_powershell` fixture. PowerShell runtime behavior is verified by `app/tools/Invoke-WindowsChecks.ps1`, not by mocks.
 - **Nothing in this file set lives in `app/`.** The deliverable stays self-contained and stdlib-only.
@@ -20,22 +22,23 @@ It started from a generic Python + PowerShell scaffold and was adapted to this p
     product.md  tech.md  structure.md   always   project rules (scope, non-negotiables, contracts)
     workflow.md          always   edit -> test -> fix loop; where the token savings come from
     powershell.md        .ps1     PowerShell 5.1 / CLM rules
-    python-testing.md    tests    unittest conventions, fixtures, what can't be unit-tested
+    python-testing.md    tests    test conventions (unittest-compatible), fixtures, what can't be unit-tested
     debug-playbook.md    auto     known gotchas; loads when the agent is stuck (also #debug-playbook)
     handoff.md           manual   /handoff writes .kiro/session-handoff.md for a fresh session
   agents/
     test-runner.md       Haiku    runs tests, returns grouped failures; read-only
     code-scout.md        Sonnet   "where is X used?" lookups, returns file:line; read-only
   hooks/
-    lint-on-save.json      ruff (or a stdlib syntax check) on saved .py; PS parse check on saved .ps1
-    guard-raw-tests.json   blocks raw `python -m unittest` / pytest so verbose output never floods context
+    lint-on-save.json      ruff on saved .py (syntax check if ruff is missing); PS parse check on saved .ps1
+    guard-raw-tests.json   blocks raw pytest / `python -m unittest` so verbose output never floods context
     session-context.json   new session gets branch, changed files, last test result, handoff note
     format-on-stop.json    OFF; leave it off (the code isn't ruff-formatted)
 tools/
-  run_tests.py           compact unittest runner; full log in .test-output/last-run.log
+  run_tests.py           compact pytest runner; full log in .test-output/last-run.log
   hooks/*.py             scripts the hooks call (stdlib only)
 .kiroignore              keeps caches, runtime data, exports, tokens and Terraform state away from the agent
-ruff.toml                dev lint rules (bug-finding only), Python 3.8 target
+pyproject.toml           dev-only pytest/coverage/ruff config (not a package definition)
+requirements-dev.txt     pytest, pytest-timeout, pytest-cov, ruff
 ```
 
 Root `tools/` is Kiro tooling. `app/tools/` is part of the shipped program. Don't mix them up.
@@ -48,18 +51,18 @@ Root `tools/` is Kiro tooling. `app/tools/` is part of the shipped program. Don'
    The runner prints about 5-30 lines, with failures grouped by root cause. For example, three
    failing `subTest` cases from one bug show as one group.
 4. For **full-suite runs**, Opus delegates to the **test-runner** subagent (Haiku).
-5. If Opus runs `python -m unittest` directly anyway, the **guard hook** blocks it and points it at the runner.
+5. If Opus runs pytest or `python -m unittest` directly anyway, the **guard hook** blocks it and points it at the runner.
 
 What a failing run looks like to the model (illustrative):
 
 ```
 RESULT: FAIL | 7 passed, 3 failed, 0 errors, 0 skipped | 0.1s
-cmd: run_tests.py test_tour_of_duty
+cmd: pytest app/tests/test_tour_of_duty.py
 full log: .test-output/last-run.log
 
 [1] 3 tests | AssertionError: 'outside' != 'partial'
     at app/tests/test_tour_of_duty.py:66
-    test_tour_of_duty.ClassificationTests.test_inside_partial_and_outside (case=1)
+    app/tests/test_tour_of_duty.py::ClassificationTests::test_inside_partial_and_outside [case=1]
     ...
     trace (...):
       <the last few traceback lines>
@@ -74,10 +77,10 @@ single module.
 1. **Python on PATH.** The hooks, the agent and `workflow.md` call `python`. On a Windows machine
    where only the `py` launcher exists, replace `python` with `py -3` in `.kiro/hooks/*.json`,
    `.kiro/agents/test-runner.md` and `.kiro/steering/workflow.md`.
-2. **Optional dev tools** (not needed on the workstation):
-   - `python -m pip install ruff` for full linting. Without it, the save hook falls back to a
-     syntax check.
-   - `Install-Module PSScriptAnalyzer -Scope CurrentUser` for `.ps1` analysis on top of the parse check.
+2. **Dev tools** (your dev machine only; the app never needs them):
+   - `python -m pip install -r requirements-dev.txt` (pytest, pytest-timeout, pytest-cov, ruff).
+     Without pytest the runner stops and tells you to install them.
+   - Optional: `Install-Module PSScriptAnalyzer -Scope CurrentUser` for `.ps1` analysis on top of the parse check.
 3. **Turn on `.kiroignore`.** In Settings, search "Agent Ignore Files"
    (`kiroAgent.agentIgnoreFiles`) and add `.kiroignore`. Without this step the file is ignored.
 4. **Check the model IDs.** Type `/model` in Kiro chat and confirm `claude-haiku-4.5` and
@@ -88,13 +91,12 @@ single module.
 ## Check that it works
 
 1. Run `python tools/run_tests.py` yourself. You should get `RESULT: PASS | 80 passed ...`, and the
-   full log in `.test-output/`.
-2. Ask Kiro to "run the unit tests with python -m unittest". The guard should block it, and Kiro
+   full log in `.test-output/`. `--cov` adds a coverage summary.
+2. Ask Kiro to "run pytest". The guard should block it, and Kiro
    should switch to `tools/run_tests.py`.
 3. Ask Kiro to "use the test-runner subagent to run the full suite". Check that the subagent shows
    the Haiku model. Approve the subagent the first time so it doesn't block later runs.
-4. Have Kiro add an unused import to a file. The save hook should report `F401` (or nothing,
-   without ruff).
+4. Have Kiro add an unused import to a file. The save hook should report `F401`.
 5. Start a new session. The first context should include `[session context]` with your branch and
    the last test result.
 

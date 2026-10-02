@@ -4,16 +4,16 @@ inclusion: always
 # Workflow: edit -> test -> fix
 
 ## Running tests
-- Never run `python -m unittest` (or pytest) directly; a hook blocks it. Use
-  `python tools/run_tests.py [test_module[.Class.test]] [-k pattern] [--lf] [-x]` from the repo root.
-  It sets up `app/` + PYTHONPATH itself, prints a compact grouped summary, and keeps the full log
-  in `.test-output/last-run.log`.
+- Never run pytest or `python -m unittest` directly; a hook blocks it. Use
+  `python tools/run_tests.py [test_module | path::Class::test] [-k expr] [--lf] [-x] [--cov]` from the
+  repo root. It runs pytest (config in `pyproject.toml`), prints a compact grouped summary, and keeps
+  the full log in `.test-output/last-run.log`. Use its `--lf`, not pytest's: it also catches subTests.
 - While fixing, run the narrowest scope: one module, `-k`, or `--lf`. `--changed` runs the tests
   that cover git-changed files (it always adds `test_guardrails` for changes under `app/src`).
 - Full-suite runs (before saying you're done, or after a multi-file change): delegate to the
   `test-runner` subagent rather than running the full suite yourself.
-- If you need more detail on one failure, rerun that test id with `--trace-lines 60`, or read only
-  its section of the log.
+- If you need more detail on one failure, rerun that test id with `--tb long --trace-lines 60`, or
+  read only its section of the log. `--cov` adds coverage with the five least-covered modules.
 
 ## Fixing failures
 - Failures are grouped by root cause. Fix group [1] first, then rerun with `--lf`.

@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .ruff_cache/
+.pytest_cache/
+.coverage
 
 # Kiro dev tooling: test runner output and the per-session handoff note (tools/run_tests.py,
 # .kiro/steering/handoff.md). Both are scratch state for one checkout.

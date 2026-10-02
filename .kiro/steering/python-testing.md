@@ -5,8 +5,12 @@ fileMatchPattern: ["app/tests/**/*.py"]
 # Writing and fixing tests in app/tests
 
 ## Style
-- Stdlib `unittest` only (`unittest.TestCase`, `self.assert*`), no pytest. The tests ship with the
-  app and run on the no-pip workstation to prove the install.
+- Write tests as stdlib `unittest` (`unittest.TestCase`, `self.assert*`). They ship with the app and
+  must still run on the no-pip workstation (`python -m unittest discover -s tests`) to prove the
+  install. In dev, pytest runs them (`tools/run_tests.py`) for better output, timeouts and coverage.
+- So in `app/tests`: no `import pytest`, no pytest fixtures, `parametrize`, marks or `pytest.raises`.
+  Anything that needs those isn't a shipped test; ask before adding a dev-only test folder.
+- Each test has a 60s timeout (pytest-timeout); a test that waits on a socket or lock must not hang.
 - Use `self.subTest(...)` instead of copy-pasted near-duplicate tests.
 - Temporary files: `tempfile.TemporaryDirectory()` or `tempfile.mkdtemp()` cleaned up in `tearDown`.
   Never write into `app/` or the real `%LOCALAPPDATA%\meeting2jira`.
