@@ -1,6 +1,6 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: "**/*.ps1"
+fileMatchPattern: ["**/*.ps1", "**/*.psm1", "**/*.psd1"]
 ---
 # Editing PowerShell in this repo
 

@@ -24,12 +24,15 @@ inclusion: always
 8. **Secrets**: the Jira PAT is stored only via DPAPI (`credstore.py`). Never log it, print it, or write it in plain text.
 9. **No EWS.** Exchange Online is disabling it starting Oct 2026. Microsoft Graph is the only acceptable future network source, and it needs an IT-registered app.
 
-## Verify every change (run all three; all must pass)
+## Verify every change (all must pass)
 ```
-python -m unittest discover -s tests -v                      # use `py -3 -m ...` on Windows
-powershell.exe -NoProfile -File tools\Test-PowerShellSyntax.ps1   # Windows PowerShell 5.1 (preferred)
+python tools/run_tests.py                                    # agent: compact unittest run (see workflow.md)
+python -m unittest discover -s tests -v                      # human, from app/ with app/src on PYTHONPATH
+powershell.exe -NoProfile -File tools\Test-PowerShellSyntax.ps1   # from app/; Windows PowerShell 5.1 (preferred)
 pwsh -NoProfile -File tools/Test-PowerShellSyntax.ps1             # if only PowerShell 7 is available
 ```
+`tools/run_tests.py` (repo root) and the plain unittest command run the same suite; the agent uses the
+runner because a hook blocks raw unittest output. Lint rules for dev are in `ruff.toml`.
 Optional: `vermin -t=3.8- --violations meeting2jira tests` to confirm Python-version compatibility.
 
 ## Conventions

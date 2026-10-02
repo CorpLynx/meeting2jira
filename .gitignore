@@ -1,5 +1,12 @@
 __pycache__/
 *.pyc
+.ruff_cache/
+
+# Kiro dev tooling: test runner output and the per-session handoff note (tools/run_tests.py,
+# .kiro/steering/handoff.md). Both are scratch state for one checkout.
+.test-output/
+.kiro/session-handoff.md
+
 *.dpapi
 state.db
 exports/

@@ -1,0 +1,21 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Lint Python on save",
+      "description": "Reports ruff findings (rules in ruff.toml) for the saved file only, or a stdlib syntax check when ruff isn't installed. Prints nothing when clean, so a clean save costs no tokens. It doesn't auto-fix, because rewriting the file mid-edit breaks the agent's next edit. On Windows, if `python` isn't on PATH in Kiro's shell, change it to `py -3`.",
+      "trigger": "PostFileSave",
+      "matcher": "\\.py$",
+      "timeout": 30,
+      "action": { "type": "command", "command": "python tools/hooks/lint_changed.py" }
+    },
+    {
+      "name": "Analyze PowerShell on save",
+      "description": "Reports parse errors for the saved .ps1 file using Windows PowerShell 5.1 when available (pwsh otherwise), plus PSScriptAnalyzer findings if that module is installed. This is a fast per-file check; tools/Test-PowerShellSyntax.ps1 and the CLM guardrails in test_guardrails.py are still the real verification.",
+      "trigger": "PostFileSave",
+      "matcher": "\\.(ps1|psm1|psd1)$",
+      "timeout": 45,
+      "action": { "type": "command", "command": "python tools/hooks/lint_changed.py" }
+    }
+  ]
+}
