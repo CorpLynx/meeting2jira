@@ -36,6 +36,19 @@ try {
     Invoke-WebRequest -Uri 'https://awscli.amazonaws.com/AWSCLIV2.msi' -OutFile $cliMsi -UseBasicParsing
     Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', $cliMsi, '/quiet', '/norestart') -Wait
 
+    # ---- Git for Windows -------------------------------------------------------------------
+    # Asgard's Baldur reads git history, and its tests build real repositories (they skip
+    # without git). The latest release is looked up so this never pins a stale installer.
+    Say 'Installing Git for Windows'
+    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/git-for-windows/git/releases/latest' `
+        -UseBasicParsing -Headers @{ 'User-Agent' = 'm2j-lab' }
+    $asset = $release.assets | Where-Object { $_.name -match '^Git-[0-9.]+-64-bit\.exe$' } | Select-Object -First 1
+    $gitInstaller = Join-Path $env:TEMP $asset.name
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $gitInstaller -UseBasicParsing
+    $gitArgs = @('/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-', '/SUPPRESSMSGBOXES')
+    $proc = Start-Process -FilePath $gitInstaller -ArgumentList $gitArgs -Wait -PassThru
+    Say ('Git installer exit code: ' + $proc.ExitCode + ' (' + $asset.name + ')')
+
     # ---- A non-administrator account -------------------------------------------------------
     # SSM commands run as SYSTEM. Any check that claims to prove the "no admin rights"
     # requirement has to run as this account instead.
@@ -49,6 +62,33 @@ try {
         # interactive Task Scheduler checks can be done over an SSM port-forward.
         Add-LocalGroupMember -Group 'Remote Desktop Users' -Member $userName -ErrorAction SilentlyContinue
     }
+
+    # ---- Running checks as that account ------------------------------------------------------
+    # This task runs C:\m2j\asuser\run.cmd as the non-admin account (a batch logon), so a check
+    # running as SYSTEM over SSM can write the script, start the task and read what it wrote,
+    # without the password ever passing through SSM. Asgard's install, Baldur's CLI and its
+    # scheduled task are checked this way, because all of them are per-user.
+    # A task that stores a password runs with a batch logon, which Windows Server grants only to
+    # administrators by default ("The user has not been granted the requested logon type").
+    # Granting this one logon type gives the account no admin rights; the workstation itself
+    # never needs it, because Baldur's own scheduled task runs only while you're signed in.
+    $sid = (New-Object System.Security.Principal.NTAccount($userName)).Translate(
+        [System.Security.Principal.SecurityIdentifier]).Value
+    $exported = Join-Path $root 'rights.inf'
+    & secedit.exe /export /cfg $exported /areas USER_RIGHTS | Out-Null
+    $rights = (Get-Content $exported) -replace '^(SeBatchLogonRight = .*)$', ('$1,*' + $sid)
+    Set-Content -Path $exported -Value $rights -Encoding Unicode
+    & secedit.exe /configure /db (Join-Path $root 'rights.sdb') /cfg $exported /areas USER_RIGHTS | Out-Null
+    Say ('Granted batch logon to ' + $userName)
+
+    $asUser = Join-Path $root 'asuser'
+    New-Item -ItemType Directory -Force -Path $asUser | Out-Null
+    & icacls.exe $asUser /grant ($userName + ':(OI)(CI)M') | Out-Null
+    'exit /b 0' | Set-Content -Path (Join-Path $asUser 'run.cmd') -Encoding ascii
+    $userAction = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c "' + (Join-Path $asUser 'run.cmd') + '"')
+    $userSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+    Register-ScheduledTask -TaskName 'm2j-as-user' -Action $userAction -Settings $userSettings `
+        -User $userName -Password '${standard_user_pass}' -RunLevel Limited -Force | Out-Null
 
     # ---- Cost guard ------------------------------------------------------------------------
     # Re-arms on every boot, because the trigger is AtStartup with a delay rather than a

@@ -1,0 +1,14 @@
+{
+  "_help": "Heimdall's form file. 'heimdall init' copies this to %LOCALAPPDATA%\\Asgard\\settings\\heimdall.json. Describe the SeCcHm form once here; save value combinations as templates. Labels must match the text next to each field on the form. kind: text, select, reference or checkbox. Values may use $today or $today_us.",
+  "instance_url": "https://yourinstance.servicenowservices.com",
+  "catalog_sys_id": "0123456789abcdef0123456789abcdef",
+  "ui": "classic",
+  "ready_label": "Short description",
+  "fields": [
+    {"label": "Short description", "kind": "text", "required": true},
+    {"label": "Category", "kind": "select"},
+    {"label": "Requested for", "kind": "reference"},
+    {"label": "Justification", "kind": "text"},
+    {"label": "I confirm this is accurate", "kind": "checkbox", "default": true}
+  ]
+}

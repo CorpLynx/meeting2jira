@@ -3,12 +3,36 @@ inclusion: always
 ---
 # Structure and contracts
 
-**`app/` is the program. Everything else in the repo is development support.**
+**Two deliverables: `Odin/app/` (meeting2jira, the program this file describes) and `Asgard/`
+(launcher, Muninn, Baldur). Everything else is a sibling deliverable, documentation, or
+development support.**
 
-Copying `app/` to a workstation is a complete, runnable install: nothing in it reaches outside
+The repo root holds tooling (`.kiro/`, `tools/`, `infra/`, `pyproject.toml`), the `Odin/` and
+`Asgard/` folders, and `context-docs/`. Everything that is Odin - the program, its sibling
+exporters, the GUI and the docs - lives under `Odin/`. Paths below are relative to `Odin/` unless
+they start with `../` or are one of the root-level tooling names.
+
+**`Asgard/` runs on its own rules.** Before touching it, read `Asgard/HANDOFF.md` (state, decisions,
+what's next) and `Asgard/AGENTS.md` (non-negotiables, definition of done). It targets Python 3.9+
+stdlib, every app writes through Muninn (`Asgard/asgard/muninn/`), Baldur biases every number down
+and never writes to Jira, and changes to estimates, approvals or posting get an independent review
+recorded in `Asgard/docs/`. The spec snapshots in `Asgard/docs/` are the current specs; the copy in
+`.kiro/specs/` is superseded. Until Odin moves into Muninn, nothing in `Odin/app/` imports
+`asgard`, and nothing in `Asgard/` reads Odin's `state.db`. `context-docs/` holds inputs Brandon
+dropped in (the 0.3.0 handoff zip, spec drafts, the archive of the retired `munnin-layer/` and
+`baldur/`); read them, don't edit them.
+
+Copying `Odin/app/` to a workstation is a complete, runnable install: nothing in it reaches outside
 itself, and no other folder is required at runtime. Keep it that way.
 
 ```
+<repo root>/
+  .kiro/  tools/  infra/  pyproject.toml  requirements-dev.txt  KIRO_SETUP.md   dev support, never shipped
+  context-docs/           inputs and archives; read-only
+  Asgard/                 SECOND DELIVERABLE: Asgard launcher, Muninn, Baldur (see Asgard/AGENTS.md)
+  Odin/                   THE PRODUCT: the program, sibling exporters, GUI and docs
+    README.md INSTALL.md ARCHITECTURE.md HANDOFF.md   docs; not needed at runtime
+
 app/                      THE DELIVERABLE. Self-contained; copy this folder and run it.
   meeting2jira.cmd          entry point on Windows. Thin dispatcher only: no logic, no decisions.
   m2j                       same idea for macOS/Linux development. Named differently because the
@@ -38,24 +62,56 @@ app/                      THE DELIVERABLE. Self-contained; copy this folder and 
   tools/          Test-PowerShellSyntax.ps1   parse check, runs under 5.1 and 7
                   Invoke-WindowsChecks.ps1    Windows-only behavior; `meeting2jira selftest`
 
-infra/windows-test-vm/    Terraform for a throwaway Windows host to run those checks on.
-                          Dev tooling, never shipped. SSM only, no inbound rules. Syncs app/ alone.
-.kiro/steering/           these rules
-README.md INSTALL.md ARCHITECTURE.md HANDOFF.md    docs; not needed at runtime
+gui/                      Odin's Tkinter frontend (WORK IN PROGRESS, on-prem origin). stdlib tkinter, so
+                          it adds no pip dependency. It is a FRONTEND: no filtering, routing, dedupe
+                          or Jira logic belongs in it. See .kiro/specs/odin-gui-guardrails.md for how
+                          its guardrail coverage is to be built - until that is done, the guardrail
+                          tests do NOT scan it, so every non-negotiable passes vacuously for gui/.
+playwright-app/           Path C: an OWA exporter for "new Outlook", which has neither COM nor the
+                          Import/Export wizard. A SEPARATE deliverable on purpose - it needs pip
+                          (playwright), so folding it into app/ would forfeit the stdlib-only
+                          guarantee that test_guardrails.py enforces. It writes schema-v1 JSON and
+                          shells out to the unmodified `python -m meeting2jira push --input`;
+                          nothing under app/src/meeting2jira/ may change to accommodate it.
+                          DORMANT, and not part of the installed deliverable. Superseded by Graph
+                          (Path D). Do not add features here; limit changes to things that also
+                          protect the Graph path, which in practice means owa/mapping.py. It is
+                          deleted once Graph is verified against the real mailbox. See its README.
+graph-app/                Path D, PLANNED and the intended primary source: Microsoft Graph
+                          /me/calendarView via msal. Separate for the same pip reason. Blocked on an
+                          Entra app registration, not on code. See HANDOFF.md P2-C.
+                            owa/capture.py  browser session, endpoint discovery, direct fetch
+                            owa/mapping.py  OWA JSON -> schema v1. Stdlib only, imports no playwright,
+                                            so it is testable with no browser and no mailbox.
+                            tests/fake_owa.py  a deliberately noisy local OWA. Keep it noisy: assets,
+                                            decoy JSON endpoints and a /owa/telemetry/events beacon
+                                            carrying start/end are what catch discovery bugs.
+power-platform/           Power Automate / Power BI feasibility only. No runtime code.
+
+(the four blocks above - app/, gui/, playwright-app/, graph-app/, plus power-platform/ - all sit
+ inside Odin/, as siblings. Below are the root-level items that stay OUTSIDE it.)
+
+../infra/windows-test-vm/   Terraform for a throwaway Windows host to run those checks on.
+                            Dev tooling, never shipped. SSM only, no inbound rules. Syncs Odin/app/ alone.
+../tools/                   Kiro dev tooling, never shipped (not Odin/app/tools): run_tests.py, hooks/*.py
+../pyproject.toml ../requirements-dev.txt   dev-only pytest/ruff config; not a package definition
+../.kiro/steering/          these rules; agents/ (test-runner, code-scout) and hooks/ beside it
+../KIRO_SETUP.md            Kiro setup notes
 ```
 
-## Keeping app/ self-contained
+## Keeping Odin/app/ self-contained
 - Every path inside `app/` is derived from the file's own location (`$PSScriptRoot`,
   `Path(__file__)`), never from the current directory or a repo-relative guess. That is what makes
   the folder portable.
-- Nothing in `app/` may reference `../`, the repo root, `infra/`, or `.kiro/`.
+- Nothing in `Odin/app/` may reference `../`, the repo root, `infra/`, or `.kiro/`. (Moving the
+  product under `Odin/` did not change this: `app/` reaches nothing outside itself.)
 - Runtime data belongs in `%LOCALAPPDATA%\meeting2jira`, never inside `app/`. The folder should stay
   safe to replace wholesale during an upgrade without losing config, token, or state.
 
 ## How Python is located
-`app/src` goes on **PYTHONPATH**, and the working directory stays at **`app/`**. Both entry points
+`Odin/app/src` goes on **PYTHONPATH**, and the working directory stays at **`Odin/app/`**. Both entry points
 and every PowerShell caller do this. It is what lets `-m meeting2jira` resolve from `src/` while
-`unittest discover -s tests` still finds `app/tests` — cd-ing into `src/` would break the second.
+`unittest discover -s tests` still finds `Odin/app/tests` — cd-ing into `src/` would break the second.
 Save and restore `PYTHONPATH` around the call rather than leaking it.
 
 ## Two path traps this layout creates

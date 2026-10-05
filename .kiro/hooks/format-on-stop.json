@@ -1,0 +1,13 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Format changed Python files when the agent finishes",
+      "description": "OFF, and should stay off in this repo: the code is not ruff-formatted, so this would rewrite every changed file wholesale and bury the real change in the diff. When enabled it runs `ruff format` and `ruff check --fix` on git-changed .py files after the agent's turn ends.",
+      "trigger": "Stop",
+      "enabled": false,
+      "timeout": 60,
+      "action": { "type": "command", "command": "python tools/hooks/lint_changed.py --format-changed" }
+    }
+  ]
+}

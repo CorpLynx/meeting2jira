@@ -8,9 +8,12 @@ inclusion: always
 - **Python 3.8+, standard library only** (the code currently needs 3.7+; keep it ≤ 3.8).
   - Don't use `match`, runtime `X | Y` unions, `zoneinfo` (Windows has no tz database without the `tzdata` package), or `str.removeprefix`.
   - Use `from __future__ import annotations` and `typing.List`/`Optional`.
+- **These targets and the non-negotiables below are Odin's.** `Asgard/` follows `Asgard/AGENTS.md`:
+  Python 3.9+ stdlib only (vermin `-t=3.9-`), and Muninn needs Python's bundled SQLite 3.37+ with
+  FTS5, which on Windows means Python 3.11+.
 
 ## Non-negotiables (enforced by tests/test_guardrails.py; don't weaken the tests)
-1. **No third-party Python packages**: no requests, msal, pywin32, keyring, dateutil. The target machine has no pip access, and every package would need approval. Use `urllib`, `ssl`, `sqlite3`, `ctypes`, `json`, `csv`.
+1. **No third-party Python packages in `Odin/app/`** (runtime and shipped tests): no requests, msal, pywin32, keyring, dateutil. The target machine has no pip access, and every package would need approval. Use `urllib`, `ssl`, `sqlite3`, `ctypes`, `json`, `csv`.
 2. **Never disable TLS verification.** No `CERT_NONE`, `check_hostname=False`, or unverified contexts, and no config flag for it. Extra CAs go through `jira.ca_bundle`. Python on Windows already trusts the Windows cert store (this is why it's urllib and not requests).
 3. **HTTPS only** for Jira (http is allowed only for localhost in tests).
 4. **No execution-policy bypass** anywhere: no `-ExecutionPolicy Bypass`, no `Set-ExecutionPolicy`.
@@ -24,13 +27,20 @@ inclusion: always
 8. **Secrets**: the Jira PAT is stored only via DPAPI (`credstore.py`). Never log it, print it, or write it in plain text.
 9. **No EWS.** Exchange Online is disabling it starting Oct 2026. Microsoft Graph is the only acceptable future network source, and it needs an IT-registered app.
 
-## Verify every change (run all three; all must pass)
+## Verify every change (all must pass)
 ```
-python -m unittest discover -s tests -v                      # use `py -3 -m ...` on Windows
-powershell.exe -NoProfile -File tools\Test-PowerShellSyntax.ps1   # Windows PowerShell 5.1 (preferred)
+python tools/run_tests.py                                    # dev/agent: compact pytest run of Odin + Asgard (see workflow.md)
+bash Asgard/tools/baldur_smoke.sh                            # when Baldur changes: must end PROJ-42 1h30m, PROJ-51 30m
+ruff check .                                                 # dev lint (bug-finding rules, py38 target)
+python -m unittest discover -s tests -v                      # no-pip check, from Odin/app/ with Odin/app/src on PYTHONPATH
+powershell.exe -NoProfile -File tools\Test-PowerShellSyntax.ps1   # from Odin/app/; Windows PowerShell 5.1 (preferred)
 pwsh -NoProfile -File tools/Test-PowerShellSyntax.ps1             # if only PowerShell 7 is available
 ```
-Optional: `vermin -t=3.8- --violations meeting2jira tests` to confirm Python-version compatibility.
+Dev tools (pytest, pytest-timeout, pytest-cov, ruff) come from `requirements-dev.txt` and are
+configured in `pyproject.toml`. They are never needed to run the app. pytest and plain unittest run
+the same suite; the agent uses the runner because a hook blocks raw test output.
+Optional: `vermin -t=3.8- --violations meeting2jira tests` to confirm Python-version compatibility
+(for Asgard, from `Asgard/`: `vermin -t=3.9- --no-tips --eval-annotations --violations apps asgard tests`).
 
 ## Conventions
 - Logging: use module loggers (`logging.getLogger(__name__)`) under the `meeting2jira` namespace. The CLI prints through logging, not `print`.
@@ -40,7 +50,7 @@ Optional: `vermin -t=3.8- --violations meeting2jira tests` to confirm Python-ver
   - `1` push finished with per-item errors, or a check failed
   - `2` config, usage, or credential error
   - `130` interrupted
-- Tests: stdlib `unittest` only. No real network; the Jira tests use a local `http.server` on 127.0.0.1. Add fixtures under `tests/fixtures/`.
+- Tests: written as stdlib `unittest` so they run without pip; run with pytest in dev. No real network; the Jira tests use a local `http.server` on 127.0.0.1. Add fixtures under `tests/fixtures/`.
 - Keep `README.md` (config reference, troubleshooting, roadmap) in sync with behavior changes.
 - **Be explicit about verification.** This repo is often edited away from the target Windows machine. Anything touching Outlook COM, DPAPI, Task Scheduler, or PS 5.1 runtime behavior must be reported as "needs target-machine verification" unless it was actually run there. Add those items to the checklist in `HANDOFF.md`.
 

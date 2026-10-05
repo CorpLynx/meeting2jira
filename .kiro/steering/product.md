@@ -1,7 +1,29 @@
 ---
 inclusion: always
 ---
-# Product: meeting2jira
+# Product: Odin (package name `meeting2jira`)
+
+## Naming: Odin is the product, `meeting2jira` is the identifier
+
+The program is called **Odin**. `meeting2jira` is still the technical identifier and has NOT been
+renamed, deliberately. Treat these as load-bearing and do not rename them casually:
+
+| Identifier | Why renaming it is dangerous |
+|---|---|
+| `%LOCALAPPDATA%\meeting2jira` | Holds `state.db`, `config.json` and the DPAPI token. Renaming the folder orphans the dedupe state, and the next run re-creates **every meeting ever synced** as duplicate sub-tasks. Needs a migration, not a rename. |
+| `Odin/app/src/meeting2jira/` | What `python -m meeting2jira` resolves to. 33 callers and 10 import sites, plus the guardrail wiring tests. |
+| `m2j-<hash>` dedupe label | `recover_created_issue` finds an ambiguously-created sub-task by exact JQL on this label. Changing it strands every existing sub-task. |
+| `meeting2jira.cmd` / `-owa` / `-graph` | The scheduled task's action path points at the filename. |
+| `meeting2jira-daily` task name | Renaming leaves an orphaned task still running the old path. |
+| `logging.getLogger("meeting2jira")` | The log namespace all module loggers hang off. |
+
+Prose, titles and user-facing text say Odin. A full identifier rename is a versioned migration with
+a state-upgrade plan — see HANDOFF.md.
+
+Odin is one app in the **Asgard** suite (`Asgard/`: launcher, the shared Muninn database, Baldur's
+git time estimates). Odin is decided to move into Muninn and stay the only app that writes to Jira;
+the plan is `Asgard/docs/muninn-design.md`. This file's scope rules are Odin's; Asgard's are in
+`Asgard/AGENTS.md`.
 
 A personal tool for a federal employee whose organization requires every meeting to be tracked in Jira. It reads *their own* Outlook/Teams calendar and creates one Jira **sub-task** per attended meeting under a configured parent issue. It can optionally log work (a worklog equal to the meeting length) and transition the sub-task (e.g. to Done).
 

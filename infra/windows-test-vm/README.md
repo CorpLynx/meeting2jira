@@ -56,7 +56,7 @@ terraform apply                 # ~11 resources
 terraform destroy               # when finished
 ```
 
-`run-checks.sh` waits for the SSM agent, uploads **`app/`** to S3 (excluding secrets and local
+`run-checks.sh` waits for the SSM agent, uploads **`Odin/app/`** to S3 (excluding secrets and local
 state), runs `tools/Invoke-WindowsChecks.ps1` under real `powershell.exe`, and prints the output with
 the exit code. It ships only the program folder, and the *working tree* rather than a commit, so the
 loop stays edit → run.

@@ -1,0 +1,19 @@
+# The Graph path's only dependency, pinned exactly.
+#
+# msal is pure Python. This is the plain form, so it stays installable wherever pip reaches and
+# needs no native build.
+msal==1.31.1
+
+# ---------------------------------------------------------------------------------------------
+# Brokered Windows sign-in (auth_mode "broker") needs the extra instead:
+#
+#     pip install "msal[broker]==1.31.1"
+#
+# That pulls pymsalruntime, which is a NATIVE binary and therefore a separate approval conversation
+# with IT. It is deliberately not listed here: installing a native dependency should be a decision
+# someone makes, not a side effect of following the README.
+#
+# What it buys: the token comes from the device's existing signed-in state, so a scheduled run is
+# silent and the device itself satisfies MFA and device-compliance Conditional Access. Without it,
+# auth_mode "interactive" works but will eventually need a human when the policy forces reauth.
+# ---------------------------------------------------------------------------------------------

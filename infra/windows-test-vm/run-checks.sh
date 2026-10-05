@@ -11,9 +11,20 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-# Only app/ is shipped: it is the whole program, and it is exactly what an operator would copy to a
-# workstation. Terraform, steering files and docs have no business on the test host.
-APP_DIR="$(cd ../../app && pwd)"
+# Odin (default): only Odin/app/ is shipped: it is the whole program, and it is exactly what an operator
+# would copy to a workstation. Terraform, steering files and docs have no business on the test host.
+# Asgard (`./run-checks.sh asgard [args]`): the Asgard/ folder, the same tree its release zip holds, and
+# Asgard/tools/windows_checks.py instead of the PowerShell checks.
+TARGET="odin"
+if [ "${1:-}" = "asgard" ]; then
+  TARGET="asgard"
+  shift
+fi
+if [ "$TARGET" = "asgard" ]; then
+  APP_DIR="$(cd ../../Asgard && pwd)"
+else
+  APP_DIR="$(cd ../../Odin/app && pwd)"
+fi
 
 INSTANCE_ID="$(terraform output -raw instance_id)"
 BUCKET="$(terraform output -raw bucket)"
@@ -41,9 +52,9 @@ fi
 
 # ---- 2. Push the checkout up ----------------------------------------------------------------
 # Secrets and local state stay here: the token file, the sqlite state and real calendar exports are
-# excluded. Terraform state (which holds the lab password) is outside app/ and never in scope.
-echo "==> syncing app/ to s3://$BUCKET/repo"
-aws s3 sync "$APP_DIR" "s3://$BUCKET/repo" \
+# excluded. Terraform state (which holds the lab password) is outside Odin/app/ and never in scope.
+echo "==> syncing $APP_DIR to s3://$BUCKET/$TARGET"
+aws s3 sync "$APP_DIR" "s3://$BUCKET/$TARGET" \
   --region "$REGION" \
   --delete \
   --only-show-errors \
@@ -62,11 +73,18 @@ AWS_EXE='C:\Program Files\Amazon\AWSCLIV2\aws.exe'
 PARAMS_FILE="$(mktemp -t m2j-ssm-params)"
 trap 'rm -f "$PARAMS_FILE"' EXIT
 
-python3 - "$PARAMS_FILE" "$BUCKET" "$AWS_EXE" "$EXTRA_ARGS" <<'PY'
+python3 - "$PARAMS_FILE" "$BUCKET" "$AWS_EXE" "$EXTRA_ARGS" "$TARGET" <<'PY'
 import json
 import sys
 
-params_file, bucket, aws_exe, extra_args = sys.argv[1:5]
+params_file, bucket, aws_exe, extra_args, target = sys.argv[1:6]
+local = "C:\\m2j\\repo" if target == "odin" else "C:\\m2j\\asgard"
+if target == "odin":
+    run = "powershell.exe -NoProfile -File C:\\m2j\\repo\\tools\\Invoke-WindowsChecks.ps1 %s" % extra_args
+else:
+    # py.exe is the all-users launcher in C:\Windows, so it is on the SSM agent's PATH even though the
+    # agent started before Python was installed. -X utf8 keeps the transcript readable in S3.
+    run = "py -3 -X utf8 C:\\m2j\\asgard\\tools\\windows_checks.py %s" % extra_args
 
 commands = [
     "$ErrorActionPreference = 'Continue'",
@@ -74,37 +92,46 @@ commands = [
     "  Write-Host 'First-boot bootstrap has not finished. See C:\\m2j\\bootstrap.log'",
     "  exit 1",
     "}",
-    "& '%s' s3 sync s3://%s/repo C:\\m2j\\repo --delete --only-show-errors" % (aws_exe, bucket),
+    "& '%s' s3 sync s3://%s/%s %s --delete --only-show-errors" % (aws_exe, bucket, target, local),
     "if ($LASTEXITCODE -ne 0) { Write-Host 'repo sync failed'; exit 1 }",
-    "powershell.exe -NoProfile -File C:\\m2j\\repo\\tools\\Invoke-WindowsChecks.ps1 %s" % extra_args,
+    run,
     "exit $LASTEXITCODE",
 ]
 with open(params_file, "w") as fh:
-    json.dump({"commands": commands, "executionTimeout": ["1800"]}, fh)
+    json.dump({"commands": commands, "executionTimeout": ["3600"]}, fh)
 PY
 
-echo "==> running tools/Invoke-WindowsChecks.ps1 on the host"
+echo "==> running the $TARGET checks on the host"
 COMMAND_ID="$(aws ssm send-command \
   --region "$REGION" \
   --instance-ids "$INSTANCE_ID" \
   --document-name AWS-RunPowerShellScript \
-  --comment "meeting2jira Windows checks" \
+  --comment "$TARGET Windows checks" \
   --output-s3-bucket-name "$BUCKET" \
   --output-s3-key-prefix "check-output" \
   --parameters "file://$PARAMS_FILE" \
   --query 'Command.CommandId' --output text)"
 
 echo "    command $COMMAND_ID"
-set +e
-aws ssm wait command-executed --region "$REGION" --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID"
-set -e
+# `aws ssm wait command-executed` gives up after 100 seconds; the Asgard checks take far longer.
+STATUS="Pending"
+for _ in $(seq 1 720); do
+  STATUS="$(aws ssm get-command-invocation --region "$REGION" --command-id "$COMMAND_ID" \
+    --instance-id "$INSTANCE_ID" --query 'Status' --output text 2>/dev/null || echo Pending)"
+  case "$STATUS" in Pending|InProgress|Delayed) sleep 5 ;; *) break ;; esac
+done
 
-# Inline output is capped at 24 KB, so pull the full log from S3 when it was truncated.
-aws ssm get-command-invocation --region "$REGION" --command-id "$COMMAND_ID" \
-  --instance-id "$INSTANCE_ID" --query 'StandardOutputContent' --output text
-
-STATUS="$(aws ssm get-command-invocation --region "$REGION" --command-id "$COMMAND_ID" \
-  --instance-id "$INSTANCE_ID" --query 'Status' --output text)"
+# Inline output is capped at 24 KB, so the full transcript comes from S3.
+LOG="$(mktemp -t "$TARGET-checks")"
+if aws s3 cp --region "$REGION" --only-show-errors \
+    "s3://$BUCKET/check-output/$COMMAND_ID/$INSTANCE_ID/awsrunPowerShellScript/0.awsrunPowerShellScript/stdout" \
+    "$LOG" 2>/dev/null; then
+  cat "$LOG"
+  echo "==> full transcript: $LOG"
+else
+  aws ssm get-command-invocation --region "$REGION" --command-id "$COMMAND_ID" \
+    --instance-id "$INSTANCE_ID" --query 'StandardOutputContent' --output text
+fi
 STDERR="$(aws ssm get-command-invocation --region "$REGION" --command-id "$COMMAND_ID" \
   --instance-id "$INSTANCE_ID" --query 'StandardErrorContent' --output text)"
 

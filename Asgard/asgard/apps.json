@@ -1,0 +1,81 @@
+{
+  "_help": "Default Asgard tiles. Setup replaces this file on upgrade, so put your changes in %LOCALAPPDATA%\\Asgard\\apps.local.json instead. See README.md.",
+  "version": 1,
+  "apps": [
+    {
+      "id": "odin",
+      "name": "Odin",
+      "description": "Jira issues, meetings and worklogs",
+      "monogram": "Od",
+      "color": "#2B5797",
+      "status": "external",
+      "launch": {}
+    },
+    {
+      "id": "freya",
+      "name": "Freya",
+      "description": "Yearly review drafts from your meetings, commits and Jira",
+      "monogram": "Fr",
+      "color": "#A4376D",
+      "status": "coming_soon"
+    },
+    {
+      "id": "loki",
+      "name": "Loki",
+      "description": "BLUFs for meetings and code changes",
+      "monogram": "Lk",
+      "color": "#2D7D46",
+      "status": "coming_soon"
+    },
+    {
+      "id": "baldur",
+      "name": "Baldur",
+      "description": "Git work estimates and pull request alerts",
+      "monogram": "Bd",
+      "color": "#9A5B00",
+      "status": "available",
+      "launch": {"type": "python", "target": "{app}/apps/baldur/baldur.pyw"}
+    },
+    {
+      "id": "heimdall",
+      "name": "Heimdall",
+      "description": "SeCcHm submissions",
+      "monogram": "Hd",
+      "color": "#5B4B9A",
+      "status": "coming_soon"
+    },
+    {
+      "id": "bifrost",
+      "name": "Bifrost",
+      "description": "BEARs workbooks and Confluence uploads",
+      "monogram": "Bf",
+      "color": "#0B7285",
+      "status": "coming_soon"
+    },
+    {
+      "id": "ysildir",
+      "name": "Ysildir",
+      "description": "Lets approved AI tools use Asgard (MCP)",
+      "monogram": "Ys",
+      "color": "#5C6B1A",
+      "status": "coming_soon"
+    },
+    {
+      "id": "valkyrie",
+      "name": "Valkyrie",
+      "description": "Setup scripts for new CSB engineers",
+      "monogram": "Vk",
+      "color": "#B03A2E",
+      "status": "coming_soon"
+    },
+    {
+      "id": "valhalla",
+      "name": "Valhalla",
+      "description": "Uninstall Asgard",
+      "monogram": "Vh",
+      "color": "#56606E",
+      "status": "available",
+      "launch": {"type": "internal", "command": "uninstall"}
+    }
+  ]
+}
