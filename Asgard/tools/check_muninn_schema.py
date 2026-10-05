@@ -229,8 +229,8 @@ rejects("a calendar event cannot end before it starts",
 # =====================================================================
 rejects("a repo needs a GitHub name or a local path", "INSERT INTO repos (name) VALUES ('nowhere')")
 con.execute("INSERT INTO repos (source_id, name, github_repo, local_path, default_branch) "
-            "VALUES (2, 'asgard', 'csb/asgard', 'C:\\src\\asgard', 'main')")             # 1
-con.execute("INSERT INTO repos (source_id, name, github_repo) VALUES (2, 'portal', 'csb/portal')")   # 2: review-only
+            "VALUES (2, 'asgard', 'team/asgard', 'C:\\src\\asgard', 'main')")             # 1
+con.execute("INSERT INTO repos (source_id, name, github_repo) VALUES (2, 'portal', 'team/portal')")   # 2: review-only
 COMMIT_SQL = ("INSERT INTO commits (repo_id, sha, patch_id, author_name, author_email, authored_at, committed_at, "
               "subject, additions, deletions, is_mine, branch_hint, first_seen_at) "
               "VALUES (1,?,?,'Me','me@agency.gov',?,?,?,10,2,1,?,?) RETURNING id")
@@ -264,12 +264,12 @@ PR = ("INSERT INTO pull_requests (repo_id, number, title, author, is_mine, head_
       "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id")
 pr7 = one(PR, (1, 7, "PIV fallback for Odin", "me", 1, "feature/ABC-123-piv", "ABC-123", "merged", 0, 0,
                "2026-10-01T16:00:00Z", "2026-10-02T11:00:00Z", "2026-10-02T11:00:00Z",
-               "https://github.example.gov/csb/asgard/pull/7", NOW, NOW))
+               "https://github.example.gov/team/asgard/pull/7", NOW, NOW))
 pr31 = one(PR, (2, 31, "Portal: session timeout", "teammate", 0, "feature/POR-88-timeout", "POR-88", "open", 0, 1,
                 "2026-10-02T13:00:00Z", "2026-10-02T13:30:00Z", None,
-                "https://github.example.gov/csb/portal/pull/31", NOW, NOW))
+                "https://github.example.gov/team/portal/pull/31", NOW, NOW))
 one(PR, (2, 32, "Portal: draft idea", "teammate", 0, "feature/POR-90-idea", "POR-90", "open", 1, 1,
-         "2026-10-02T13:00:00Z", "2026-10-02T13:30:00Z", None, "https://github.example.gov/csb/portal/pull/32", NOW, NOW))
+         "2026-10-02T13:00:00Z", "2026-10-02T13:30:00Z", None, "https://github.example.gov/team/portal/pull/32", NOW, NOW))
 rejects("a merged PR needs merged_at", PR, (1, 8, "t", "a", 0, "x", None, "merged", 0, 0, NOW, NOW, None, "u", NOW, NOW))
 rejects("a PR needs its head branch", PR, (1, 9, "t", "a", 0, None, None, "open", 0, 0, NOW, NOW, None, "u", NOW, NOW))
 con.execute("INSERT INTO pr_reviews (pr_id, github_id, reviewer, is_mine, state, submitted_at) "

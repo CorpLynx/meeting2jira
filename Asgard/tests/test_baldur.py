@@ -1002,16 +1002,16 @@ class ReviewCollectTests(CollectBase):
         g.commit("2026-10-01T09:00:00", "PROJ-1 work")
         now = muninn.utcnow()
         self.con.execute("UPDATE repos SET local_path = ? WHERE id = ?", (str(g.path.resolve()), self.repo))
-        review = self.con.execute("INSERT INTO repos (name, github_repo) VALUES ('asgard', 'csb/asgard') "
+        review = self.con.execute("INSERT INTO repos (name, github_repo) VALUES ('asgard', 'team/asgard') "
                                   "RETURNING id").fetchone()[0]
         self.con.execute("INSERT INTO pull_requests (repo_id, number, title, author, head_ref, state, created_at, "
                          "updated_at, url, first_seen_at, last_seen_at) VALUES (?, 7, 't', 'sam', 'feature/x', 'open', "
                          "?, ?, 'u', ?, ?)", (review, now, now, now, now))
-        g.git("remote", "add", "origin", "https://github.com/csb/asgard.git")
+        g.git("remote", "add", "origin", "https://github.com/team/asgard.git")
         self.settings.values["github_api"] = config.github_api_url("github.com")
         self.collect()
         rows = [tuple(r) for r in self.con.execute("SELECT id, github_repo FROM repos WHERE github_repo IS NOT NULL")]
-        self.assertEqual(rows, [(self.repo, "csb/asgard")])
+        self.assertEqual(rows, [(self.repo, "team/asgard")])
         self.assertEqual(self.con.execute("SELECT repo_id FROM pull_requests").fetchone()[0], self.repo)
 
     def test_a_malformed_time_zone_doesnt_stop_collection(self):
@@ -1061,7 +1061,7 @@ class EnterpriseServerTests(CollectBase):
             self.assertEqual(config.github_api_url(typed), stored, typed)
         self.assertEqual(config.Settings(dict(config.DEFAULTS, github_api="github.agency.gov")).github_host(),
                          "github.agency.gov", "even before validation")
-        for bad in ("http://github.agency.gov", "github.agency.gov/orgs/csb", "https://github.agency.gov/api/v4",
+        for bad in ("http://github.agency.gov", "github.agency.gov/orgs/team", "https://github.agency.gov/api/v4",
                     "https://x:ghp_secret@github.agency.gov", "https://ghp_secret@github.agency.gov\uff0f",
                     "https://[ghp_secret]", "https://[::1", "github.agency.gov?x=1#ghp_secret",
                     "github.agency.gov:port", "github.agency.gov:0", "github.agency.gov:", "github.agency.gov:+443",
@@ -1085,8 +1085,8 @@ class EnterpriseServerTests(CollectBase):
     def test_only_remotes_on_your_github_are_github_repositories(self):
         # The same owner/name on two hosts: github_repo is unique and has no host in it.
         other = Repo(self.dir / "src" / "dotcom")
-        for repo, url in ((self.git, "git@github.agency.gov:csb/asgard.git"),
-                          (other, "https://github.com/csb/asgard.git")):
+        for repo, url in ((self.git, "git@github.agency.gov:team/asgard.git"),
+                          (other, "https://github.com/team/asgard.git")):
             repo.commit("2026-10-01T09:00:00", "PROJ-1 work")
             repo.git("remote", "add", "origin", url)
 
@@ -1098,13 +1098,13 @@ class EnterpriseServerTests(CollectBase):
 
         self.assertEqual(collect_as("", self.git.path, other.path), [None, None],
                          "with github_api empty, no remote is a GitHub repository")
-        self.assertEqual(collect_as("github.com", self.git.path, other.path), [None, "csb/asgard"])
-        self.assertEqual(collect_as("github.agency.gov", other.path, self.git.path), ["csb/asgard", None],
+        self.assertEqual(collect_as("github.com", self.git.path, other.path), [None, "team/asgard"])
+        self.assertEqual(collect_as("github.agency.gov", other.path, self.git.path), ["team/asgard", None],
                          "switching to the server moves the name to its clone, whichever folder is read first")
-        self.assertEqual(collect_as("github.com", self.git.path, other.path), [None, "csb/asgard"])
+        self.assertEqual(collect_as("github.com", self.git.path, other.path), [None, "team/asgard"])
         self.assertEqual(collect_as("", other.path), [None, None], "turning GitHub off clears every clone")
-        self.assertEqual(gitread.parse_remote("ssh://git@github.agency.gov:2222/csb/asgard.git"),
-                         ("github.agency.gov", "csb/asgard"))
+        self.assertEqual(gitread.parse_remote("ssh://git@github.agency.gov:2222/team/asgard.git"),
+                         ("github.agency.gov", "team/asgard"))
 
     def test_a_squash_merge_on_enterprise_server_is_a_copy(self):
         g = self.git

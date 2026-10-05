@@ -773,7 +773,7 @@ class BadgeTests(WorklogBase):
         self.assertEqual(muninn.tile_badges(self.dir / "missing.db"), {})
         self.assertEqual(muninn.tile_badges(self.path), {})
         self.approved_day(60)
-        self.con.execute("INSERT INTO repos (name, github_repo) VALUES ('portal', 'csb/portal')")
+        self.con.execute("INSERT INTO repos (name, github_repo) VALUES ('portal', 'team/portal')")
         now = muninn.utcnow()
         self.con.execute("INSERT INTO pull_requests (repo_id, number, title, author, head_ref, work_item_key, state, "
                          "review_requested, created_at, updated_at, url, first_seen_at, last_seen_at) VALUES (1, 31, 't', "
