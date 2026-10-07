@@ -23,6 +23,15 @@ from . import paths, winutil
 
 USER_DATA = ("apps.local.json", "settings.json", "settings", "logs", "backups",
              "muninn.db", "muninn.db-wal", "muninn.db-shm")      # settings\: each app's own settings files
+# Copies `--muninn restore` set aside (muninn.before-restore-<time>.db and its -wal/-shm): whole databases.
+USER_DATA_GLOBS = ("muninn.before-restore-*.db*",)
+
+
+def _user_data(data: Path) -> List[Path]:
+    found = [data / n for n in USER_DATA]
+    for pattern in USER_DATA_GLOBS:
+        found.extend(sorted(data.glob(pattern)) if data.is_dir() else [])
+    return found
 
 
 @dataclass
@@ -147,8 +156,7 @@ def uninstall(purge: bool = False) -> Result:
         res.skipped.append((str(paths.ledger_path()), str(exc)))
 
     if purge:
-        for name in USER_DATA:
-            target = data / name
+        for target in _user_data(data):
             try:
                 if target.exists():
                     _remove(target)
@@ -160,7 +168,7 @@ def uninstall(purge: bool = False) -> Result:
         except OSError:
             res.kept = [str(p) for p in data.iterdir()] if data.exists() else []
     else:
-        res.kept = [str(data / n) for n in USER_DATA if (data / n).exists()]
+        res.kept = [str(p) for p in _user_data(data) if p.exists()]
     return res
 
 

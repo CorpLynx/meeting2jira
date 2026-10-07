@@ -26,9 +26,13 @@ a timeout can never post the same time twice:
         except JiraRejected as exc:           # a definite 4xx answer
             odin.fail_post(con, post.worklog_id, str(exc))
         except (Timeout, ConnectionError):
-            pass                              # unknown outcome: reconcile_stuck() checks later
+            pass                              # unknown outcome: settled later, below
         else:
             odin.finish_post(con, post.worklog_id, created["id"])
+
+    for stuck in odin.stuck_posts(con):       # posts whose outcome nobody saw
+        found = jira.find_worklog_with(stuck["key"], stuck["marker"])
+        odin.resolve_stuck(con, stuck["worklog_id"], found and found["id"], searched=True)
 """
 from __future__ import annotations
 
@@ -42,6 +46,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from .db import MuninnError, ago, from_ts, to_ts, transaction, utcnow
+from .keys import normalize_key
+from .redact import scrub
 from .sync import Run, emit, identities
 
 # --------------------------------------------------------------------------
@@ -65,15 +71,18 @@ def parse_time(text: Optional[str], *, naive: str = "utc") -> Optional[str]:
     if not m:
         raise ValueError(f"unrecognised time {text!r}")
     y, mo, d, h, mi, s, _frac, off = m.groups()
-    value = dt.datetime(int(y), int(mo), int(d), int(h), int(mi), int(s or 0))
-    if off in (None, "Z"):
-        if off is None and naive == "local":
-            return to_ts(value.astimezone())
-        return to_ts(value.replace(tzinfo=dt.timezone.utc))
-    sign = -1 if off[0] == "-" else 1
-    digits = off[1:].replace(":", "")
-    offset = dt.timedelta(hours=int(digits[:2]), minutes=int(digits[2:4]))
-    return to_ts(value.replace(tzinfo=dt.timezone(sign * offset)))
+    try:
+        value = dt.datetime(int(y), int(mo), int(d), int(h), int(mi), int(s or 0))
+        if off in (None, "Z"):
+            if off is None and naive == "local":
+                return to_ts(value.astimezone())
+            return to_ts(value.replace(tzinfo=dt.timezone.utc))
+        sign = -1 if off[0] == "-" else 1
+        digits = off[1:].replace(":", "")
+        offset = dt.timedelta(hours=int(digits[:2]), minutes=int(digits[2:4]))
+        return to_ts(value.replace(tzinfo=dt.timezone(sign * offset)))
+    except (OverflowError, OSError) as exc:      # year 1 or 9999 shifted past the calendar's ends
+        raise ValueError(f"time {text!r} is outside the dates Muninn stores") from exc
 
 
 def jira_time(ts: str) -> str:
@@ -502,7 +511,17 @@ def _upsert_calendar_event(run: Run, event: Dict[str, Any]) -> Tuple[int, bool]:
 
 
 def sweep_calendar(run: Run, window_start: str, window_end: str) -> int:
-    """After syncing a whole window in this run, mark events in it that the run didn't see as deleted."""
+    """After syncing a whole window in this run, mark events in it that the run didn't see as deleted.
+
+    Only a run in mode="full" may sweep: an incremental run sees only what changed, so everything
+    else would look deleted. A run with problems doesn't sweep (returns 0): an event that failed
+    to store wasn't seen either, and the next full run sweeps instead.
+    """
+    if run.mode != "full":
+        raise MuninnError("sweep_calendar needs a Run with mode='full' that read the whole window; "
+                          "an incremental run would mark every event it didn't re-read as deleted.")
+    if run.problems:
+        return 0
     seen = json.dumps(sorted(run.seen.get("calendar_events", ())))
     with run.batch():
         rows = run.con.execute("UPDATE calendar_events SET deleted_at = ? WHERE source_id = ? AND deleted_at IS NULL "
@@ -512,8 +531,17 @@ def sweep_calendar(run: Run, window_start: str, window_end: str) -> int:
 
 
 def set_meeting_key(con: sqlite3.Connection, calendar_event_id: int, key: Optional[str]) -> None:
-    """Remember which Jira issue a meeting's time goes to (None to clear)."""
+    """Remember which Jira issue a meeting's time goes to (None to clear). Keys are stored upper-case."""
+    key = None if key is None else _key(key)
     con.execute("UPDATE calendar_events SET logged_as_key = ? WHERE id = ?", (key, calendar_event_id))
+
+
+def _key(text: str) -> str:
+    """A key you typed, as Muninn stores it; MuninnError (for the screen) if it isn't one."""
+    try:
+        return normalize_key(text)
+    except ValueError as exc:
+        raise MuninnError(f"{text!r} isn't a Jira key like PROJ-123.") from exc
 
 
 # --------------------------------------------------------------------------
@@ -701,7 +729,7 @@ def begin_meeting_post(con: sqlite3.Connection, calendar_event_id: int, key: Opt
                          (calendar_event_id,)).fetchone()
         if ev is None:
             raise MuninnError("That meeting isn't on your calendar any more.")
-        key = key or ev["logged_as_key"]
+        key = _key(key) if key else ev["logged_as_key"]
         if not key:
             raise MuninnError(f"Choose a Jira issue for “{ev['title']}” first.")
         item = _resolve_item(con, key)
@@ -709,9 +737,18 @@ def begin_meeting_post(con: sqlite3.Connection, calendar_event_id: int, key: Opt
                                             (calendar_event_id,))}
         if states & {"sending", "posted"} or ("deleted" in states and not again):
             return None
+        # The same meeting synced from another calendar (Outlook and Graph) is the same time.
+        twin = con.execute("SELECT 1 FROM worklogs w JOIN calendar_events e ON e.id = w.calendar_event_id "
+                           "WHERE e.id <> ? AND e.deleted_at IS NULL AND lower(trim(e.title)) = lower(trim(?)) "
+                           "AND e.starts_at = ? AND e.ends_at = ? AND w.state IN ('sending', 'posted') LIMIT 1",
+                           (calendar_event_id, ev["title"], ev["starts_at"], ev["ends_at"])).fetchone()
+        if twin:
+            return None
         seconds = int(round((from_ts(ev["ends_at"]) - from_ts(ev["starts_at"])).total_seconds()))
         if seconds <= 0:
             raise MuninnError(f"“{ev['title']}” has no length to log.")
+        if seconds > 86400:
+            raise MuninnError(f"“{ev['title']}” runs over 24 hours; log it by hand, one worklog per day.")
         marker = new_marker("meeting")
         text = f"{comment or 'Meeting: ' + ev['title']}\n{marker}"
         if ev["logged_as_key"] != key:
@@ -728,8 +765,10 @@ def begin_manual_post(con: sqlite3.Connection, key: str, started_at: str, second
     """Write the 'sending' row for time you typed into Odin."""
     if seconds <= 0:
         raise MuninnError("A worklog needs some time on it.")
+    if seconds > 86400:
+        raise MuninnError("One worklog can hold at most 24 hours; split the time across days.")
     with transaction(con):
-        item = _resolve_item(con, key)
+        item = _resolve_item(con, _key(key))
         marker = new_marker("manual")
         text = f"{comment}\n{marker}" if comment else marker
         wid = con.execute("INSERT INTO worklogs (work_item_id, origin, state, started_at, seconds, comment) "
@@ -770,7 +809,11 @@ def finish_post(con: sqlite3.Connection, worklog_id: int, jira_worklog_id: str,
 
 
 def fail_post(con: sqlite3.Connection, worklog_id: int, error: str) -> None:
-    """Jira definitely refused the worklog (a 4xx answer). Don't call this after a timeout."""
+    """Jira definitely refused the worklog (a 4xx answer). Don't call this after a timeout.
+
+    The error text is kept, so anything in it that looks like a credential is masked first.
+    """
+    error = scrub(str(error)) or "failed"
     with transaction(con):
         row = con.execute("UPDATE worklogs SET state = 'failed', error = ? WHERE id = ? AND state = 'sending' "
                           "RETURNING work_item_id, origin, proposal_id, calendar_event_id", (error[:2000], worklog_id)).fetchone()
@@ -794,10 +837,19 @@ def stuck_posts(con: sqlite3.Connection, older_than_seconds: int = 120) -> List[
 
 
 def resolve_stuck(con: sqlite3.Connection, worklog_id: int, jira_worklog_id: Optional[str] = None,
-                  posted_at: Optional[str] = None) -> None:
-    """Settle a stuck post: Jira's id if its marker was found, otherwise it failed and is offered again."""
+                  posted_at: Optional[str] = None, *, searched: bool = False) -> None:
+    """Settle a stuck post: Jira's id if its marker was found, otherwise it failed and is offered again.
+
+    Marking a post failed makes its time due again, so a post that did reach Jira would be posted
+    twice. Pass searched=True only after searching the issue's worklogs for the marker and not
+    finding it; without it, a missing id is refused rather than taken as "not there".
+    """
     if jira_worklog_id:
         finish_post(con, worklog_id, jira_worklog_id, posted_at)
+    elif not searched:
+        raise MuninnError("Search the issue's worklogs in Jira for this post's marker first. Call "
+                          "resolve_stuck(..., searched=True) only when it isn't there; marking a post that "
+                          "did reach Jira as failed would post its time twice.")
     else:
         fail_post(con, worklog_id, "Not found in Jira after an interrupted post")
 

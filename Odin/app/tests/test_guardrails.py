@@ -66,24 +66,64 @@ class GuardrailWiringTests(unittest.TestCase):
                                  "Register-MeetingSyncTask.ps1", "Test-Environment.ps1"])
 
 
+REQUIREMENTS = ROOT / "requirements.txt"
+_PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._\-]*)(\[[A-Za-z0-9,._\-]+\])?==[A-Za-z0-9.+!_\-]+(\s*;.*)?$")
+
+
+def _declared():
+    """Package names in requirements.txt, normalised, and any lines that aren't exact pins."""
+    names, loose = set(), []
+    for line in REQUIREMENTS.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        m = _PIN.match(line)
+        if m:
+            names.add(m.group(1).lower().replace("-", "_"))
+        else:
+            loose.append(line)
+    return names, loose
+
+
+def _imports():
+    for path in _py_files():
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    yield path, a.name
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                yield path, node.module
+
+
 class PythonGuardrails(unittest.TestCase):
-    def test_stdlib_only(self):
+    """Dependencies: allowed since Oct 2026 when declared and pinned (Asgard/docs/dependency-policy.md).
+
+    This replaced test_stdlib_only. A package is a reviewed decision, so an import must appear in
+    Odin/app/requirements.txt pinned with ==; nothing else gets in by accident.
+    """
+
+    def test_requirements_are_exact_pins(self):
+        self.assertTrue(REQUIREMENTS.is_file(), f"{REQUIREMENTS} is missing")
+        _, loose = _declared()
+        self.assertEqual(loose, [], "pin every requirement exactly (name==1.2.3)")
+
+    def test_every_import_is_stdlib_or_declared(self):
         stdlib = getattr(sys, "stdlib_module_names", None)
         if stdlib is None:
             self.skipTest("sys.stdlib_module_names needs Python 3.10+; run this check on a newer Python")
-        offenders = []
-        for path in _py_files():
-            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-                names = []
-                if isinstance(node, ast.Import):
-                    names = [a.name for a in node.names]
-                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                    names = [node.module]
-                for name in names:
-                    top = name.split(".")[0]
-                    if top not in stdlib and top != "meeting2jira":
-                        offenders.append(f"{path.name}: import {name}")
-        self.assertEqual(offenders, [], "Third-party imports are not allowed (no pip on target machines)")
+        declared, _ = _declared()
+        offenders = [f"{path.name}: import {name}" for path, name in _imports()
+                     if name.split(".")[0] not in stdlib and name.split(".")[0] != "meeting2jira"
+                     and name.split(".")[0].lower() not in declared]
+        self.assertEqual(offenders, [], "declare each package, pinned, in Odin/app/requirements.txt")
+
+    def test_odin_never_imports_asgard(self):
+        """Odin must run with no Asgard installed. Allowing an optional Muninn import is a decision
+        recorded in Asgard/docs/integration/odin.md; change this test only with it."""
+        hits = [f"{path.name}: import {name}" for path, name in _imports() if name.split(".")[0] == "asgard"]
+        self.assertEqual(hits, [])
+        declared, _ = _declared()
+        self.assertNotIn("asgard", declared)
 
     def test_tls_verification_never_disabled(self):
         banned = re.compile(r"CERT_NONE|_create_unverified_context|check_hostname\s*=\s*False|verify\s*=\s*False")

@@ -753,11 +753,19 @@ class LauncherWindow:
         if "error" in result:
             self.muninn_error = str(result["error"])
             write_launcher_log(f"Muninn could not start: {result.get('trace', self.muninn_error)}")
+            if muninn is not None and isinstance(result["error"], muninn.CorruptError):
+                # A damaged file needs the person to act; the message names the backup and the command.
+                messagebox.showerror("Muninn's database is damaged", self.muninn_error, parent=self.root)
+                return
             self.flash("Muninn isn't available, so tiles show no counts. Details are in About.", 10000)
             return
         self.muninn_status = result.get("status")
+        for warning in getattr(self.muninn_status, "warnings", None) or []:
+            write_launcher_log(f"Muninn: {warning}")
         if self.muninn_status is not None and self.muninn_status.migrated and not self.muninn_status.created:
             self.flash(f"Muninn was updated to version {self.muninn_status.version}.", 6000)
+        elif getattr(self.muninn_status, "warnings", None):
+            self.flash(self.muninn_status.warnings[0], 10000)
         self._refresh_badges()
 
     def _refresh_badges(self) -> None:
@@ -832,6 +840,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if "--uninstall" in args:
         from . import valhalla
         return valhalla.main(args)
+    if args[:1] == ["--muninn"]:              # console commands; no window, no tkinter needed
+        from .muninn import cli as muninn_cli
+        return muninn_cli.main(args[1:])
     if tk is None:
         message = "Asgard needs Python with Tcl/Tk (tkinter). Ask IT for a Python install that includes Tcl/Tk."
         write_launcher_log(message)

@@ -5,15 +5,15 @@ inclusion: always
 
 ## Runtime targets
 - **Windows PowerShell 5.1** is the baseline (not PowerShell 7). The scripts must parse and run on 5.1.
-- **Python 3.8+, standard library only** (the code currently needs 3.7+; keep it ≤ 3.8).
+- **Python 3.8+** (the code currently needs 3.7+; keep it ≤ 3.8).
   - Don't use `match`, runtime `X | Y` unions, `zoneinfo` (Windows has no tz database without the `tzdata` package), or `str.removeprefix`.
   - Use `from __future__ import annotations` and `typing.List`/`Optional`.
 - **These targets and the non-negotiables below are Odin's.** `Asgard/` follows `Asgard/AGENTS.md`:
-  Python 3.9+ stdlib only (vermin `-t=3.9-`), and Muninn needs Python's bundled SQLite 3.37+ with
-  FTS5, which on Windows means Python 3.11+.
+  Python 3.9+ (vermin `-t=3.9-`), and Muninn needs Python's bundled SQLite 3.37+ with FTS5, which
+  on Windows means Python 3.11+.
 
 ## Non-negotiables (enforced by tests/test_guardrails.py; don't weaken the tests)
-1. **No third-party Python packages in `Odin/app/`** (runtime and shipped tests): no requests, msal, pywin32, keyring, dateutil. The target machine has no pip access, and every package would need approval. Use `urllib`, `ssl`, `sqlite3`, `ctypes`, `json`, `csv`.
+1. **Packages are declared and pinned** (since Oct 2026; standard-library-only is no longer a rule, see `Asgard/docs/dependency-policy.md`). Every non-stdlib import in `Odin/app/` must be listed in `Odin/app/requirements.txt` as `name==x.y.z` with a comment saying why; prefer pure-Python wheels (App Control blocks unsigned DLLs); never fetch packages at run time. Odin's daily run needs none today, and it still must not import `asgard` (it runs with no Asgard installed).
 2. **Never disable TLS verification.** No `CERT_NONE`, `check_hostname=False`, or unverified contexts, and no config flag for it. Extra CAs go through `jira.ca_bundle`. Python on Windows already trusts the Windows cert store (this is why it's urllib and not requests).
 3. **HTTPS only** for Jira (http is allowed only for localhost in tests).
 4. **No execution-policy bypass** anywhere: no `-ExecutionPolicy Bypass`, no `Set-ExecutionPolicy`.
@@ -32,7 +32,7 @@ inclusion: always
 python tools/run_tests.py                                    # dev/agent: compact pytest run of Odin + Asgard (see workflow.md)
 bash Asgard/tools/baldur_smoke.sh                            # when Baldur changes: must end PROJ-42 1h30m, PROJ-51 30m
 ruff check .                                                 # dev lint (bug-finding rules, py38 target)
-python -m unittest discover -s tests -v                      # no-pip check, from Odin/app/ with Odin/app/src on PYTHONPATH
+python -m unittest discover -s tests -v                      # no-dev-tools check, from Odin/app/ with Odin/app/src on PYTHONPATH
 powershell.exe -NoProfile -File tools\Test-PowerShellSyntax.ps1   # from Odin/app/; Windows PowerShell 5.1 (preferred)
 pwsh -NoProfile -File tools/Test-PowerShellSyntax.ps1             # if only PowerShell 7 is available
 ```
@@ -50,7 +50,7 @@ Optional: `vermin -t=3.8- --violations meeting2jira tests` to confirm Python-ver
   - `1` push finished with per-item errors, or a check failed
   - `2` config, usage, or credential error
   - `130` interrupted
-- Tests: written as stdlib `unittest` so they run without pip; run with pytest in dev. No real network; the Jira tests use a local `http.server` on 127.0.0.1. Add fixtures under `tests/fixtures/`.
+- Tests: written as stdlib `unittest` so they run on the workstation without dev tools; run with pytest in dev. No real network; the Jira tests use a local `http.server` on 127.0.0.1. Add fixtures under `tests/fixtures/`.
 - Keep `README.md` (config reference, troubleshooting, roadmap) in sync with behavior changes.
 - **Be explicit about verification.** This repo is often edited away from the target Windows machine. Anything touching Outlook COM, DPAPI, Task Scheduler, or PS 5.1 runtime behavior must be reported as "needs target-machine verification" unless it was actually run there. Add those items to the checklist in `HANDOFF.md`.
 

@@ -30,7 +30,7 @@ for folder in (ROOT, ROOT / "apps" / "baldur"):
 from asgard import muninn  # noqa: E402
 from asgard.muninn import baldur as approvals  # noqa: E402
 from asgard.muninn import odin  # noqa: E402
-from baldur import cli, collect, desk, gitread, keys, report, store  # noqa: E402
+from baldur import cli, collect, desk, github, gitread, keys, report, store  # noqa: E402
 from baldur import estimate as E  # noqa: E402
 from baldur import settings as config  # noqa: E402
 
@@ -1402,12 +1402,150 @@ class DeskTests(MuninnCase):
         self.assertIn("No development time to report.", empty)
 
 
+class GitHubTests(MuninnCase):
+    """Spec build step 4, against tests/fake_github.py: a local fake GitHub Enterprise Server."""
+
+    def setUp(self):
+        super().setUp()
+        sys.path.insert(0, str(ROOT / "tests"))
+        import fake_github
+        self.fg = fake_github
+        self.server = fake_github.FakeGitHub()
+        self.addCleanup(self.server.close)
+        self.client = github.Client(self.server.api, fake_github.TOKEN)
+        self.con.execute("UPDATE repos SET github_repo = 'csb/asgard' WHERE id = ?", (self.repo,))
+        f = fake_github
+        self.server.pulls["csb/asgard"] = [
+            f.pr(7, "Retry on 503", "bdoe", "feature/PROJ-42-retry", merged_at="2026-10-02T11:00:00Z",
+                 updated="2026-10-02T11:00:00Z"),
+            f.pr(8, "Session timeout", "sam", "feature/PROJ-51-timeout", requested=("bdoe",)),
+            f.pr(9, "Spike", "sam", "spike/idea", draft=True, requested=("bdoe",))]
+        self.server.pulls["csb/portal"] = [f.pr(31, "Portal: PIV", "lee", "feature/POR-1", repo="csb/portal",
+                                                requested=("bdoe",))]
+        self.server.reviews[("csb/asgard", 7)] = [f.review(1, "lead", "APPROVED"), f.review(2, "bdoe", "COMMENTED"),
+                                                   f.review(3, "lee", "PENDING")]
+        self.server.requested = [("csb/asgard", 8), ("csb/asgard", 9), ("csb/portal", 31)]
+
+    def sync(self):
+        return github.sync(self.con, self.settings, self.client)
+
+    def prs(self):
+        return {(r["repo"], r["number"]): (r["state"], r["review_requested"], r["is_mine"], r["work_item_key"])
+                for r in self.con.execute("SELECT coalesce(r.github_repo, r.name) AS repo, p.* FROM pull_requests p "
+                                          "JOIN repos r ON r.id = p.repo_id")}
+
+    def test_your_pull_requests_reviews_and_review_requests(self):
+        res = self.sync()
+        self.assertEqual((res.login, res.repos, res.requested, res.problems), ("bdoe", 1, 3, []))
+        self.assertEqual(self.prs(), {
+            ("csb/asgard", 7): ("merged", 0, 1, "PROJ-42"), ("csb/asgard", 8): ("open", 1, 0, "PROJ-51"),
+            ("csb/asgard", 9): ("open", 1, 0, None), ("csb/portal", 31): ("open", 1, 0, None)})
+        reviews = [tuple(r) for r in self.con.execute("SELECT github_id, reviewer, is_mine, state FROM pr_reviews "
+                                                      "ORDER BY github_id")]
+        self.assertEqual(reviews, [("1", "lead", 0, "approved"), ("2", "bdoe", 1, "commented")],
+                         "a pending review isn't submitted yet")
+        portal = self.con.execute("SELECT name, local_path FROM repos WHERE github_repo = 'csb/portal'").fetchone()
+        self.assertEqual(tuple(portal), ("portal", None), "a review-only row: alerted on, never estimated")
+        self.assertEqual([b.text for b in muninn.tile_badges(self.dir / "muninn.db")["baldur"]][:1],
+                         ["3 reviews requested"])
+        items = desk.review_items(self.con)
+        self.assertEqual([(i.kind, i.label) for i in items][:3],
+                         [("requested", "csb/asgard#8"), ("requested", "csb/asgard#9"), ("requested", "csb/portal#31")])
+        self.assertEqual(self.con.execute("SELECT value FROM identities WHERE kind = 'github_login'").fetchone()[0],
+                         "bdoe")
+
+    def test_unchanged_answers_cost_nothing(self):
+        self.sync()
+        before = len(self.server.requests)
+        changes = self.con.total_changes
+        res = self.sync()
+        asked = self.server.requests[before:]
+        self.assertEqual([s for _, _, s in asked], [304, 304, 304], "user, pulls and search, each conditional")
+        self.assertTrue(all(etag for _, etag, _ in asked))
+        self.assertEqual((res.pulls_changed, res.reviews_new, res.requested), (0, 0, 3))
+        self.assertEqual(self.prs()[("csb/asgard", 8)][1], 1)
+        del changes
+
+    def test_answered_requests_stop_counting_and_a_re_request_alerts_again(self):
+        self.sync()
+        self.con.execute("UPDATE pull_requests SET notified_at = ? WHERE number = 8", (muninn.utcnow(),))
+        self.server.requested = [("csb/portal", 31)]
+        self.sync()
+        self.assertEqual({k: v[1] for k, v in self.prs().items() if v[0] == "open"},
+                         {("csb/asgard", 8): 0, ("csb/asgard", 9): 0, ("csb/portal", 31): 1})
+        self.server.requested = [("csb/asgard", 8), ("csb/portal", 31)]
+        self.sync()
+        row = self.con.execute("SELECT review_requested, notified_at FROM pull_requests WHERE number = 8").fetchone()
+        self.assertEqual(tuple(row), (1, None), "asked again: it alerts again")
+
+    def test_a_pull_requests_head_branch_keys_its_commits(self):
+        untracked = self.commit(t(1, 9), subject="tidy")           # no key anywhere
+        keyed = self.commit(t(1, 9, 30), "PROJ-1", subject="PROJ-1 fix")
+        self.con.execute("UPDATE commit_work_items SET method = 'reflog' WHERE commit_id = ?", (keyed,))
+        shas = [r[0] for r in self.con.execute("SELECT sha FROM commits WHERE id IN (?, ?) ORDER BY id",
+                                               (untracked, keyed))]
+        self.server.commits[("csb/asgard", 7)] = shas
+        self.assertEqual(self.sync().keyed_commits, 1)
+        found = {r[0]: (r[1], r[2]) for r in self.con.execute(
+            "SELECT commit_id, work_item_key, method FROM commit_work_items")}
+        self.assertEqual(found, {untracked: ("PROJ-42", "pr"), keyed: ("PROJ-1", "reflog")},
+                         "the pull request's branch names the key; stronger evidence keeps its own")
+        est = store.compute(self.con, self.settings, DAY, DAY, now=NOW)
+        self.assertEqual({x.key for x in est.proposals}, {"PROJ-42", "PROJ-1"})
+        collect._store_keys(self.con, untracked, ["PROJ-2"], "message", ["PROJ"])
+        self.assertEqual(self.con.execute("SELECT work_item_key, method FROM commit_work_items WHERE commit_id = ?",
+                                          (untracked,)).fetchone()[:], ("PROJ-42", "pr"),
+                         "a message key, weaker, doesn't replace it")
+
+    def test_problems_say_what_to_do_and_never_show_the_token(self):
+        bad = github.Client(self.server.api, "ghp_wrong_secret")
+        with self.assertRaises(github.GitHubError) as caught:
+            github.sync(self.con, self.settings, bad)
+        self.assertIn("refused the token (401)", str(caught.exception))
+        self.assertNotIn("ghp_", str(caught.exception))
+        self.server.status["/repos/csb/asgard/pulls"] = 404
+        res = self.sync()
+        self.assertEqual(len(res.problems), 1)
+        self.assertIn("fine-grained token reaches one organization", res.problems[0])
+        self.assertEqual(res.requested, 3, "one unreadable repository doesn't stop the rest")
+        nowhere = github.Client("http://127.0.0.1:9/api/v3", self.fg.TOKEN, timeout=2)
+        with self.assertRaisesRegex(github.GitHubError, "Couldn't reach 127.0.0.1"):
+            nowhere.get("/user")
+        with self.assertRaisesRegex(github.GitHubError, "https"):
+            github.Client("http://github.agency.gov/api/v3", "t")
+        with self.assertRaisesRegex(github.GitHubError, "another server"):
+            self.client.get("https://evil.example/api/v3/user")
+
+    def test_long_lists_are_paged(self):
+        self.server.page_size = 2
+        self.server.reviews[("csb/asgard", 7)] = [self.fg.review(n, f"r{n}", "APPROVED") for n in range(1, 6)]
+        self.sync()
+        self.assertEqual(self.con.execute("SELECT count(*) FROM pr_reviews").fetchone()[0], 5)
+
+    def test_no_token_means_github_is_off(self):
+        self.settings.values["github_api"] = config.github_api_url("github.agency.gov")
+        with mock.patch.dict(os.environ, {github.TOKEN_ENV: ""}), \
+                mock.patch.object(github, "load_token", return_value=None):
+            self.assertIsNone(desk.sync_github(self.con, self.settings))
+            with self.assertRaisesRegex(cli.CliError, "No GitHub token for github.agency.gov"):
+                cli.github_client(self.settings)
+        self.settings.values["github_api"] = ""
+        with self.assertRaisesRegex(cli.CliError, "GitHub is off"):
+            cli.github_client(self.settings)
+
+    def test_the_token_comes_from_the_environment_first(self):
+        with mock.patch.dict(os.environ, {github.TOKEN_ENV: " ghp_from_env "}):
+            self.assertEqual(github.load_token("github.agency.gov"), "ghp_from_env")
+        with self.assertRaises(github.GitHubError):
+            github.save_token("github.agency.gov", "two words")
+
+
 def _tk_root():
     try:
         import tkinter as tk
         root = tk.Tk()
     except Exception as exc:              # noqa: BLE001 - no display or no Tcl/Tk: skip
-        raise unittest.SkipTest(f"no Tk display here ({exc})")
+        raise unittest.SkipTest(f"no Tk display here ({exc})") from None
     root.withdraw()
     return root
 
@@ -1482,6 +1620,26 @@ class WindowTests(MuninnCase):
         w2 = self.open(load_settings=lambda: broken)
         self.assertIn("has a mistake in it", w2.status.cget("text"))
         self.assertTrue(all(b.instate(["disabled"]) for b in w2.buttons))
+
+    def test_pull_requests_waiting_on_you(self):
+        review_only = self.con.execute("INSERT INTO repos (name, github_repo) VALUES ('portal', 'csb/portal') "
+                                       "RETURNING id").fetchone()[0]
+        now = muninn.utcnow()
+        self.con.execute("INSERT INTO pull_requests (repo_id, number, title, author, head_ref, state, review_requested, "
+                         "created_at, updated_at, url, first_seen_at, last_seen_at) VALUES (?, 31, 'Portal: PIV', 'lee', "
+                         "'feature/POR-1', 'open', 1, ?, ?, 'https://github.agency.gov/csb/portal/pull/31', ?, ?)",
+                         (review_only, now, now, now, now))
+        self.settings.values["github_api"] = config.github_api_url("github.agency.gov")
+        w = self.open()
+        with mock.patch.object(github, "load_token", return_value=None):
+            w.github_tick()
+        self.assertEqual([w.reviews.item(i)["text"] for i in w.reviews.get_children()], ["csb/portal#31"])
+        self.assertIn("1 review requested of you", w.reviews_label.cget("text"))
+        w.reviews.selection_set(w.reviews.get_children()[0])
+        with mock.patch("webbrowser.open") as opened:
+            self.assertEqual(w.open_review(), "https://github.agency.gov/csb/portal/pull/31")
+        opened.assert_called_once()
+        w.close = lambda: None              # the cleanup destroys the root
 
     def test_problems_are_shown_not_raised(self):
         w = self.open()

@@ -33,6 +33,16 @@ Verified here:
   your own machine.
 - Anything agency-specific: AppLocker, TLS inspection, PAC proxies, GPO-enforced policy.
 
+## Asgard
+
+`./run-checks.sh asgard [--no-suite] [--no-user]` syncs the `Asgard/` folder (not `Odin/app/`) to
+the host and runs `Asgard/tools/windows_checks.py`: the suite in five Windows time zones, then an
+install, Baldur run, scheduled task, Credential Manager and uninstall as the standard account (through
+the `m2j-as-user` task the bootstrap registers). The last results are in
+`Asgard/docs/windows-lab-2026-10-06.md`. `./remote.sh '<PowerShell>'` runs one command on the host
+for looking around. The bootstrap also installs Git for Windows, and grants the standard account the
+batch-logon right that lets a scheduled task hold its password (lab only).
+
 ## Security model
 
 - **No inbound rules.** The security group has an empty ingress set. There is no RDP on the

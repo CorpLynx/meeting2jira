@@ -249,7 +249,7 @@ def _user_steps(out: Path, env: Dict[str, str]) -> None:
           tail(report, 20))
 
     # The weekly collection task: created as this user, interactive-only, then removed.
-    made = run(f'cmd.exe /d /s /c "baldur.cmd schedule --day MON --time 09:00"', cwd=baldur, env=env)
+    made = run('cmd.exe /d /s /c "baldur.cmd schedule --day MON --time 09:00"', cwd=baldur, env=env)
     (out / "schedule.log").write_text(made.text, encoding="utf-8")
     check("baldur.cmd schedule adds the weekly task", made.returncode == 0, tail(made.text, 6))
     query = run(["schtasks", "/Query", "/TN", "Asgard Baldur collect", "/V", "/FO", "LIST"])
@@ -260,10 +260,19 @@ def _user_steps(out: Path, env: Dict[str, str]) -> None:
           and "collect --quiet" in fields.get("Task To Run", "")
           and "Interactive only" in fields.get("Logon Mode", ""),
           "; ".join(f"{k}: {fields.get(k, '?')}" for k in ("Task To Run", "Logon Mode", "Run As User", "Days")))
-    gone = run(f'cmd.exe /d /s /c "baldur.cmd schedule --remove"', cwd=baldur, env=env)
+    gone = run('cmd.exe /d /s /c "baldur.cmd schedule --remove"', cwd=baldur, env=env)
     still = run(["schtasks", "/Query", "/TN", "Asgard Baldur collect"])
     check("baldur.cmd schedule --remove deletes it", gone.returncode == 0 and still.returncode != 0,
           tail(gone.text, 4))
+
+    # The GitHub token in Credential Manager, as this user: saved, read back, removed.
+    code = ("import sys; sys.path[:0] = [sys.argv[1], sys.argv[1] + '\\\\apps\\\\baldur']; "
+            "from baldur import github as g; h = 'github.lab.invalid'; g.save_token(h, 'ghp_lab_check'); "
+            "print(g.load_token(h) == 'ghp_lab_check', g.delete_token(h), g.load_token(h))")
+    plain = {k: v for k, v in env.items() if k != "BALDUR_GITHUB_TOKEN"}
+    cred = run([sys.executable, "-c", code, str(app)], env=plain)
+    check("the GitHub token is saved in, read from and removed from Credential Manager",
+          cred.returncode == 0 and cred.text.strip() == "True True None", cred.text.strip()[-400:])
 
     # Uninstall the way Settings > Apps does it quietly, then check nothing is left.
     if quiet:

@@ -1,0 +1,8 @@
+# Odin's runtime packages. Pin each exactly (name==1.2.3), say what it's for and why the standard
+# library isn't enough, and record its approval (Asgard/docs/dependency-policy.md):
+#
+#   # what it's for; pure Python; approved: <ticket/date> (or: approval pending)
+#   example==1.2.3
+#
+# tests/test_guardrails.py fails on any import that isn't the standard library, meeting2jira, or
+# listed here. Odin's daily run needs nothing listed today.

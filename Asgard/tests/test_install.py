@@ -75,6 +75,7 @@ class InstallTests(unittest.TestCase):
         # lab found that purging left them behind, so the data folder stayed and "Kept your data".
         (self.home / "settings").mkdir(exist_ok=True)
         (self.home / "settings" / "baldur.json").write_text("{}", encoding="utf-8")
+        (self.home / "muninn.before-restore-20261006-120000.db").write_text("x", encoding="utf-8")   # a restore's copy
         result = valhalla.uninstall(purge=True)
         self.assertTrue(result.ok, result.skipped)
         self.assertEqual(result.kept, [])

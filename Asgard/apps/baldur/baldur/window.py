@@ -26,6 +26,7 @@ from . import cli, desk
 from . import estimate as E
 from . import settings as config
 from .collect import CollectError
+from .github import GitHubError
 from .gitread import GitError
 
 try:
@@ -36,7 +37,7 @@ except ImportError:          # main() explains what to do
     tk = None  # type: ignore[assignment]
 
 EXPECTED = (desk.DeskError, muninn.MuninnError, CollectError, config.SettingsError, GitError, cli.CliError,
-            sqlite3.Error)
+            GitHubError, sqlite3.Error)
 SETUP_HINT = ("Set Baldur up first, from Command Prompt in its folder:\n"
               "  baldur.cmd setup --from-git --project PROJ --root C:\\src")
 
@@ -116,10 +117,13 @@ class BaldurWindow:
         self.busy = False
         self.dark = winutil.apps_use_dark_theme() if dark is None else dark
         self.p = DARK if self.dark else LIGHT
+        self._github_job: Optional[str] = None
         self._init_fonts()
         self._init_window()
         self._build()
         self.reload()
+        if not synchronous:
+            self._github_job = self.root.after(1500, self.github_tick)
 
     # ---- building ------------------------------------------------------
 
@@ -207,8 +211,22 @@ class BaldurWindow:
         self.days.column("dev", width=60, anchor="e", stretch=False)
         self.days.column("tickets", width=220)
         self.days.column("review", width=130)
-        self.days.pack(fill="both", expand=True)
+        self.days.pack(side="top", fill="both", expand=True)
         self.days.bind("<<TreeviewSelect>>", lambda e: self._day_selected())
+        self.reviews_label = ttk.Label(left, text="Pull requests", style="Head.TLabel", padding=(0, 12, 0, 4))
+        self.reviews_label.pack(side="top", anchor="w")
+        self.reviews = ttk.Treeview(left, columns=("what", "who"), show="tree headings", selectmode="browse",
+                                    height=5)
+        self.reviews.heading("#0", text="Pull request")
+        self.reviews.heading("what", text="Waiting on")
+        self.reviews.heading("who", text="Who")
+        self.reviews.column("#0", width=150, stretch=False)
+        self.reviews.column("what", width=230)
+        self.reviews.column("who", width=110, stretch=False)
+        self.reviews.pack(side="top", fill="x")
+        self.reviews.bind("<Return>", lambda e: self.open_review())
+        self.reviews.bind("<Double-1>", lambda e: self.open_review())
+        self.review_urls: Dict[str, str] = {}
         body.add(left, weight=2)
 
         right = ttk.Frame(body, padding=(16, 0, 0, 0))
@@ -252,10 +270,13 @@ class BaldurWindow:
 
     # ---- jobs ----------------------------------------------------------
 
-    def _job(self, label: str, job: Callable[[sqlite3.Connection], Any], done: Callable[[Any], None]) -> None:
+    def _job(self, label: str, job: Callable[[sqlite3.Connection], Any], done: Callable[[Any], None],
+             quiet: bool = False) -> bool:
+        """Run job off the window's thread. quiet: a background job, whose problems go to the status line."""
         if self.busy:
-            self.say("Still working on the last request...")
-            return
+            if not quiet:
+                self.say("Still working on the last request...")
+            return False
         self.busy = True
         for b in self.buttons:
             b.state(["disabled"])
@@ -265,7 +286,17 @@ class BaldurWindow:
             self._enable()
             done(value)
 
-        self.worker.run(job, finish, self._failed)
+        def failed(exc: BaseException) -> None:
+            if not quiet:
+                self._failed(exc)
+                return
+            self._enable()
+            if not isinstance(exc, EXPECTED):
+                log_problem(getattr(exc, "trace", "") or repr(exc))
+            self.say(f"GitHub: {exc}")
+
+        self.worker.run(job, finish, failed)
+        return True
 
     def _enable(self) -> None:
         self.busy = False
@@ -493,6 +524,56 @@ class BaldurWindow:
         self._job("Reading your repositories (this can take a minute)...", lambda con: desk.collect(con, settings),
                   done)
 
+    # ---- pull requests -------------------------------------------------
+
+    def github_tick(self) -> None:
+        """Sync GitHub now (when it's on and a token is saved), then every poll_minutes."""
+        self._github_job = None
+        settings = self.settings
+
+        def job(con: sqlite3.Connection) -> Tuple[Any, List[desk.ReviewItem]]:
+            result = desk.sync_github(con, settings) if not settings.broken else None
+            return result, desk.review_items(con)
+
+        def done(value: Tuple[Any, List[desk.ReviewItem]]) -> None:
+            result, items = value
+            self.show_reviews(items, synced=result is not None)
+
+        started = self._job("Checking GitHub...", job, done, quiet=True)
+        minutes = int(settings.values.get("poll_minutes", 5)) if not settings.broken else 5
+        self._github_job = self.root.after(minutes * 60_000 if started else 5000, self.github_tick)
+
+    def show_reviews(self, items: List[desk.ReviewItem], synced: bool = True) -> None:
+        self.reviews.delete(*self.reviews.get_children())
+        self.review_urls = {}
+        for n, item in enumerate(items):
+            iid = f"r{n}"
+            if item.kind == "requested":
+                what = "your review" + (" (draft)" if item.draft else "") + f": {item.title}"
+            else:
+                what = f"{item.state.replace('_', ' ')} your PR: {item.title}"
+            self.reviews.insert("", "end", iid=iid, text=item.label, values=(what, item.who))
+            self.review_urls[iid] = item.url
+        asked = sum(1 for i in items if i.kind == "requested")
+        host = self.settings.github_host() if not self.settings.broken else None
+        if not host:
+            self.reviews_label.configure(text="Pull requests: GitHub is off")
+        elif not synced and not items:
+            self.reviews_label.configure(text="Pull requests: no token yet (baldur.cmd github token)")
+        else:
+            self.reviews_label.configure(text=f"Pull requests: {asked} {'review' if asked == 1 else 'reviews'} "
+                                              "requested of you")
+        if synced:
+            self.say(f"GitHub checked at {dt.datetime.now():%H:%M}.")
+
+    def open_review(self) -> Optional[str]:
+        sel = self.reviews.selection()
+        url = self.review_urls.get(sel[0]) if sel else None
+        if url and url.startswith("https://"):
+            import webbrowser
+            webbrowser.open(url)
+        return url
+
     # ---- housekeeping --------------------------------------------------
 
     def _callback_error(self, exc_type: Any, exc: BaseException, tb: Any) -> None:
@@ -501,6 +582,11 @@ class BaldurWindow:
                              parent=self.root)
 
     def close(self) -> None:
+        if self._github_job:
+            try:
+                self.root.after_cancel(self._github_job)
+            except tk.TclError:
+                pass
         self.root.destroy()
 
 

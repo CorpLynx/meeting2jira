@@ -592,6 +592,74 @@ check("approved time for a key Jira doesn't have is shown, not lost",
       rows("SELECT proposal_id, reason FROM v_unpostable_days"))
 
 # =====================================================================
+# Schema v3: rules that used to hold only in Python
+# =====================================================================
+if one("PRAGMA user_version") >= 3:
+    con.execute("SAVEPOINT v3")          # everything here is undone at the end
+    commit_id = one("SELECT id FROM commits ORDER BY id LIMIT 1")
+    for bad in ("abc-123", "ABC-0", "ABC-012", "ABC 123", "ABC-1-2", "ABC-12a", "-12", "ABC"):
+        rejects(f"a cross-app key must look like PROJ-123: {bad!r} (v3)",
+                "INSERT INTO commit_work_items (commit_id, work_item_key, method) VALUES (?, ?, 'manual')",
+                (commit_id, bad))
+    con.execute("INSERT INTO commit_work_items (commit_id, work_item_key, method) VALUES (?, 'A_B2-7', 'manual')",
+                (commit_id,))
+    check("a key with digits and underscores in its project is taken (v3)",
+          one("SELECT count(*) FROM commit_work_items WHERE work_item_key = 'A_B2-7'") == 1)
+    rejects("day_proposals refuse a lower-case key (v3)", PROPOSE,
+            (er9, "2026-12-03", "xyz-50", 10.0, 10, "2026-12-03T15:00:00Z", "basis", "bh-v3a"))
+    ev_id = one("INSERT INTO calendar_events (source_id, external_id, title, starts_at, ends_at, first_seen_at, "
+                "last_seen_at) VALUES (1, 'v3-meeting', 'Standup', '2026-12-03T14:00:00Z', '2026-12-03T14:15:00Z', "
+                "?, ?) RETURNING id", (NOW, NOW))
+    rejects("a meeting's Jira key is checked too (v3)",
+            "UPDATE calendar_events SET logged_as_key = 'xyz-50' WHERE id = ?", (ev_id,))
+
+    p_cap = one(PROPOSE, (er9, "2026-12-04", "XYZ-50", 61.0, 60, "2026-12-04T15:00:00Z", "basis", "bh-v3b"))
+    rejects("an approval can't be for more than 1440 minutes (v3)",
+            "UPDATE day_proposals SET status='approved', minutes_final=1441, decided_at=? WHERE id=?", (NOW, p_cap))
+    rejects("Baldur time is posted only for an approved day (v3)", WL,
+            (WI2, None, "baldur", "sending", "2026-12-04T15:00:00Z", 600, "[asgard:b-0000beef]", p_cap, None, None))
+    rejects("Asgard posts at most 24 hours in one worklog (v3)", WL,
+            (WI2, None, "manual", "sending", "2026-12-04T15:00:00Z", 86401, "[asgard:o-0000beef]", None, None, None))
+    big = one(WL, (WI2, "99001", "jira", "posted", "2026-12-04T15:00:00Z", 90000, "two days", None, None, NOW))
+    check("a worklog read from Jira is stored as Jira has it, even over 24 hours (v3)", big is not None)
+
+    posted = one(WL, (WI2, "99002", "manual", "posted", "2026-12-05T15:00:00Z", 600, "[asgard:o-0000cafe]",
+                      None, None, NOW))
+    rejects("a posted worklog can't go back to failed (v3)",
+            "UPDATE worklogs SET state = 'failed', jira_worklog_id = NULL WHERE id = ?", (posted,))
+    rejects("a worklog Asgard sent is never deleted (v3)", "DELETE FROM worklogs WHERE id = ?", (posted,))
+    con.execute("UPDATE worklogs SET state = 'deleted' WHERE id = ?", (posted,))
+    check("a posted worklog can still become deleted (v3)",
+          one("SELECT state FROM worklogs WHERE id = ?", (posted,)) == "deleted")
+    failed = one(WL, (WI2, None, "manual", "failed", "2026-12-05T16:00:00Z", 600, "[asgard:o-0000f00d]",
+                      None, None, None))
+    con.execute("DELETE FROM worklogs WHERE id = ?", (failed,))
+    check("a failed worklog, never in Jira, can be deleted (v3)",
+          one("SELECT count(*) FROM worklogs WHERE id = ?", (failed,)) == 0)
+
+    newest = one("SELECT max(id) FROM events")
+    rejects("an event cursor can't pass the newest event (v3)",
+            "INSERT INTO event_cursors (app, last_event_id, updated_at) VALUES ('loki', ?, ?)", (newest + 1, NOW))
+
+    pr_id = one("SELECT id FROM pull_requests ORDER BY id LIMIT 1")
+    if pr_id is not None:
+        con.execute("UPDATE pull_requests SET author = 'renamed-author' WHERE id = ?", (pr_id,))
+        check("a pull request's search entry follows its author (v3)",
+              one("SELECT count(*) FROM search WHERE search MATCH 'renamed'") == 1)
+
+    for jid in ("99003", "99004"):
+        one(WL, (WI2, jid, "baldur", "posted", "2026-12-01T15:00:00Z", 3600, "[asgard:b-%s0000]" % jid[-4:],
+                 p9, None, NOW))
+    check("time posted twice for one approval shows in v_double_posts (v3)",
+          rows("SELECT kind, ref_id, n FROM v_double_posts") == [("proposal", p9, 2)],
+          rows("SELECT * FROM v_double_posts"))
+    check("and on Odin's tile, first (v3)",
+          rows("SELECT priority, n, label FROM v_tile_badges WHERE app = 'odin' ORDER BY priority")[0]
+          == (0, 1, "worklogs posted twice"))
+    con.execute("ROLLBACK TO v3")
+    con.execute("RELEASE v3")
+
+# =====================================================================
 # Housekeeping
 # =====================================================================
 run2 = one("INSERT INTO sync_runs (app, source_id, stream) VALUES ('odin',1,'issues') RETURNING id")

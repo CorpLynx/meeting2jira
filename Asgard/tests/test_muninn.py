@@ -95,7 +95,9 @@ class OpeningTests(Base):
         con = muninn.open_app("odin", supported=(1, muninn.SCHEMA_VERSION), path=self.path)
         con.close()
         with self.assertRaises(muninn.NotReady):
-            muninn.open_app("odin", path=self.dir / "nothing.db")
+            muninn.open_app("odin", supported=(1, muninn.SCHEMA_VERSION), path=self.dir / "nothing.db")
+        with self.assertRaises(TypeError, msg="supported has no default: a default would go stale"):
+            muninn.open_app("odin", path=self.path)
         self.con.execute("PRAGMA user_version = 7")
         with self.assertRaisesRegex(muninn.VersionError, "Update odin"):
             muninn.open_app("odin", supported=(1, muninn.SCHEMA_VERSION), path=self.path)
@@ -107,7 +109,7 @@ class OpeningTests(Base):
         db.sqlite_problems = lambda: ["SQLite 3.31.1 is older than 3.37, which STRICT tables need"]
         try:
             with self.assertRaisesRegex(muninn.MuninnError, "same Python as Asgard"):
-                muninn.open_app("odin", path=self.path)
+                muninn.open_app("odin", supported=(1, muninn.SCHEMA_VERSION), path=self.path)
         finally:
             db.sqlite_problems = real
 
@@ -213,12 +215,22 @@ class MigrationTests(unittest.TestCase):
         errors, made = [], []
 
         def go():
+            con = muninn.connect(path)
             try:
-                con = muninn.connect(path)
                 made.append(muninn.backup(con, self.dir / "bk", label="before-v2", keep=3))
-                con.close()
             except Exception as exc:  # pragma: no cover - reported below
                 errors.append(exc)
+            finally:
+                con.close()          # an open file would also stop Windows deleting the folder
+
+        # Repeated: on Windows the race (and its PermissionError) showed up about one run in five.
+        for _ in range(4):
+            self._race(go, errors, made)
+
+    def _race(self, go, errors, made):
+        del errors[:], made[:]
+        for old in (self.dir / "bk").glob("muninn-*-before-v2.db"):
+            old.unlink()
 
         threads = [threading.Thread(target=go) for _ in range(4)]
         for t in threads:
@@ -611,7 +623,10 @@ class WorklogTests(WorklogBase):
         self.con.execute("UPDATE worklogs SET created_at = ? WHERE id = ?", (muninn.ago(600), post.worklog_id))
         stuck = odin.stuck_posts(self.con)
         self.assertEqual((stuck[0]["key"], stuck[0]["marker"]), ("ABC-123", post.marker))
-        odin.resolve_stuck(self.con, post.worklog_id)           # marker not found in Jira
+        with self.assertRaisesRegex(muninn.MuninnError, "Search the issue's worklogs"):
+            odin.resolve_stuck(self.con, post.worklog_id)       # no id and no search: could post twice
+        self.assertEqual(self.state(post.worklog_id), ("sending", None))
+        odin.resolve_stuck(self.con, post.worklog_id, None, searched=True)   # marker not found in Jira
         self.assertEqual(self.state(post.worklog_id), ("failed", None))
         again = odin.begin_post(self.con, pid)
         odin.resolve_stuck(self.con, again.worklog_id, "88003")  # found it
@@ -684,7 +699,7 @@ class WorklogTests(WorklogBase):
         post = odin.begin_post(self.con, pid)            # the Jira call times out: the row stays 'sending'
         newer = baldur.change_approval(self.con, pid, 180)
         self.assertEqual(odin.posts_due(self.con), [], "nothing is posted on top of a post in doubt")
-        odin.resolve_stuck(self.con, post.worklog_id)    # the marker isn't in Jira: it failed
+        odin.resolve_stuck(self.con, post.worklog_id, searched=True)    # the marker isn't in Jira: it failed
         self.assertEqual([(d["proposal_id"], d["minutes_to_post"]) for d in odin.posts_due(self.con)], [(newer, 180)])
 
     def test_a_post_in_doubt_that_landed_counts(self):

@@ -24,7 +24,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Set
 
-from .db import MuninnError, transaction, utcnow
+from . import guard
+from .db import MuninnError, retry_busy, transaction, utcnow
+from .redact import redact_url, scrub, scrub_value
 
 APPS = ("muninn", "huginn", "odin", "baldur", "loki", "freya", "heimdall", "bifrost", "ysildir", "valkyrie")
 _LOST = "SQLite rolled this run's changes back on its own (disk full or I/O error), so the run stops here."
@@ -35,7 +37,8 @@ _LOST = "SQLite rolled this run's changes back on its own (disk full or I/O erro
 # --------------------------------------------------------------------------
 
 def ensure_source(con: sqlite3.Connection, kind: str, name: str, base_url: Optional[str] = None) -> int:
-    """The id of a source, adding it the first time."""
+    """The id of a source, adding it the first time. A password or token in base_url isn't stored."""
+    base_url = redact_url(base_url)
     row = con.execute("SELECT id FROM sources WHERE name = ?", (name,)).fetchone()
     if row:
         if base_url:
@@ -63,11 +66,16 @@ def identities(con: sqlite3.Connection, kind: str) -> Set[str]:
 def emit(con: sqlite3.Connection, app: str, kind: str, entity_type: str, entity_id: Optional[int] = None,
          ref: Optional[str] = None, payload: Optional[Dict[str, Any]] = None,
          run_id: Optional[int] = None) -> int:
-    """Append one event. Call inside the transaction that made the change."""
+    """Append one event. Call inside the transaction that made the change.
+
+    Events are kept for the life of the database, so anything in the payload that looks like a
+    credential is masked first (redact.py).
+    """
+    body = json.dumps(scrub_value(payload or {}), default=str)
     return int(con.execute(
         "INSERT INTO events (app, kind, entity_type, entity_id, ref, run_id, payload) "
         "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
-        (app, kind, entity_type, entity_id, ref, run_id, json.dumps(payload or {}, default=str))).fetchone()[0])
+        (app, kind, entity_type, entity_id, ref, run_id, body)).fetchone()[0])
 
 
 @dataclass
@@ -158,9 +166,9 @@ class Run:
         if self.con.in_transaction:
             raise MuninnError("A sync run can't start inside another transaction.")
         self.now = utcnow()
-        self.id = int(self.con.execute(
+        self.id = int(retry_busy(lambda: self.con.execute(
             "INSERT INTO sync_runs (app, source_id, stream, mode, started_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
-            (self.app, self.source_id, self.stream, self.mode, self.now)).fetchone()[0])
+            (self.app, self.source_id, self.stream, self.mode, self.now)).fetchone()[0]))
         if self.source_id is not None:
             row = self.con.execute("SELECT cursor FROM sync_cursors WHERE source_id = ? AND stream = ?",
                                    (self.source_id, self.stream)).fetchone()
@@ -200,6 +208,9 @@ class Run:
 
     def _record_failure(self, exc_type: Any, exc: Optional[BaseException]) -> None:
         text = "".join(traceback.format_exception_only(exc_type, exc)).strip() if exc_type else "failed"
+        if exc is not None and "not authorized" in text.lower():
+            text = f"{exc_type.__name__}: {guard.describe(exc)}"    # say which table and why
+        text = scrub(text) or "failed"
         try:
             if self.con.in_transaction:
                 self.con.execute("ROLLBACK")
@@ -262,5 +273,5 @@ class Run:
 
     def problem(self, message: str) -> None:
         """Note an item that failed while the rest succeeded. The run ends 'partial' and its
-        cursor doesn't move, so the next run tries the item again."""
-        self.problems.append(message)
+        cursor doesn't move, so the next run tries the item again. Credentials in the text are masked."""
+        self.problems.append(scrub(str(message)) or "")

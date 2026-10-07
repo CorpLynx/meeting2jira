@@ -1,0 +1,10 @@
+# Asgard's optional runtime packages. Pin each exactly, say what it's for, and record its approval
+# (docs/dependency-policy.md). tests/test_dependencies.py fails on an undeclared import, and on
+# any package imported by asgard/muninn or the launcher's start-up path.
+#
+# Nothing here is needed to install Asgard, open the launcher, or run Baldur.
+
+# Heimdall `fill` only: drives the installed Edge (playwright install msedge). Not pure Python: it
+# bundles node.exe, which AppLocker may block in a user-profile path. Same pin as
+# Odin/playwright-app. approval: pending
+playwright==1.49.1

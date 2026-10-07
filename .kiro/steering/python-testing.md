@@ -6,7 +6,7 @@ fileMatchPattern: ["Odin/app/tests/**/*.py"]
 
 ## Style
 - Write tests as stdlib `unittest` (`unittest.TestCase`, `self.assert*`). They ship with the app and
-  must still run on the no-pip workstation (`python -m unittest discover -s tests`) to prove the
+  must still run on the workstation without dev tools (`python -m unittest discover -s tests`) to prove the
   install. In dev, pytest runs them (`tools/run_tests.py`) for better output, timeouts and coverage.
 - So in `Odin/app/tests`: no `import pytest`, no pytest fixtures, `parametrize`, marks or `pytest.raises`.
   Anything that needs those isn't a shipped test; ask before adding a dev-only test folder.

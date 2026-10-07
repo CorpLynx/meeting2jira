@@ -15,7 +15,14 @@ and Baldur works from local git alone.
   cloned gets a review-only repos row, alerted on and never estimated.
 - Your pull requests' head branches name Jira keys for their commits (method 'pr'). That
   evidence ranks below the reflog and branch membership and above the commit message, and
-  weaker evidence never replaces stronger (collect._store_keys).
+  weaker evidence never replaces stronger. Which commits each of your PRs holds is stored
+  (pull_request_commits), and collect.apply_pr_evidence() keys every commit from the smallest
+  PR that holds it, after each sync and each collection, so neither the order they run in nor
+  which PR changed last decides a commit's ticket. The commit GitHub made merging your PR is
+  stored too (merge_commit_sha), so a squash is a copy even when its title was edited.
+- A failure in one repository or one pull request is a problem in the result, not the end of
+  the pass, and leaves that repository's cursor where it was so the next pass retries it.
+- Redirects are followed only within the configured server, so the token never goes elsewhere.
 """
 from __future__ import annotations
 
@@ -36,7 +43,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from asgard import muninn
 
 from . import keys as keyfinder
-from .collect import _store_keys
+from .collect import apply_pr_evidence
 from .settings import Settings
 
 TOKEN_ENV = "BALDUR_GITHUB_TOKEN"
@@ -142,6 +149,21 @@ def delete_token(host: str) -> bool:
 # The client
 # --------------------------------------------------------------------------
 
+class _SameServerRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only within the configured API. urllib resends the Authorization header
+    on a redirect, so following one to another server would hand it the token."""
+
+    def __init__(self, client: "Client") -> None:
+        super().__init__()
+        self.client = client
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
+        if not self.client.same_server(newurl):
+            raise GitHubError(f"{self.client.host} redirected to another server; Baldur won't follow it, so the "
+                              "token stays with your GitHub. Check github_api in baldur.json.")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 @dataclass
 class Response:
     status: int
@@ -169,6 +191,22 @@ class Client:
         self.requests = 0
         # Verified TLS, always, with the Windows certificate stores Python already trusts.
         self._context = ssl.create_default_context() if parts.scheme == "https" else None
+        handlers: List[Any] = [_SameServerRedirects(self)]
+        if self._context is not None:
+            handlers.append(urllib.request.HTTPSHandler(context=self._context))
+        self._opener = urllib.request.build_opener(*handlers)
+
+    def same_server(self, url: str) -> bool:
+        """Whether url is on the configured API: same scheme, host and port, and under its path."""
+        a, b = urllib.parse.urlsplit(self.api), urllib.parse.urlsplit(url)
+        default = {"https": 443, "http": 80}
+        try:
+            ports = (a.port or default.get(a.scheme), b.port or default.get(b.scheme))
+        except ValueError:
+            return False
+        base = a.path.rstrip("/")
+        return (b.scheme == a.scheme and (b.hostname or "").lower() == (a.hostname or "").lower()
+                and ports[0] == ports[1] and (b.path == base or b.path.startswith(base + "/")))
 
     def url(self, path: str, params: Optional[Dict[str, Any]] = None) -> str:
         query = ("?" + urllib.parse.urlencode(params)) if params else ""
@@ -177,7 +215,7 @@ class Client:
     def get(self, path_or_url: str, params: Optional[Dict[str, Any]] = None,
             etag: Optional[str] = None) -> Response:
         url = path_or_url if path_or_url.startswith(("http://", "https://")) else self.url(path_or_url, params)
-        if not url.startswith(self.api):
+        if not self.same_server(url):
             raise GitHubError("GitHub answered with a link to another server; Baldur won't follow it.")
         headers = {"Accept": "application/vnd.github+json", "User-Agent": "Asgard-Baldur",
                    "Authorization": f"Bearer {self._token}"}
@@ -187,7 +225,7 @@ class Client:
         shown = url.split("?", 1)[0][len(self.api):] or "/"
         self.requests += 1
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout, context=self._context) as answer:
+            with self._opener.open(request, timeout=self.timeout) as answer:
                 body = answer.read()
                 link = answer.headers.get("Link") or ""
                 nxt = _LINK_NEXT.search(link)
@@ -292,6 +330,7 @@ def _pr_row(raw: Dict[str, Any], me: str, projects: Sequence[str]) -> Dict[str, 
     found = keyfinder.branch_keys(head, projects) or keyfinder.find_keys(raw.get("title"), projects)
     requested = {str(u.get("login", "")).lower() for u in raw.get("requested_reviewers") or []}
     author = str((raw.get("user") or {}).get("login") or "")
+    merge_sha = str(raw.get("merge_commit_sha") or "") if merged else ""
     return {"number": int(raw["number"]), "title": str(raw.get("title") or "")[:500], "author": author,
             "is_mine": int(author.lower() == me.lower()), "head_ref": head, "work_item_key": found[0] if found else None,
             "state": state, "is_draft": int(bool(raw.get("draft"))),
@@ -299,7 +338,8 @@ def _pr_row(raw: Dict[str, Any], me: str, projects: Sequence[str]) -> Dict[str, 
             "created_at": _ts(raw.get("created_at")), "updated_at": _ts(raw.get("updated_at")),
             "merged_at": merged, "closed_at": _ts(raw.get("closed_at")),
             "additions": raw.get("additions"), "deletions": raw.get("deletions"),
-            "url": str(raw.get("html_url") or "")}
+            "url": str(raw.get("html_url") or ""),
+            "merge_commit_sha": merge_sha if len(merge_sha) in (40, 64) else None}
 
 
 def _upsert_pr(con: sqlite3.Connection, repo_id: int, row: Dict[str, Any], run: muninn.Run,
@@ -314,9 +354,9 @@ def _upsert_pr(con: sqlite3.Connection, repo_id: int, row: Dict[str, Any], run: 
         new = con.execute(
             "INSERT INTO pull_requests (repo_id, number, title, author, is_mine, head_ref, work_item_key, state, "
             "is_draft, review_requested, created_at, updated_at, merged_at, closed_at, additions, deletions, url, "
-            "first_seen_at, last_seen_at, run_id) VALUES (:repo, :number, :title, :author, :is_mine, :head_ref, "
-            ":work_item_key, :state, :is_draft, :flag, :created_at, :updated_at, :merged_at, :closed_at, :additions, "
-            ":deletions, :url, :now, :now, :run) RETURNING id",
+            "first_seen_at, last_seen_at, run_id, merge_commit_sha) VALUES (:repo, :number, :title, :author, :is_mine, "
+            ":head_ref, :work_item_key, :state, :is_draft, :flag, :created_at, :updated_at, :merged_at, :closed_at, "
+            ":additions, :deletions, :url, :now, :now, :run, :merge_commit_sha) RETURNING id",
             dict(row, repo=repo_id, flag=flag, now=run.now, run=run.id)).fetchone()[0]
         return int(new), True
     changed = before["updated_at"] != row["updated_at"] or before["state"] != row["state"] \
@@ -329,6 +369,7 @@ def _upsert_pr(con: sqlite3.Connection, repo_id: int, row: Dict[str, Any], run: 
         "notified_at = CASE WHEN :renotify THEN NULL ELSE notified_at END, updated_at = :updated_at, "
         "merged_at = :merged_at, closed_at = :closed_at, additions = coalesce(:additions, additions), "
         "deletions = coalesce(:deletions, deletions), url = :url, last_seen_at = :now, "
+        "merge_commit_sha = coalesce(:merge_commit_sha, merge_commit_sha), "
         "run_id = CASE WHEN :changed THEN :run ELSE run_id END WHERE id = :id",
         dict(row, flag=flag, renotify=int(renotify), now=run.now, run=run.id, changed=int(changed),
              id=before["id"]))
@@ -343,37 +384,30 @@ def _upsert_reviews(con: sqlite3.Connection, pr_id: int, reviews: Sequence[Dict[
         if state is None or submitted is None:      # PENDING: not submitted yet
             continue
         reviewer = str((r.get("user") or {}).get("login") or "")
-        got = con.execute(
-            "INSERT INTO pr_reviews (pr_id, github_id, reviewer, is_mine, state, submitted_at) VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (pr_id, github_id) DO UPDATE SET state = excluded.state RETURNING (xmax IS NULL)"
-            if False else
-            "INSERT INTO pr_reviews (pr_id, github_id, reviewer, is_mine, state, submitted_at) VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (pr_id, github_id) DO UPDATE SET state = excluded.state",
-            (pr_id, str(r.get("id")), reviewer, int(reviewer.lower() == me.lower()), state, submitted))
-        added += got.rowcount > 0 and 1 or 0
+        github_id = str(r.get("id"))
+        known = con.execute("SELECT 1 FROM pr_reviews WHERE pr_id = ? AND github_id = ?", (pr_id, github_id)).fetchone()
+        # A review dismissed later changes state; its notified_at stays, so it doesn't alert twice.
+        con.execute("INSERT INTO pr_reviews (pr_id, github_id, reviewer, is_mine, state, submitted_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (pr_id, github_id) DO UPDATE SET state = excluded.state",
+                    (pr_id, github_id, reviewer, int(reviewer.lower() == me.lower()), state, submitted))
+        added += int(known is None)
     return added
 
 
-def _key_commits(con: sqlite3.Connection, shas: Sequence[str], head_ref: str, projects: Sequence[str]) -> int:
-    """Give your commits in a pull request the keys its head branch names (method 'pr')."""
-    found = keyfinder.branch_keys(head_ref, projects)
-    if not found:
-        return 0
-    n = 0
-    for sha in shas:
-        for (cid,) in con.execute("SELECT id FROM commits WHERE sha = ? AND is_mine = 1 AND is_merge = 0", (sha,)):
-            before = {tuple(r) for r in con.execute(
-                "SELECT work_item_key, method FROM commit_work_items WHERE commit_id = ?", (cid,))}
-            _store_keys(con, cid, found, "pr", projects)
-            after = {tuple(r) for r in con.execute(
-                "SELECT work_item_key, method FROM commit_work_items WHERE commit_id = ?", (cid,))}
-            n += int(after != before)
-    return n
+def _store_commits(con: sqlite3.Connection, pr_id: int, shas: Sequence[str]) -> None:
+    """Which commits one of your PRs holds, as GitHub lists them now (replacing the last list)."""
+    con.execute("DELETE FROM pull_request_commits WHERE pr_id = ?", (pr_id,))
+    con.executemany("INSERT INTO pull_request_commits (pr_id, sha) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                    [(pr_id, s) for s in dict.fromkeys(shas) if len(s) in (40, 64)])
+    con.execute("UPDATE pull_requests SET commits_listed = 1 WHERE id = ?", (pr_id,))
 
 
 def _repo_for(con: sqlite3.Connection, source: int, full: str) -> int:
-    """The repos row for owner/name: your clone's, or a review-only one made now."""
-    row = con.execute("SELECT id FROM repos WHERE github_repo = ?", (full,)).fetchone()
+    """The repos row for owner/name (any case: GitHub's names aren't case-sensitive): your clone's,
+    or a review-only one made now."""
+    full = full.lower()
+    row = con.execute("SELECT id FROM repos WHERE lower(github_repo) = ? ORDER BY local_path IS NULL, id",
+                      (full,)).fetchone()
     if row:
         return int(row[0])
     return int(con.execute("INSERT INTO repos (source_id, name, github_repo) VALUES (?, ?, ?) RETURNING id",
@@ -381,7 +415,11 @@ def _repo_for(con: sqlite3.Connection, source: int, full: str) -> int:
 
 
 def sync(con: sqlite3.Connection, settings: Settings, client: Client) -> SyncResult:
-    """One pass: your repositories' pull requests, their reviews, and the reviews requested of you."""
+    """One pass: your repositories' pull requests, their reviews, and the reviews requested of you.
+
+    A repository or a pull request GitHub won't show is a problem in the result; the rest of the
+    pass goes on, and that repository is read again next time.
+    """
     projects = list(settings.project_keys)
     res = SyncResult()
     source = source_for(con, client)
@@ -394,10 +432,16 @@ def sync(con: sqlite3.Connection, settings: Settings, client: Client) -> SyncRes
         try:
             _sync_repo(con, client, source, int(repo_id), str(full), me, projects, res)
         except GitHubError as exc:
-            if exc.status not in (403, 404):
-                raise
-            res.problems.append(str(exc))
-    _sync_requests(con, client, source, me, projects, res)
+            if exc.status == 401:
+                raise                          # the token itself is refused: nothing else will work either
+            res.problems.append(f"{full}: {exc}")
+    try:
+        _sync_requests(con, client, source, me, projects, res)
+    except GitHubError as exc:
+        if exc.status == 401:
+            raise
+        res.problems.append(f"review requests: {exc}")
+    res.keyed_commits = apply_pr_evidence(con, projects)
     res.requests = client.requests
     return res
 
@@ -410,27 +454,51 @@ def _sync_repo(con: sqlite3.Connection, client: Client, source: int, repo_id: in
         if got.unchanged:
             res.unchanged += 1
             return
-        rows = [_pr_row(raw, me, projects) for raw in got.data or []]
-        stored = {r["number"]: r["updated_at"] for r in con.execute(
-            "SELECT number, updated_at FROM pull_requests WHERE repo_id = ?", (repo_id,))}
-        fresh = [r for r in rows if stored.get(r["number"]) != r["updated_at"]]
+        stored = {r["number"]: (r["updated_at"], r["is_mine"], r["commits_listed"]) for r in con.execute(
+            "SELECT number, updated_at, is_mine, commits_listed FROM pull_requests WHERE repo_id = ?", (repo_id,))}
+        newest = max((u for u, _, _ in stored.values()), default="")
+        raws = list(got.data or [])
+        # The list is newest first: read pages until they reach what's already stored. A pass that
+        # stops at the page limit before then keeps the old cursor, so the next one reads on.
+        url, pages = got.next_url, 1
+        while url and pages < MAX_PAGES and raws and str(_ts(raws[-1].get("updated_at")) or "") > newest:
+            more = client.get(url)
+            raws.extend(more.data or [])
+            url, pages = more.next_url, pages + 1
+        if url and raws and str(_ts(raws[-1].get("updated_at")) or "") > newest:
+            run.problem(f"{full}: more pull requests changed than {MAX_PAGES} pages; the rest come next time")
+        rows = [_pr_row(raw, me, projects) for raw in raws]
+        fresh = [r for r in rows if stored.get(r["number"], (None,))[0] != r["updated_at"]
+                 or (r["is_mine"] and not stored.get(r["number"], (None, 0, 0))[2])]
         # Fetch everything first; write once at the end, so no lock is held across a request.
-        extra: Dict[int, Tuple[List[Any], List[str]]] = {}
+        extra: Dict[int, Tuple[List[Any], Optional[List[str]]]] = {}
+        failed: Set[int] = set()
         for r in fresh:
-            reviews = client.get_all(f"/repos/{full}/pulls/{r['number']}/reviews", {"per_page": 100})
-            shas: List[str] = []
-            if r["is_mine"] and keyfinder.branch_keys(r["head_ref"], projects):
-                shas = [str(c.get("sha")) for c in client.get_all(f"/repos/{full}/pulls/{r['number']}/commits",
-                                                                  {"per_page": 100})]
-            extra[r["number"]] = (reviews, shas)
+            try:
+                reviews = client.get_all(f"/repos/{full}/pulls/{r['number']}/reviews", {"per_page": 100})
+                shas: Optional[List[str]] = None
+                if r["is_mine"]:
+                    shas = [str(c.get("sha")) for c in client.get_all(f"/repos/{full}/pulls/{r['number']}/commits",
+                                                                      {"per_page": 100})]
+                extra[r["number"]] = (reviews, shas)
+            except GitHubError as exc:
+                if exc.status == 401:
+                    raise
+                failed.add(r["number"])
+                message = f"{full}#{r['number']}: {exc}"
+                run.problem(message)               # the run keeps its old cursor, so this PR is read again
+                res.problems.append(message)
         with run.batch():
             for r in rows:
+                if r["number"] in failed:
+                    continue                       # keep what was stored; it stays 'fresh' for next time
                 pr_id, changed = _upsert_pr(con, repo_id, r, run)
                 run.items_seen += 1
                 if r["number"] in extra:
                     reviews, shas = extra[r["number"]]
                     res.reviews_new += _upsert_reviews(con, pr_id, reviews, me)
-                    res.keyed_commits += _key_commits(con, shas, r["head_ref"], projects)
+                    if shas is not None:
+                        _store_commits(con, pr_id, shas)
                 if changed:
                     res.pulls_changed += 1
                     run.items_changed += 1

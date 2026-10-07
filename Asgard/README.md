@@ -160,7 +160,7 @@ def load_muninn():
 
 
 muninn = load_muninn()
-con = muninn.open_app("odin", supported=(1, 2))   # schema versions Odin was written for; never upgrades
+con = muninn.open_app("odin", supported=(1, 3))   # schema versions Odin was written for; never upgrades
 ```
 
 `open_app` raises `muninn.NotReady` if Asgard hasn't created Muninn yet, and `muninn.VersionError` if the schema is outside the app's range. Both messages say what to do.

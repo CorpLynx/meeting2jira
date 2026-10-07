@@ -14,7 +14,7 @@ they start with `../` or are one of the root-level tooling names.
 
 **`Asgard/` runs on its own rules.** Before touching it, read `Asgard/HANDOFF.md` (state, decisions,
 what's next) and `Asgard/AGENTS.md` (non-negotiables, definition of done). It targets Python 3.9+
-stdlib, every app writes through Muninn (`Asgard/asgard/muninn/`), Baldur biases every number down
+(packages declared and pinned; Muninn itself stdlib), every app writes through Muninn (`Asgard/asgard/muninn/`), Baldur biases every number down
 and never writes to Jira, and changes to estimates, approvals or posting get an independent review
 recorded in `Asgard/docs/`. The spec snapshots in `Asgard/docs/` are the current specs; the copy in
 `.kiro/specs/` is superseded. Until Odin moves into Muninn, nothing in `Odin/app/` imports
@@ -40,7 +40,7 @@ app/                      THE DELIVERABLE. Self-contained; copy this folder and 
   config.example.json       template copied by `init`; also the config reference by example
 
   src/                    ← the program. Two halves, split at the architectural seam, not by taste.
-    meeting2jira/           all logic, stdlib only. Must keep this exact directory name: it is what
+    meeting2jira/           all logic; packages only if pinned in app/requirements.txt (none today). Must keep this exact directory name: it is what
                             `python -m meeting2jira` resolves. app/src is put on PYTHONPATH.
       __main__.py   CLI (init, set-token, check, push, status, forget), logging setup, exit codes
       config.py     DEFAULTS, load/merge (keys starting "_" are comments), validate(), parse_hhmm
@@ -68,9 +68,9 @@ gui/                      Odin's Tkinter frontend (WORK IN PROGRESS, on-prem ori
                           its guardrail coverage is to be built - until that is done, the guardrail
                           tests do NOT scan it, so every non-negotiable passes vacuously for gui/.
 playwright-app/           Path C: an OWA exporter for "new Outlook", which has neither COM nor the
-                          Import/Export wizard. A SEPARATE deliverable on purpose - it needs pip
-                          (playwright), so folding it into app/ would forfeit the stdlib-only
-                          guarantee that test_guardrails.py enforces. It writes schema-v1 JSON and
+                          Import/Export wizard. A SEPARATE deliverable on purpose - it needs
+                          playwright (native: bundles node.exe), which Odin's daily run must not
+                          depend on, even now that pinned packages are allowed. It writes schema-v1 JSON and
                           shells out to the unmodified `python -m meeting2jira push --input`;
                           nothing under app/src/meeting2jira/ may change to accommodate it.
                           DORMANT, and not part of the installed deliverable. Superseded by Graph

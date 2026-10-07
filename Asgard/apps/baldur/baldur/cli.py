@@ -23,11 +23,11 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from asgard import muninn, paths
 from asgard.muninn import baldur as approvals
 
-from . import collect, gitread, report, store
+from . import collect, desk, github, gitread, report, store
 from . import estimate as E
 from . import settings as config
 
-SCHEMA = (2, 2)     # 2: squash copies are stored, and v_activity leaves them out
+SCHEMA = (2, 3)     # 2: squash copies are stored, and v_activity leaves them out; 3: hardening, nothing to change
 MAX_DAYS_BACK = 3650
 TASK_NAME = "Asgard Baldur collect"
 ENTRY = Path(__file__).resolve().parent.parent / "cli.py"
@@ -393,6 +393,56 @@ def cmd_keys(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespa
     return 0
 
 
+def github_client(s: config.Settings) -> "github.Client":
+    """A client for your GitHub, or CliError saying what's missing."""
+    host = s.github_host()
+    if not host:
+        raise CliError("GitHub is off. Name your server first: cli.py setup --set github_api=github.agency.gov")
+    token = github.load_token(host)
+    if not token:
+        raise CliError(f"No GitHub token for {host} yet. Create a read-only token on {host}, then run: "
+                       "cli.py github token")
+    return github.Client(s.github_api, token)
+
+
+def cmd_github(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    host = s.github_host()
+    if args.action == "token":
+        if not host:
+            raise CliError("GitHub is off. Name your server first: cli.py setup --set github_api=github.agency.gov")
+        if args.remove:
+            gone = github.delete_token(host)
+            print(f"Removed the token for {host}." if gone else f"There was no token for {host}.")
+            return 0
+        import getpass
+        token = getpass.getpass(f"Paste a read-only token for {host} (it isn't shown): ")
+        github.save_token(host, token)
+        print(f"Saved in Windows Credential Manager as \"{github.token_target(host)}\". Try: cli.py github sync")
+        return 0
+    if args.action == "sync":
+        res = github.sync(con, s, github_client(s))
+        print(f"GitHub {host} as {res.login}: {res.repos} {'repository' if res.repos == 1 else 'repositories'}, "
+              f"{res.pulls_changed} pull requests changed, {res.reviews_new} new reviews, "
+              f"{res.requested} reviews requested of you, {res.keyed_commits} commits keyed from pull requests "
+              f"({res.requests} requests, {res.unchanged} unchanged).")
+        for problem in res.problems:
+            print(f"  {problem}", file=sys.stderr)
+        return 1 if res.problems else 0
+    # status
+    if not host:
+        print("GitHub is off (github_api is empty). Baldur works from local git alone.")
+        return 0
+    token = github.load_token(host)
+    last = con.execute("SELECT max(finished_at) FROM sync_runs WHERE app = 'baldur' AND stream LIKE 'github:%' "
+                       "AND status IN ('ok', 'partial')").fetchone()[0]
+    print(f"GitHub          {s.github_api}")
+    print(f"Token           {'saved' if token else 'none: cli.py github token'}")
+    print(f"Last sync       {last or 'never'}")
+    for line in desk.review_lines(con):
+        print(line)
+    return 0
+
+
 def schedule_command(day: str, at: str, remove: bool = False, python: Optional[str] = None) -> List[str]:
     """The schtasks command that adds (or removes) the weekly collection for this user."""
     if remove:
@@ -503,6 +553,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("sha", metavar="SHA")
     p.add_argument("keys", nargs="*", metavar="KEY")
 
+    p = add("github", cmd_github, "Your pull requests and the reviews requested of you (read-only)")
+    p.add_argument("action", nargs="?", choices=("status", "sync", "token"), default="status")
+    p.add_argument("--remove", action="store_true", help="with token: remove the saved token")
+
     p = add("schedule", cmd_schedule, "Collect weekly with a scheduled task for you (Windows)")
     p.add_argument("--day", default="MON", help="MON to SUN (default MON)")
     p.add_argument("--time", default="09:00", help="24-hour time (default 09:00)")
@@ -541,7 +595,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 1
     try:
         return int(args.func(con, s, args) or 0)
-    except (CliError, collect.CollectError, muninn.MuninnError, config.SettingsError, gitread.GitError) as exc:
+    except (CliError, collect.CollectError, muninn.MuninnError, config.SettingsError, gitread.GitError,
+            github.GitHubError, desk.DeskError) as exc:
         print(f"Baldur: {exc}", file=sys.stderr)
         return 1
     except sqlite3.Error as exc:

@@ -20,11 +20,12 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from asgard import muninn
 from asgard.muninn import baldur as approvals
 
 from . import collect as collector
 from . import estimate as E
-from . import report, store
+from . import github, report, store
 from .settings import Settings
 
 
@@ -166,6 +167,61 @@ def estimate(con: sqlite3.Connection, settings: Settings, first: dt.date, last: 
 
 def collect(con: sqlite3.Connection, settings: Settings) -> collector.CollectResult:
     return collector.collect(con, settings)
+
+
+@dataclass
+class ReviewItem:
+    """A pull request waiting on you: a review requested of you, or a review of yours to read."""
+    kind: str                   # 'requested' or 'reviewed'
+    repo: str
+    number: int
+    title: str
+    who: str                    # its author, or the reviewer
+    state: str                  # for 'reviewed': approved or changes_requested
+    url: str
+    draft: bool = False
+
+    @property
+    def label(self) -> str:
+        return f"{self.repo}#{self.number}"
+
+
+def review_items(con: sqlite3.Connection, days: int = 7) -> List[ReviewItem]:
+    """Reviews requested of you (oldest first), then approvals and change requests on your
+    pull requests from the last `days` days. Reads Muninn only; github.sync fills it."""
+    out = [ReviewItem("requested", r["repo"], r["number"], r["title"], r["author"], "", r["url"], bool(r["is_draft"]))
+           for r in con.execute("SELECT coalesce(r.github_repo, r.name) AS repo, p.number, p.title, p.author, p.url, "
+                                "p.is_draft FROM pull_requests p JOIN repos r ON r.id = p.repo_id "
+                                "WHERE p.state = 'open' AND p.review_requested = 1 ORDER BY p.created_at, p.id")]
+    since = muninn.to_ts(dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days))
+    out += [ReviewItem("reviewed", r["repo"], r["number"], r["title"], r["reviewer"], r["state"], r["url"])
+            for r in con.execute("SELECT coalesce(r.github_repo, r.name) AS repo, p.number, p.title, p.url, "
+                                 "v.reviewer, v.state FROM pr_reviews v JOIN pull_requests p ON p.id = v.pr_id "
+                                 "JOIN repos r ON r.id = p.repo_id WHERE p.is_mine = 1 AND v.is_mine = 0 "
+                                 "AND v.state IN ('approved', 'changes_requested') AND v.submitted_at >= ? "
+                                 "ORDER BY v.submitted_at DESC", (since,))]
+    return out
+
+
+def review_lines(con: sqlite3.Connection) -> List[str]:
+    items = review_items(con)
+    asked = [i for i in items if i.kind == "requested"]
+    lines = [f"Reviews asked    {len(asked)}"]
+    lines += [f"  {i.label:<24} {i.title[:44]:<44} {i.who}{' (draft)' if i.draft else ''}" for i in asked]
+    done = [i for i in items if i.kind == "reviewed"]
+    if done:
+        lines.append(f"Your PRs, 7 days {len(done)} reviews")
+        lines += [f"  {i.label:<24} {i.state.replace('_', ' '):<18} by {i.who}" for i in done]
+    return lines
+
+
+def sync_github(con: sqlite3.Connection, settings: Settings) -> Optional[github.SyncResult]:
+    """One GitHub pass when GitHub is on and a token is saved; None otherwise (local git only)."""
+    host = settings.github_host()
+    token = github.load_token(host) if host else None
+    if not token:
+        return None
+    return github.sync(con, settings, github.Client(settings.github_api, token))
 
 
 def timesheet(view: DayView) -> str:

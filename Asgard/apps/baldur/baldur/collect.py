@@ -54,6 +54,7 @@ class RepoResult:
 @dataclass
 class CollectResult:
     repos: List[RepoResult] = field(default_factory=list)
+    pr_keyed: int = 0                 # commits whose keys or copy status changed from stored pull requests
 
     @property
     def failed(self) -> List[RepoResult]:
@@ -104,7 +105,99 @@ def collect(con: sqlite3.Connection, settings: Settings, only: Optional[Sequence
     result = CollectResult()
     for folder in repo_folders(found):
         result.repos.append(_collect_repo(con, settings, source, folder, emails, since))
+    # Pull requests synced before these commits arrived still key them: the order of collect and
+    # the GitHub sync doesn't matter.
+    result.pr_keyed = apply_pr_evidence(con, settings.project_keys)
     return result
+
+
+# --------------------------------------------------------------------------
+# Evidence from pull requests (method 'pr'), from what the GitHub sync stored
+# --------------------------------------------------------------------------
+
+def squash_commits(con: sqlite3.Connection) -> Dict[str, Set[str]]:
+    """{sha of the commit GitHub made merging one of your PRs: subjects of the PR's own commits}.
+
+    That commit is a copy (a squash), never work, unless GitHub listed it as one of the PR's own
+    commits, or it carries the subject of one of them (a rebase-merge keeps each commit's subject,
+    and its patch then counts once, like any cherry-pick).
+    """
+    out: Dict[str, Set[str]] = {}
+    for r in con.execute(
+            "SELECT p.id, p.merge_commit_sha FROM pull_requests p WHERE p.is_mine = 1 AND p.state = 'merged' "
+            "AND p.merge_commit_sha IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pull_request_commits m "
+            "WHERE m.pr_id = p.id AND m.sha = p.merge_commit_sha)"):
+        subjects = {s[0] for s in con.execute(
+            "SELECT DISTINCT c.subject FROM pull_request_commits m JOIN commits c ON c.sha = m.sha "
+            "WHERE m.pr_id = ?", (r[0],))}
+        out.setdefault(str(r[1]), set()).update(subjects)
+    return out
+
+
+def _smallest_pr_head(con: sqlite3.Connection, sha: str) -> Optional[str]:
+    """The head branch of the smallest of your PRs that lists sha (fewest commits, then lowest number).
+
+    A commit in a stacked PR and in the PR made for it, or in a feature PR and a release PR, belongs
+    to the one it was made for, which is the smallest; the choice doesn't depend on which PR GitHub
+    last changed.
+    """
+    row = con.execute(
+        "SELECT p.head_ref FROM pull_request_commits m JOIN pull_requests p ON p.id = m.pr_id "
+        "WHERE m.sha = ? AND p.is_mine = 1 "
+        "ORDER BY (SELECT count(*) FROM pull_request_commits x WHERE x.pr_id = p.id), p.number, p.id LIMIT 1",
+        (sha,)).fetchone()
+    return None if row is None else str(row[0])
+
+
+def apply_pr_evidence(con: sqlite3.Connection, projects: Sequence[str]) -> int:
+    """Bring every commit's 'pr' keys and squash copies in line with the stored pull requests.
+
+    Uses Muninn only (no network), so it runs after a GitHub sync and after a collection alike.
+    - A commit GitHub made when squash-merging your PR becomes a copy with no keys.
+    - Your commits in your PRs get the keys the smallest such PR's head branch names. If that head
+      names none, the PR is no evidence and the commit's message decides.
+    - A commit no PR lists any more loses its 'pr' keys and falls back to its message.
+    Reflog, branch and hand-set keys are never touched. Returns how many commits changed.
+    """
+    changed = 0
+    with muninn.transaction(con):
+        for sha, subjects in squash_commits(con).items():
+            for r in con.execute("SELECT id, subject FROM commits WHERE sha = ? AND is_mine = 1 AND is_merge = 0",
+                                 (sha,)).fetchall():
+                if r["subject"] in subjects:
+                    continue
+                con.execute("UPDATE commits SET is_merge = 1, patch_id = NULL WHERE id = ?", (r["id"],))
+                con.execute("DELETE FROM commit_work_items WHERE commit_id = ?", (r["id"],))
+                changed += 1
+        # Repositories with PRs of yours whose commits weren't read yet: their 'pr' keys can't be judged.
+        unread = {r[0] for r in con.execute("SELECT DISTINCT repo_id FROM pull_requests WHERE is_mine = 1 "
+                                            "AND commits_listed = 0")}
+        candidates = con.execute(
+            "SELECT c.id, c.sha, c.subject, c.repo_id FROM commits c WHERE c.is_mine = 1 AND c.is_merge = 0 AND ("
+            "c.sha IN (SELECT m.sha FROM pull_request_commits m JOIN pull_requests p ON p.id = m.pr_id "
+            "WHERE p.is_mine = 1) OR EXISTS (SELECT 1 FROM commit_work_items w WHERE w.commit_id = c.id "
+            "AND w.method = 'pr'))").fetchall()
+        for c in candidates:
+            stored = {(r[0], r[1]) for r in con.execute(
+                "SELECT work_item_key, method FROM commit_work_items WHERE commit_id = ?", (c["id"],))}
+            if any(m in ("manual", "reflog", "branch") for _, m in stored):
+                continue
+            head = _smallest_pr_head(con, c["sha"])
+            found = keys.branch_keys(head, projects) if head else []
+            if found:
+                want = {(k, "pr") for k in found}
+                if stored != want:
+                    con.execute("DELETE FROM commit_work_items WHERE commit_id = ?", (c["id"],))
+                    con.executemany("INSERT INTO commit_work_items (commit_id, work_item_key, method) "
+                                    "VALUES (?, ?, 'pr')", [(c["id"], k) for k in found])
+                    changed += 1
+            elif any(m == "pr" for _, m in stored) and (head is not None or c["repo_id"] not in unread):
+                con.execute("DELETE FROM commit_work_items WHERE commit_id = ?", (c["id"],))
+                con.executemany("INSERT INTO commit_work_items (commit_id, work_item_key, method) "
+                                "VALUES (?, ?, 'message')",
+                                [(c["id"], k) for k in keys.find_keys(c["subject"], projects)])
+                changed += 1
+    return changed
 
 
 def forget_other_githubs(con: sqlite3.Connection, github_host: Optional[str]) -> int:
@@ -153,7 +246,9 @@ def _collect_repo(con: sqlite3.Connection, settings: Settings, source: int, path
             # hold the branch they were made on. Collection order can't matter, because store.load()
             # treats a SHA as a copy if any clone's row says so.
             known = _all_mine(con) | {c.sha for c in mine}
-            copies = {c.sha for c in mine if c.is_github_squash or (c.squashed and set(c.squashed) <= known)}
+            merged = squash_commits(con)        # what GitHub made when it squash-merged your pull requests
+            copies = {c.sha for c in mine if c.is_github_squash or (c.squashed and set(c.squashed) <= known)
+                      or (c.sha in merged and c.subject not in merged[c.sha])}
             fingerprints = gitread.patch_ids(path, [c.sha for c in mine if c.sha not in copies
                                                     and not stored.get(c.sha)])
             reflogs = []
@@ -196,16 +291,18 @@ def _collect_repo(con: sqlite3.Connection, settings: Settings, source: int, path
                 run.items_changed += res.commits_new + copies_new + res.reflog_new
             run.set_cursor(run.now)
     except (gitread.GitError, muninn.MuninnError, sqlite3.Error, OSError, ValueError, UnicodeError) as exc:
-        res.error = str(exc) or type(exc).__name__
+        res.error = muninn.scrub(str(exc)) or type(exc).__name__     # git errors can echo a remote URL
     return res
 
 
 def _upsert_repo(con: sqlite3.Connection, info: gitread.RepoInfo, source: int, now: str) -> int:
     local = str(info.path.resolve())
-    github = info.github_repo
+    # GitHub's owner/name is case-insensitive: CSB/Asgard and csb/asgard are one repository.
+    github = info.github_repo.lower() if info.github_repo else None
+    remote = muninn.redact_url(info.remote_url)        # a token typed into the remote URL isn't stored
     row = con.execute("SELECT id FROM repos WHERE local_path = ?", (local,)).fetchone()
     if github:
-        other = con.execute("SELECT id, local_path FROM repos WHERE github_repo = ?", (github,)).fetchone()
+        other = con.execute("SELECT id, local_path FROM repos WHERE lower(github_repo) = ?", (github,)).fetchone()
         if other is not None and (row is None or other["id"] != row["id"]):
             if other["local_path"] is not None:
                 github = None            # a second clone of the same GitHub repository keeps only its folder
@@ -217,11 +314,11 @@ def _upsert_repo(con: sqlite3.Connection, info: gitread.RepoInfo, source: int, n
     if row:
         con.execute("UPDATE repos SET name = ?, local_path = ?, remote_url = ?, default_branch = ?, "
                     "github_repo = ?, source_id = ?, last_scanned_at = ? WHERE id = ?",
-                    (info.name, local, info.remote_url, info.default_branch, github, source, now, row["id"]))
+                    (info.name, local, remote, info.default_branch, github, source, now, row["id"]))
         return int(row["id"])
     return int(con.execute("INSERT INTO repos (source_id, name, github_repo, local_path, remote_url, default_branch, "
                            "last_scanned_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
-                           (source, info.name, github, local, info.remote_url, info.default_branch, now)).fetchone()[0])
+                           (source, info.name, github, local, remote, info.default_branch, now)).fetchone()[0])
 
 
 def _upsert_commit(con: sqlite3.Connection, repo_id: int, c: gitread.CommitRec, branch: Optional[str],
