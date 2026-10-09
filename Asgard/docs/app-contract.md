@@ -27,9 +27,9 @@ An app that meets this contract can be installed, launched, scheduled, diagnosed
 | Network | HTTPS only, TLS always verified, the Windows store trusted, `ca_bundle` and proxy honoured *(planned: `asgard.http`)* |
 | Leaving Asgard | Anything sent to another system needs a person's approval first and uses the outgoing protocol (sending row, marker, settle) |
 | Windows | Per user, no admin, HKCU only; child processes with no console window; per-user scheduled tasks only through Asgard *(planned: `asgard.scheduler`)* |
-| UI | tkinter; network and git work on a worker thread polled with `after()`; Asgard's palette, fonts and DPI handling *(planned: `asgard.ui`)*, not imported from `launcher.py` |
+| UI | New windows use Asgard's shared window (`asgard.ui`, PySide6 + QML; decided Oct 2026): add `apps/<id>/ui/manifest.json` naming your views (QML files in that folder), your theme tokens, and a plain-Python backend class the window calls through a bridge. Backends never import Qt; slow work goes through `callAsync`, long jobs through `spawn` as a child process. Colours come only from `theme.*` tokens (`asgard/ui/theme.py`). The launcher and Baldur's window stay tkinter until they're moved |
 | Updates | Never self-update or download code ([updates.md](updates.md)) |
-| Dependencies | Declared and pinned ([dependency-policy.md](dependency-policy.md)); optional imports where possible |
+| Dependencies | Declared and pinned ([dependency-policy.md](dependency-policy.md)); optional imports where possible; each one documented in [MODULES.md](../MODULES.md) with where it's used and its alternatives |
 
 ## Definition of done for an app change
 

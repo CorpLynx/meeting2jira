@@ -31,6 +31,21 @@ def find_keys(text: Optional[str], projects: Iterable[str], *, any_case: bool = 
     return found
 
 
+def message_keys(text: Optional[str]) -> List[str]:
+    """Every key in a commit message, whatever its project (upper-case projects only, as find_keys).
+
+    Stored with the commit, so a later change to project_keys can pick from them without the
+    message, which Muninn doesn't keep.
+    """
+    found: List[str] = []
+    for m in _KEY_RE.finditer(text or ""):
+        project, number = m.group(1), m.group(2)
+        key = f"{project}-{int(number)}"
+        if project == project.upper() and key not in found:
+            found.append(key)
+    return found
+
+
 def branch_keys(branch: Optional[str], projects: Iterable[str]) -> List[str]:
     """Keys in a branch name; remote prefixes such as origin/ don't matter."""
     if not branch:

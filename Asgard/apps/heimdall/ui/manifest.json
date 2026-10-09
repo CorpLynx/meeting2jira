@@ -1,0 +1,15 @@
+{
+  "_help": "Heimdall's views in Asgard's shared window. See asgard/ui/registry.py for the format.",
+  "app": "heimdall",
+  "name": "Heimdall",
+  "subtitle": "SeCcHm submissions",
+  "theme": {
+    "light": {"accent": "#5B4B9A"},
+    "dark": {"accent": "#A898E6"}
+  },
+  "backend": "heimdall.ui_backend:Backend",
+  "views": [
+    {"id": "templates", "title": "Templates", "icon": "Tp", "qml": "Templates.qml"},
+    {"id": "form", "title": "Form", "icon": "Fm", "qml": "Form.qml"}
+  ]
+}

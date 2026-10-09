@@ -12,9 +12,7 @@ It started from a generic Python + PowerShell scaffold and was adapted to this p
   coverage and linting.
 - **PowerShell calls Python here, not the other way round.** That's why there is no
   `fake_powershell` fixture. PowerShell runtime behavior is verified by `Odin/app/tools/Invoke-WindowsChecks.ps1`, not by mocks.
-- **Nothing in this file set lives in `Odin/app/`.** The deliverable stays self-contained. Its
-  packages are only the ones pinned in `Odin/app/requirements.txt`, each the best module for its
-  job with its on-premises alternatives noted (`Asgard/docs/dependency-policy.md`).
+- **Nothing in this file set lives in `Odin/app/`.** The deliverable stays self-contained; any package it uses is the best module for its job, pinned in `Odin/app/requirements.txt` and listed in `Odin/MODULES.md` with its alternatives.
 
 ## What's in the box
 

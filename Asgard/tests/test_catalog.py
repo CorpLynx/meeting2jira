@@ -53,8 +53,9 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(states["odin"], NEEDS_SETUP)
         self.assertEqual(states["valhalla"], READY)
         self.assertEqual(states["baldur"], READY, "Baldur's window ships with Asgard (0.3.1)")
+        self.assertEqual(states["heimdall"], READY, "Heimdall's window ships with Asgard (the shared Qt window)")
         for app_id in ids:
-            if app_id not in ("odin", "valhalla", "baldur"):
+            if app_id not in ("odin", "valhalla", "baldur", "heimdall"):
                 self.assertEqual(states[app_id], COMING_SOON, app_id)
 
     def test_monograms_are_readable(self) -> None:

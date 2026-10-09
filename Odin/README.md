@@ -59,7 +59,7 @@ Run `py -3 -m meeting2jira ...` from the repo root, because that's how Python fi
 | **OWA's own calendar API**, read through a browser Playwright drives | pip (`playwright`), plus installed Edge | **Path C — contingency only, and dormant. Not part of the installed deliverable.** It lives in `playwright-app/`, which is never copied to the workstation, so `app/` stays stdlib-only. It exists for one scenario: forced onto new Outlook (which removes COM *and* the Import/Export wizard, breaking A and B at once) *and* Graph not yet approved. It reads undocumented internal APIs, so prefer Path D wherever it is available. See `playwright-app/README.md` for its status and removal condition. |
 | Exchange Web Services (EWS) | — | **No.** Microsoft is disabling EWS in Exchange Online starting Oct 1, 2026. |
 | Published ICS calendar URL | Anonymous calendar publishing | **No.** Usually disabled in federal tenants, and it would require an RRULE parser. |
-| pywin32 / requests / keyring | pip access | **Avoided.** Everything in `app/` is stdlib, so there are no packages to get approved or to list in an SBOM. |
+| pywin32 / requests / keyring | pip access | **Not needed.** Packages are allowed when declared and pinned, but `app/` still uses only the standard library, so there's nothing to get approved. [MODULES.md](MODULES.md) lists the stdlib modules used in their place, and every package the other folders use with its alternatives. |
 | `msal` | pip access | **Accepted for Path D only**, and in a separate folder — never in `app/`. Hand-rolling OAuth PKCE, a loopback listener and token refresh is the part most likely to be subtly wrong, and `msal` also unlocks brokered sign-in (below). Plain `msal` is pure Python; the `msal[broker]` extra pulls the native `pymsalruntime`, which is a larger approval surface and a deliberate, separate decision. |
 
 ### Why PowerShell *and* Python
@@ -313,7 +313,7 @@ A summary to share with your ISSO:
   - Logs contain meeting subjects: `meeting2jira.log` rotates at 1 MB with 3 backups (so ~4 MB at most, size-capped rather than time-limited), and the PowerShell `sync_*.log` transcripts are pruned after 30 days.
   - **Subjects of private items are withheld from the logs**, not just from Jira, so `skip_private` keeps them out of scope entirely.
   - The Outlook CSV you export by hand on Path B contains full meeting bodies. Delete it after pushing; nothing here does that for you.
-- **Footprint**: Python standard library only, with no third-party packages. There's no admin requirement and no persistent service beyond the optional per-user scheduled task.
+- **Footprint**: Python standard library only today; any package would be pinned in `app/requirements.txt` and listed in `MODULES.md`. There's no admin requirement and no persistent service beyond the optional per-user scheduled task.
 
 ## Troubleshooting
 
@@ -352,7 +352,7 @@ A summary to share with your ISSO:
     - GCC High: `graph.microsoft.us` and `login.microsoftonline.us`
     - DoD: `dod-graph.microsoft.us` and `login.microsoftonline.us`
 
-  It will live in `graph-app/` and use `msal` — `app/` stays stdlib-only, which is why it is a separate folder. `msal` replaces a hand-rolled PKCE flow, loopback listener and token-refresh logic, and it also offers brokered Windows sign-in (silent, and the device satisfies MFA/device-compliance Conditional Access), which matters for an unattended scheduled task. Note that the broker extra pulls the native `pymsalruntime`, a bigger approval surface than pure-Python `msal`: decide that one with IT. The token cache is DPAPI-protected via the existing `credstore.py`. Nothing downstream changes, and switching sources cannot duplicate sub-tasks because `content_hash` is source-independent. See HANDOFF.md P2-C.
+  It will live in `graph-app/` and use `msal` — it's a separate folder so the daily run never depends on it. `msal` replaces a hand-rolled PKCE flow, loopback listener and token-refresh logic, and it also offers brokered Windows sign-in (silent, and the device satisfies MFA/device-compliance Conditional Access), which matters for an unattended scheduled task. Note that the broker extra pulls the native `pymsalruntime`, a bigger approval surface than pure-Python `msal`: decide that one with IT. The token cache is DPAPI-protected via the existing `credstore.py`. Nothing downstream changes, and switching sources cannot duplicate sub-tasks because `content_hash` is source-independent. See HANDOFF.md P2-C.
 
 ## Repo layout
 
@@ -429,7 +429,8 @@ powershell.exe -NoProfile -File tools\Invoke-WindowsChecks.ps1   # Windows-only 
 `Invoke-WindowsChecks.ps1` covers what a macOS or Linux checkout cannot: real 5.1 parsing, the DPAPI round trip, the PowerShell-to-Python export handoff, the CSV push path, and the entry point. It does not touch Outlook or Jira, so it is safe to run on the real workstation. `infra/windows-test-vm/` exists to run it without one; see [its README](../infra/windows-test-vm/README.md).
 
 `tests/test_guardrails.py` enforces the project's non-negotiables:
-- every import is the standard library or a package pinned in `requirements.txt`, and nothing imports Asgard
+- every import is the standard library or a package pinned in `app/requirements.txt`, and every pinned package (in `app/`, `graph-app/` and `playwright-app/`) has a section in `MODULES.md`
+- nothing imports Asgard
 - TLS verification never disabled
 - no execution-policy bypass
 - no guarded Outlook properties

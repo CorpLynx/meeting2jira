@@ -1,6 +1,6 @@
 """Guardrails for the project's non-negotiables (documented in the repo: HANDOFF.md, .kiro/steering/tech.md).
 
-These fail loudly if an iteration adds a third-party dependency, weakens TLS, reads guarded Outlook
+These fail loudly if an iteration adds an undeclared or undocumented dependency (see ../MODULES.md), weakens TLS, reads guarded Outlook
 properties by default, adds an execution-policy bypass, or breaks Constrained Language Mode safety.
 Change a rule here only with a deliberate, documented decision.
 """
@@ -135,6 +135,89 @@ class PythonGuardrails(unittest.TestCase):
         from meeting2jira.config import ConfigError, build_config
         with self.assertRaises(ConfigError):
             build_config({"jira": {"base_url": "http://jira.example.gov", "default_parent": "P-1"}})
+
+
+ODIN = ROOT.parent                                      # Odin/: app/ and its sibling deliverables
+MODULES_DOC = ODIN / "MODULES.md"
+# Every Odin deliverable that may pin packages, and the folder its code lives in.
+DELIVERABLES = {"app": ROOT, "graph-app": ODIN / "graph-app", "playwright-app": ODIN / "playwright-app"}
+DOC_ROWS = ("Used in", "If it's missing", "Stdlib alternative", "Package alternatives")
+
+
+def _pins(path: Path):
+    names = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        m = _PIN.match(line.split("#", 1)[0].strip())
+        if m:
+            names.add(m.group(1).lower().replace("-", "_"))
+    return names
+
+
+def _doc_sections(text: str):
+    """{package heading, normalised: {row: cell}} from MODULES.md's "### name" tables."""
+    sections, current = {}, None
+    for line in text.splitlines():
+        if line.startswith("### "):
+            current = sections.setdefault(line[4:].strip().strip("`").lower().replace("-", "_"), {})
+        elif line.startswith("## "):
+            current = None
+        elif current is not None and line.startswith("| ") and line.count("|") >= 3:
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if cells[0] and not set(cells[0]) <= {"-", " "}:
+                current[cells[0]] = " | ".join(cells[1:]).strip()
+    return sections
+
+
+class ModulesDocGuardrails(unittest.TestCase):
+    """Odin/MODULES.md says, for every package any Odin deliverable pins, where it's used and what
+    to use instead if it isn't available on-prem.
+
+    Docs don't ship inside app/, so on a workstation copy of app/ alone (no ../MODULES.md and no
+    sibling folders) this skips; in the repo it always runs.
+    """
+
+    def setUp(self):
+        present = {name: folder for name, folder in DELIVERABLES.items() if (folder / "requirements.txt").is_file()}
+        if not MODULES_DOC.is_file() and set(present) == {"app"}:
+            self.skipTest("app/ copied on its own: Odin/MODULES.md isn't shipped with it")
+        self.assertTrue(MODULES_DOC.is_file(), "write Odin/MODULES.md: each package, where it's used, alternatives")
+        self.pins = {pkg: name for name, folder in present.items() for pkg in _pins(folder / "requirements.txt")}
+        self.sections = _doc_sections(MODULES_DOC.read_text(encoding="utf-8"))
+        self.present = present
+
+    def test_every_package_has_a_section_and_nothing_else_does(self):
+        self.assertEqual(sorted(self.sections), sorted(self.pins),
+                         "Odin/MODULES.md needs one '### name' section per pinned package, and no others")
+
+    def test_every_section_says_where_and_what_instead(self):
+        for pkg in self.pins:
+            for row in DOC_ROWS:
+                with self.subTest(package=pkg, row=row):
+                    self.assertTrue(self.sections.get(pkg, {}).get(row), f'MODULES.md "{pkg}" needs a "{row}" row')
+
+    def test_every_file_that_imports_a_package_is_listed(self):
+        for pkg, deliverable in self.pins.items():
+            folder = self.present[deliverable]
+            files = []
+            for path in sorted(folder.rglob("*.py")):
+                if "tests" in path.relative_to(folder).parts or "__pycache__" in path.parts:
+                    continue
+                for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                    mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                            else [node.module] if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module
+                            else [])
+                    if any(m.split(".")[0].lower() == pkg for m in mods):
+                        files.append(path.relative_to(ODIN).as_posix())
+                        break
+            self.assertTrue(files, f"nothing in {deliverable}/ imports {pkg}; remove its pin")
+            used_in = self.sections.get(pkg, {}).get("Used in", "")
+            for rel in files:
+                with self.subTest(package=pkg, file=rel):
+                    self.assertIn(rel, used_in, f'add {rel} to "Used in" for {pkg} in Odin/MODULES.md')
+
+    def test_the_doc_parser_reads_rows(self):
+        parsed = _doc_sections("### Some-Pkg\n| | |\n| --- | --- |\n| Used in | `a.py` |\n## Next\n| Used in | x |\n")
+        self.assertEqual(parsed, {"some_pkg": {"Used in": "`a.py`"}})
 
 
 class PowerShellGuardrails(unittest.TestCase):

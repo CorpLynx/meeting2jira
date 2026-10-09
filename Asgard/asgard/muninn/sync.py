@@ -26,7 +26,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Set
 
 from . import guard
 from .db import MuninnError, retry_busy, transaction, utcnow
-from .redact import redact_url, scrub, scrub_value
+from .redact import VERBATIM_KEYS, redact_url, scrub, scrub_value
 
 APPS = ("muninn", "huginn", "odin", "baldur", "loki", "freya", "heimdall", "bifrost", "ysildir", "valkyrie")
 _LOST = "SQLite rolled this run's changes back on its own (disk full or I/O error), so the run stops here."
@@ -69,9 +69,10 @@ def emit(con: sqlite3.Connection, app: str, kind: str, entity_type: str, entity_
     """Append one event. Call inside the transaction that made the change.
 
     Events are kept for the life of the database, so anything in the payload that looks like a
-    credential is masked first (redact.py).
+    credential is masked first (redact.py), except fields copied verbatim from a source system's own
+    record, such as a Jira summary (redact.VERBATIM_KEYS).
     """
-    body = json.dumps(scrub_value(payload or {}), default=str)
+    body = json.dumps(scrub_value(payload or {}, VERBATIM_KEYS), default=str)
     return int(con.execute(
         "INSERT INTO events (app, kind, entity_type, entity_id, ref, run_id, payload) "
         "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",

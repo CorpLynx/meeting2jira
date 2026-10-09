@@ -292,10 +292,10 @@ if one("PRAGMA user_version") >= 2:
 # =====================================================================
 # Key resolution: v_unknown_keys
 # =====================================================================
-# v_unknown_keys retries a miss after 7 days of the real clock ('now'), so these are dated from it:
-# fixed dates turned the recent miss stale a week after the check was written.
-con.execute(ALIAS, ("GONE-9", None, "not_found", one("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 days')")))
-con.execute(ALIAS, ("OLD-2", None, "not_found", one("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-12 days')")))
+# v_unknown_keys compares with the real clock ('now', '-7 days'), so these two are relative to it;
+# fixed dates here made the checks start failing a week after they were written.
+con.execute(ALIAS, ("GONE-9", None, "not_found", one("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 day')")))
+con.execute(ALIAS, ("OLD-2", None, "not_found", one("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-20 days')")))
 unknown = [r[0] for r in rows("SELECT key FROM v_unknown_keys ORDER BY key")]
 check("v_unknown_keys: new keys and stale misses, not moved or recent misses",
       unknown == ["NEW-7", "OLD-2", "POR-88", "POR-90"], unknown)

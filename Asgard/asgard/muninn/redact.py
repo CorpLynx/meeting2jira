@@ -40,11 +40,21 @@ _STRONG_PAIR = re.compile(r"(?i)(?<![A-Za-z0-9])(" + _PREFIX + _STRONG + r"[\"']
 _WEAK_PAIR = re.compile(r"(?i)(?<![A-Za-z0-9])(" + _PREFIX + _WEAK + r"[\"']?\s*[:=]\s*)" + _VALUE)
 _QUERY = re.compile(r"(?i)([?&](?:" + _PREFIX + r"(?:access_token|token|api_key|apikey|key|sig|signature|password|"
                     r"pass|pwd|secret|private_token|auth|code))=)[^&#\s]+")
+# An environment-style name and its value separated by a space: "JIRA_TOKEN abc123...".
+_ENV_SPACE = re.compile(r"(?<![A-Za-z0-9_])((?:[A-Z][A-Z0-9]*_)+(?:TOKEN|PAT|SECRET|PASSWORD|PASSWD|PWD|KEY|APIKEY)"
+                        r"\s+)([^\s,;\"']+)")
+# curl -u user:password, --user user:password
+_CURL_USER = re.compile(r"((?:^|\s)(?:-u|--user)\s+[\"']?[^\s:\"']+:)([^\s\"']+)")
 _KNOWN_TOKEN = re.compile(r"(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
                           r"|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,}"
                           r"|xox[abprs]-[A-Za-z0-9\-]{10,})(?![A-Za-z0-9])")
 # scheme://userinfo@host: userinfo may hold '@' (a typed password) but not '/' or whitespace.
 _URL_USERINFO = re.compile(r"(?P<scheme>\b[A-Za-z][A-Za-z0-9+.\-]*://)(?P<info>[^\s/?#]*)@(?=[^\s@/?#]+)")
+# user:password@host where a typed password holds '/' (not valid in a URL, but people paste it).
+# "host:8443/path@x" is a port and a path, not a password, so a value starting with digits and
+# a '/' is left alone.
+_URL_SLASH_PASSWORD = re.compile(r"(?P<scheme>\b[A-Za-z][A-Za-z0-9+.\-]*://)(?P<user>[^\s/:@?#]+):"
+                                 r"(?!\d+(?:/|$))(?P<pw>[^\s@?#]*/[^\s@?#]*)@(?=[A-Za-z0-9.\-]+(?:[:/?#]|$|\s))")
 _TOKEN_USER = re.compile(r"^(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,}|[A-Za-z0-9_\-]{32,})$")
 
 
@@ -78,12 +88,15 @@ def scrub(text: Optional[str]) -> Optional[str]:
         return text
     out = _PRIVATE_KEY.sub(MASK, text)
     out = _COOKIE.sub(lambda m: m.group(1) + MASK, out)
+    out = _URL_SLASH_PASSWORD.sub(lambda m: f"{m.group('scheme')}{m.group('user')}:{MASK}@", out)
     out = _URL_USERINFO.sub(_userinfo, out)
     out = _QUERY.sub(lambda m: m.group(1) + MASK, out)
     out = _AUTH_HEADER.sub(lambda m: m.group(1) + (m.group(2) + " " if m.group(2) else "") + MASK
                            if _credential_shaped(m.group(3)) else m.group(0), out)
     out = _SCHEME_TOKEN.sub(lambda m: f"{m.group(1)}{m.group(2)}{MASK}" if _credential_shaped(m.group(3))
                             else m.group(0), out)
+    out = _ENV_SPACE.sub(lambda m: m.group(1) + MASK if _credential_shaped(m.group(2)) else m.group(0), out)
+    out = _CURL_USER.sub(lambda m: m.group(1) + MASK, out)
     out = _STRONG_PAIR.sub(lambda m: m.group(1) + _mask_value(m.group(2)), out)
     # name=value (config, environment, query style) is masked whatever the value; "name: value"
     # reads like prose, so there the value must look like a credential.
@@ -92,24 +105,36 @@ def scrub(text: Optional[str]) -> Optional[str]:
     return _KNOWN_TOKEN.sub(MASK, out)
 
 
-def scrub_value(value: Any) -> Any:
+# Payload fields copied from a source system's own record (a Jira summary, a commit subject).
+# They are stored unscrubbed in their own tables, so masking the copy protects nothing, and it
+# would turn "Password: 15-character minimum" into "Password: ***" in the history.
+VERBATIM_KEYS = frozenset({"summary", "title", "subject", "status", "from", "to", "key", "resolution"})
+
+
+def scrub_value(value: Any, verbatim: frozenset = frozenset()) -> Any:
     """scrub() applied to every string inside a JSON-able value, dict keys included.
 
     Other objects (an exception, bytes, a set) become scrubbed text or lists, so nothing reaches
-    json.dumps unscrubbed.
+    json.dumps unscrubbed. Values under a key in `verbatim` (at any depth) are kept as they are,
+    if they are plain text or lists of it.
     """
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
         return scrub(value)
     if isinstance(value, dict):
-        return {_key(k): scrub_value(v) for k, v in value.items()}
+        return {_key(k): (v if k in verbatim and _plain(v) else scrub_value(v, verbatim)) for k, v in value.items()}
     if isinstance(value, (list, tuple, set, frozenset)):
         items = sorted(value, key=repr) if isinstance(value, (set, frozenset)) else value
-        return [scrub_value(v) for v in items]
+        return [scrub_value(v, verbatim) for v in items]
     if isinstance(value, (bytes, bytearray)):
         return scrub(bytes(value).decode("utf-8", "replace"))
     return scrub(str(value))
+
+
+def _plain(v: Any) -> bool:
+    return v is None or isinstance(v, (str, int, float, bool)) or (
+        isinstance(v, (list, tuple)) and all(x is None or isinstance(x, (str, int, float, bool)) for x in v))
 
 
 def _key(k: Any) -> Any:
@@ -130,5 +155,6 @@ def redact_url(url: Optional[str]) -> Optional[str]:
             return f"{m.group('scheme')}{user}@" if user and not _TOKEN_USER.match(user) else m.group("scheme")
         return m.group("scheme") if _TOKEN_USER.match(info) else m.group(0)
 
-    out = _URL_USERINFO.sub(drop, url)
+    out = _URL_SLASH_PASSWORD.sub(lambda m: f"{m.group('scheme')}{m.group('user')}@", url)
+    out = _URL_USERINFO.sub(drop, out)
     return scrub(out)

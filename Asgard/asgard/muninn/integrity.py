@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from . import keys
-from .db import (BusyError, MuninnError, _migration_statements, ago, available_migrations, retry_busy,
+from .db import (BusyError, MuninnError, _migration_statements, ago, available_migrations, latest_version, retry_busy,
                  transaction, user_version, utcnow)
 
 # How long pruned data is kept, in days, once retention is on (muninn-design.md, "retention").
@@ -215,6 +215,8 @@ def repair_schema(con: sqlite3.Connection) -> Tuple[List[str], List[str]]:
     Returns (what was done, what couldn't be). Tables can't be rebuilt this way: a missing or
     altered table is reported for a restore. Run on Asgard's own connection.
     """
+    if user_version(con) > latest_version():
+        return [], [f"Muninn is at version {user_version(con)}, newer than this Asgard; update Asgard instead"]
     drift = schema_drift(con)
     if not drift:
         return [], []
@@ -359,7 +361,12 @@ def check(con: sqlite3.Connection, *, full: bool = True) -> CheckReport:
         report.add("error", "search", f"The search index is damaged ({lines[0]}). Your data is not affected.",
                    REPAIR_FIX)
 
-    drift = schema_drift(con)
+    if user_version(con) > latest_version():
+        report.add("warning", "schema", f"Muninn is at version {user_version(con)}, newer than this Asgard knows "
+                   f"({latest_version()}), so its schema wasn't checked.", "Update Asgard.")
+        drift = SchemaDrift()
+    else:
+        drift = schema_drift(con)
     for kind, name in drift.missing:
         report.add("error", "schema", f"The {kind} {name} is missing, so a rule it enforced isn't enforced.",
                    RESTORE_FIX if kind == "table" else REPAIR_FIX)
@@ -403,7 +410,8 @@ def check(con: sqlite3.Connection, *, full: bool = True) -> CheckReport:
     for r in con.execute(
             "SELECT d.local_date, d.work_item_key, d.approved_minutes, (sum(w.seconds) + 59) / 60 AS sent "
             "FROM v_day_status d JOIN worklogs w ON w.work_item_id = d.work_item_id AND w.origin = 'baldur' "
-            "AND w.state IN ('sending', 'posted') AND w.started_at >= d.day_start AND w.started_at < d.day_end "
+            "AND w.state IN ('sending', 'posted') JOIN day_proposals wp ON wp.id = w.proposal_id "
+            "AND wp.local_date = d.local_date "
             "GROUP BY d.local_date, d.work_item_key, d.approved_minutes HAVING sent > d.approved_minutes"):
         report.add("warning", "worklogs",
                    f"{r['work_item_key']} on {r['local_date']}: Asgard sent {r['sent']} min to Jira but you now "
@@ -414,7 +422,9 @@ def check(con: sqlite3.Connection, *, full: bool = True) -> CheckReport:
     for table, col in KEY_COLUMNS:
         if table not in present:          # a file at an older schema version than this code
             continue
-        bad = [r[0] for r in con.execute(f"SELECT DISTINCT {col} FROM {table} WHERE {col} IS NOT NULL")
+        # Superseded and rejected proposals are final and post nothing, so their old keys don't matter.
+        live = " AND status IN ('proposed', 'approved')" if table == "day_proposals" else ""
+        bad = [r[0] for r in con.execute(f"SELECT DISTINCT {col} FROM {table} WHERE {col} IS NOT NULL{live}")
                if not keys.is_key(r[0])]
         if bad:
             shown = ", ".join(repr(k) for k in bad[:5]) + (" ..." if len(bad) > 5 else "")
@@ -503,6 +513,10 @@ def repair(con: sqlite3.Connection) -> List[str]:
     lines = file_check(con)
     if lines != ["ok"] and not search_only(lines):
         raise MuninnError("The database file itself is damaged, which a repair can't fix. " + RESTORE_FIX)
+    if user_version(con) > latest_version():
+        raise MuninnError(f"Muninn is at version {user_version(con)}, newer than this Asgard knows "
+                          f"({latest_version()}). Update Asgard; repairing with an older one would undo the newer "
+                          "version's rules.")
     done, failed = repair_schema(con)
     out = [f"Schema: {d}." for d in done]
     out.append(f"Rebuilt the search index ({repair_search(con)} entries).")

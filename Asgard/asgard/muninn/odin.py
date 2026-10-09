@@ -743,9 +743,10 @@ def begin_meeting_post(con: sqlite3.Connection, calendar_event_id: int, key: Opt
                                             (calendar_event_id,))}
         if states & {"sending", "posted"} or ("deleted" in states and not again):
             return None
-        # The same meeting synced from another calendar (Outlook and Graph) is the same time.
+        # The same meeting synced from another calendar (Outlook and Graph), or sent again after the
+        # first copy left the calendar, is the same time: logged once is logged.
         twin = con.execute("SELECT 1 FROM worklogs w JOIN calendar_events e ON e.id = w.calendar_event_id "
-                           "WHERE e.id <> ? AND e.deleted_at IS NULL AND lower(trim(e.title)) = lower(trim(?)) "
+                           "WHERE e.id <> ? AND lower(trim(e.title)) = lower(trim(?)) "
                            "AND e.starts_at = ? AND e.ends_at = ? AND w.state IN ('sending', 'posted') LIMIT 1",
                            (calendar_event_id, ev["title"], ev["starts_at"], ev["ends_at"])).fetchone()
         if twin:

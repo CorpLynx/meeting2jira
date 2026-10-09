@@ -132,7 +132,7 @@ comment says so.
 
 ## Heimdall from the command line
 
-Heimdall fills a SeCcHm request in Edge from a saved template, then stops so you can review it and click **Submit** yourself. Its tile says **Coming soon** until its window is built; the commands work today:
+Heimdall fills a SeCcHm request in Edge from a saved template, then stops so you can review it and click **Submit** yourself. Its tile opens Heimdall's window (see below), which does everything these commands do; the commands also work on their own:
 
 ```
 cd /d "%LOCALAPPDATA%\Asgard\app\apps\heimdall"
@@ -152,6 +152,29 @@ heimdall.cmd fill -t "Monthly scan"
 - **If the form won't open,** run `fill --trace` and open the trace with `playwright show-trace`. The trace holds your session and screenshots of the form; delete it afterwards and don't share it. Set `"ui": "portal"` in the form file to use the Service Portal page instead of the classic form.
 
 `fill` needs **Playwright for Python**, installed for the same Python that `heimdall.cmd` finds, and Edge's `RemoteDebuggingAllowed` policy must not be off (check `edge://policy`). Playwright runs a bundled `node.exe`, so if your computer only allows programs from approved folders, ask IT to install it in one. Every other command works without Playwright. `heimdall.cmd` finds Python the same way `baldur.cmd` does; if `.cmd` files are blocked, run `py -3 cli.py` from the same folder. Add `--json` to `fields`, `template list`, `template show` or `fill --dry-run` for output a program can read.
+
+## The shared window
+
+Heimdall's tile opens Asgard's shared window: a sidebar with **Dashboard**, the app's own pages and **Settings**. Every app that adds pages uses the same window, so they look and work alike. `py -3 -m asgard.ui` (run from `%LOCALAPPDATA%\Asgard\app`) opens one window with every app's pages.
+
+- **Heimdall's pages.** **Templates** lists your templates; pick one to see each field's value and where it comes from, then **Fill in Edge**, **Dry run**, **Edit** or **Delete**. **New template** shows every field on the form; leave a field empty to leave it as it is. A fill runs `heimdall fill` in the background and shows its progress; **Stop** ends it. **Form** shows what Heimdall read from the form file and can create it the first time.
+- **Dashboard** shows a card for each thing that needs you (templates that need fixing, a form not set up yet, Muninn's counts). Click one to go there.
+- **Settings** has Light, Dark or Match Windows, text size, and an accent colour for each app. Changes apply straight away. Text in an accent colour is adjusted if needed so it stays readable. Settings also lists each app's settings files with **Open** buttons.
+- **Keys.** Tab moves between controls, Enter or Space opens a sidebar page, Alt+Left goes back, F5 reloads the page.
+
+The window needs **PySide6-Essentials** (approved, pinned in `requirements.txt`) for the Python the tile uses. Without it the tile says what to install; the command-line tools don't need it.
+
+Your colour and text-size choices are in `%LOCALAPPDATA%\Asgard\settings\ui.json`, which you can also edit by hand:
+
+```json
+{
+  "mode": "dark",
+  "theme": {"fontSize": 14},
+  "apps": {"heimdall": {"accent": "#6B4FBF"}, "odin": {"dark": {"accent": "#7FA7E8"}}}
+}
+```
+
+Any token can be set for every app (`theme`) or one app (`apps`), in both modes or just `light` or `dark`. Colours: `background`, `surface`, `surfaceHigh`, `sidebar`, `border`, `borderSoft`, `text`, `textMuted`, `textDim`, `accent`, `success`, `warning`, `error`. Sizes: `fontSize`, `radiusSmall`, `radiusMedium`, `radiusLarge`, `sidebarWidth`, `spacing`. Fonts: `fontFamily`, `monoFamily`. A bad value is ignored with a warning on the Settings page; if the file can't be read at all, the window uses the defaults and won't overwrite it.
 
 ## Changing your tiles
 
@@ -192,6 +215,21 @@ In JSON, each backslash in a Windows path is written twice.
 
 Paths can use `{app}` (Asgard's code folder), `{data}` (Asgard's data folder) and environment variables such as `%USERPROFILE%`.
 
+## Looking after Muninn
+
+Asgard checks Muninn each time it starts. It backs it up once a day and tidies it: it refreshes statistics, folds the write-ahead log in, and rebuilds a damaged search index. If the file itself is damaged, Asgard says so and names the newest backup. From a console, in `%LOCALAPPDATA%\Asgard\app`, using `python.exe` (`pythonw.exe` prints nothing):
+
+```
+python Asgard.pyw --muninn status            version, sizes, backups, last housekeeping
+python Asgard.pyw --muninn check             look for damage and anything that should never happen (exit 1 if found)
+python Asgard.pyw --muninn repair            rebuild the search index, put back missing protections
+python Asgard.pyw --muninn backup            a copy now
+python Asgard.pyw --muninn restore [FILE]    put a backup back (the newest if FILE is left out); close every app first
+python Asgard.pyw --muninn retention on|off  prune old run records daily (off until you confirm the periods)
+```
+
+[docs/muninn-operations.md](docs/muninn-operations.md) explains each message and what to do about it.
+
 ## Uninstall
 
 Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > Uninstall Asgard**. Valhalla removes what setup recorded: the app folder, the shortcuts and the Settings entry. It asks before deleting your data (tile settings, logs, the Muninn database and its backups). It never deletes anything outside Asgard's own folders, and it doesn't touch apps that live elsewhere, such as Odin.
@@ -205,8 +243,10 @@ Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > 
 | `%LOCALAPPDATA%\Asgard\logs` | One log per app, plus `launcher.log` |
 | `%LOCALAPPDATA%\Asgard\muninn.db` | Muninn, the database the apps share (with `-wal` and `-shm` files beside it) |
 | `%LOCALAPPDATA%\Asgard\backups` | Muninn's last 7 daily copies, the last 3 taken before a schema upgrade, and the last 5 taken with **... > Back up Muninn now** |
+| `%LOCALAPPDATA%\Asgard\muninn.before-restore-*.db` | The database as it was before a restore, kept so the restore can be undone |
 | `%LOCALAPPDATA%\Asgard\install-ledger.json` | What setup created, so Valhalla can undo it |
 | `%LOCALAPPDATA%\Asgard\settings\baldur.json` | Baldur's settings |
+| `%LOCALAPPDATA%\Asgard\settings\ui.json` | Your choices for the shared window: mode, text size, colours |
 | `%LOCALAPPDATA%\Asgard\settings\heimdall.json` | Heimdall's form file: the SeCcHm catalog item and its fields |
 | `%LOCALAPPDATA%\Asgard\settings\heimdall-templates.json` | Your Heimdall templates. Heimdall won't overwrite this file if it can't read it |
 | `%LOCALAPPDATA%\Asgard\heimdall\edge-profile` | The Edge profile Heimdall signs in with; delete it to sign out. Traces from `--trace` go in `heimdall\traces` |
@@ -237,7 +277,9 @@ muninn = load_muninn()
 con = muninn.open_app("odin", supported=(1, 3))   # schema versions Odin was written for; never upgrades
 ```
 
-`open_app` raises `muninn.NotReady` if Asgard hasn't created Muninn yet, and `muninn.VersionError` if the schema is outside the app's range. Both messages say what to do.
+`open_app` has no default range: give the versions your app was tested against. It raises `muninn.NotReady` if Asgard hasn't created Muninn yet, `muninn.VersionError` if the schema is outside the app's range, `muninn.CorruptError` if the file is damaged (the message names the newest backup and the restore command), and `muninn.BusyError` if another app held the write lock for 30 s. Each message says what to do.
+
+The connection it returns enforces the rules below. A write to another app's table, a schema change, or a change to protections such as foreign keys is refused with "not authorized". `muninn.guard.describe(exc)` says which table and why. Store Jira keys through `muninn.normalize_key()`. From schema v3 the database refuses a key that isn't in capitals like `PROJ-123`. Each app's contract is in [docs/integration/](docs/integration/README.md).
 
 What Odin calls, by job (`from asgard.muninn import odin`):
 
@@ -250,7 +292,7 @@ What Odin calls, by job (`from asgard.muninn import odin`):
 | Your worklogs | `/rest/api/2/worklog/updated` and `/worklog/list`, then `odin.upsert_worklog(run, worklog_json, ctx)`; `/worklog/deleted` and `odin.mark_worklog_deleted()` |
 | Post approved Baldur days | `odin.posts_due(con)`, then `odin.begin_post()`, the Jira call, and `odin.finish_post()` or `odin.fail_post()` |
 | Log a meeting, or time typed into Odin | `odin.begin_meeting_post()` or `odin.begin_manual_post()`, then the same finish calls |
-| After a crash | `odin.stuck_posts(con)`: search each issue's worklogs for the marker, then `odin.resolve_stuck()` |
+| After a crash | `odin.stuck_posts(con)`: search each issue's worklogs for the marker, then `odin.resolve_stuck(con, id, found_id_or_None, searched=True)`. Without `searched=True` a missing id is refused, because marking a post that reached Jira as failed would post it twice |
 
 Three rules keep the data right:
 
@@ -261,12 +303,10 @@ Three rules keep the data right:
 ## For maintainers
 
 - **Layout.** `setup-Asgard.cmd` finds Python and runs `asgard/install.py`. `Asgard.pyw` starts `asgard/launcher.py`. Default tiles are in `asgard/apps.json`. Put bundled apps in `apps/<id>/` and point their tile at `{app}\apps\<id>\<entry>.pyw`.
-- **Rules.** Keep `setup-Asgard.cmd` ASCII with CRLF line endings; `.gitattributes` enforces CRLF.
-- **Packages.** Use the best module for each job (`docs/dependency-policy.md`).
-  - Pin it in `requirements.txt`. The comment above the pin says what it's for, whether it's native (compiled wheels need IT approval), its approval status, and what to use instead if it isn't available on-premises.
-  - `asgard/muninn/` and the launcher's start-up modules stay standard library, because every app and Odin import them; `tests/test_dependencies.py` checks this.
-  - Import a package only where it's needed. For example, `apps/heimdall/heimdall/browser.py` imports Playwright only when `fill` runs.
-- **Tests.** Run `py -3 -m unittest discover -s tests`. Heimdall's browser tests (`tests/test_heimdall_browser.py`, against `tests/fake_servicenow.py`) skip unless Playwright and a browser are installed; set `HEIMDALL_TEST_CHANNEL=msedge` to use Edge. The schema's own checks (`tools/check_muninn_schema.py`) switch time zones, so they run on Linux, macOS or WSL and are skipped on Windows.
-- **Schema changes.** Add `asgard/muninn/migrations/000N_<name>.sql`, numbered one past the last. The runner wraps each file in a transaction and sets `user_version`. A migration that rebuilds a table starts with `-- muninn: foreign_keys=off`. Never edit a migration that has shipped.
+- **Rules.** The launcher, setup and Muninn use the Python standard library only, so they run anywhere the catalog Python runs. Keep `setup-Asgard.cmd` ASCII with CRLF line endings; `.gitattributes` enforces CRLF.
+- **Adding pages to the shared window.** Create `apps/<id>/ui/manifest.json` (`app`, `name`, `subtitle`, `theme`, `backend` as `package.module:Class`, and `views`: `id`, `title`, two-letter `icon`, `qml`), the QML files beside it, and the backend class. QML pages `import AsgardUI` for `ScrollPage`, `PageHeader`, `Card`, `MetricCard`, `AppButton`, `NavItem`, `Pill` and `EmptyState`, use only `theme.*` for colours and sizes, and declare `property var bridge: null` to get the backend: `bridge.call("method", [args])` returns a dict, with `error` set when it raised a `ValueError`. Optional backend methods: `dashboard()` (cards with `label`, `value`, `detail`, `tone`, `view`) and `settings_files()`. Heimdall (`apps/heimdall/ui/`, `heimdall/ui_backend.py`) is the worked example. Nothing in `asgard/ui` changes when an app is added.
+- **Packages.** The best module for each job, declared and pinned in `requirements.txt` (`docs/dependency-policy.md`), and imported only where needed: Playwright only in Heimdall's `browser.py` when `fill` runs, PySide6 only in `asgard/ui/shell.py` when a window opens. [MODULES.md](MODULES.md) lists each package, where it's used, and what to use instead if it isn't available on-prem. `tests/test_dependencies.py` enforces all of this.
+- **Tests.** Run `py -3 -m unittest discover -s tests`. Heimdall's browser tests (`tests/test_heimdall_browser.py`, against `tests/fake_servicenow.py`) skip unless Playwright and a browser are installed; set `HEIMDALL_TEST_CHANNEL=msedge` to use Edge. The window's tests (`tests/test_ui_qt.py`) skip unless PySide6 is installed and run offscreen (`QT_QPA_PLATFORM=offscreen`). The schema's own checks (`tools/check_muninn_schema.py`) switch time zones, so they run on Linux, macOS or WSL and are skipped on Windows.
+- **Schema changes.** Add `asgard/muninn/migrations/000N_<name>.sql`, numbered one past the last. The runner wraps each file in a transaction and sets `user_version`. A migration that rebuilds a table starts with `-- muninn: foreign_keys=off`. Never edit a migration that has shipped. Add new tables to `guard.OWNERS` (a test fails until you do) and checks to `tools/check_muninn_schema.py`; `--muninn check` compares every file with what the migrations make, so the schema must come only from migrations.
 - **Releases.** Bump `VERSION`, tag (`git tag v0.2.0`), push the tag, and publish a release from it. GitHub attaches the zip automatically. `.gitattributes` keeps `tests/` and other maintainer files out of downloaded zips.
 - **Icon.** `tools/make_icon.py` regenerates `asgard/asgard.ico`. It needs Pillow.

@@ -31,7 +31,7 @@ itself, and no other folder is required at runtime. Keep it that way.
   context-docs/           inputs and archives; read-only
   Asgard/                 SECOND DELIVERABLE: Asgard launcher, Muninn, Baldur (see Asgard/AGENTS.md)
   Odin/                   THE PRODUCT: the program, sibling exporters, GUI and docs
-    README.md INSTALL.md ARCHITECTURE.md HANDOFF.md   docs; not needed at runtime
+    README.md INSTALL.md ARCHITECTURE.md HANDOFF.md MODULES.md   docs; not needed at runtime
 
 app/                      THE DELIVERABLE. Self-contained; copy this folder and run it.
   meeting2jira.cmd          entry point on Windows. Thin dispatcher only: no logic, no decisions.
@@ -59,6 +59,7 @@ app/                      THE DELIVERABLE. Self-contained; copy this folder and 
 
   tests/          unittest; fixtures/; test_guardrails.py enforces non-negotiables.
                   Ships deliberately: running them on the target machine proves the install.
+  requirements.txt  pinned packages (none today); each needs a section in ../MODULES.md
   tools/          Test-PowerShellSyntax.ps1   parse check, runs under 5.1 and 7
                   Invoke-WindowsChecks.ps1    Windows-only behavior; `meeting2jira selftest`
 
@@ -78,7 +79,7 @@ playwright-app/           Path C: an OWA exporter for "new Outlook", which has n
                           protect the Graph path, which in practice means owa/mapping.py. It is
                           deleted once Graph is verified against the real mailbox. See its README.
 graph-app/                Path D, PLANNED and the intended primary source: Microsoft Graph
-                          /me/calendarView via msal. Separate for the same pip reason. Blocked on an
+                          /me/calendarView via msal. Separate so the daily run never depends on msal. Blocked on an
                           Entra app registration, not on code. See HANDOFF.md P2-C.
                             owa/capture.py  browser session, endpoint discovery, direct fetch
                             owa/mapping.py  OWA JSON -> schema v1. Stdlib only, imports no playwright,

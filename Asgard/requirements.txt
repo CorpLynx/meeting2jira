@@ -13,3 +13,8 @@
 # If it isn't on-prem: selenium with Edge's msedgedriver (also an executable, so the same AppLocker
 # question); else no `fill`. Heimdall's other commands work without it, and you type the values in.
 playwright==1.49.1
+# The shared desktop window (asgard/ui/shell.py, apps/*/ui/*.qml): Qt Quick via PySide6. Imported
+# only when a window opens; the launcher, Muninn and every CLI work without it. Not pure Python
+# (Qt DLLs and .pyd files): native, approved by Brandon Oct 2026 (in use on-prem). 6.10.3 is the
+# last release that supports Python 3.9. Essentials has QtQml, QtQuick and Quick Controls.
+PySide6-Essentials==6.10.3

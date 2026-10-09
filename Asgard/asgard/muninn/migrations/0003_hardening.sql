@@ -24,8 +24,12 @@
 --      are brought up to date.
 --   7. A tile badge for time posted twice (v_double_posts), including the
 --      same meeting synced from two calendars.
---   8. Pull request commits and merge commits for Baldur (additive).
---   9. Indexes on run_id, so pruning old sync runs doesn't scan every
+--   8. Pull request commits, merge commits and message keys for Baldur
+--      (additive).
+--   9. A Baldur worklog counts for the day it was approved for, so a
+--      change of time zone between a post and a changed approval can't
+--      post the same day's time again.
+--  10. Indexes on run_id, so pruning old sync runs doesn't scan every
 --      fact table once per run (9 s for 500 runs with 100,000 commits,
 --      0.01 s with the index).
 -- =====================================================================
@@ -207,13 +211,13 @@ END;
 -- 6. Search entries follow every column they show
 -- ---------------------------------------------------------------------
 
-DROP TRIGGER pull_requests_search_upd;
+DROP TRIGGER IF EXISTS pull_requests_search_upd;
 CREATE TRIGGER pull_requests_search_upd AFTER UPDATE OF title, head_ref, author, number ON pull_requests BEGIN
     UPDATE search SET title = new.title, body = '#' || new.number || ' ' || new.author || ' ' || new.head_ref
     WHERE rowid = new.id * 16 + 3;
 END;
 
-DROP TRIGGER submissions_search_upd;
+DROP TRIGGER IF EXISTS submissions_search_upd;
 CREATE TRIGGER submissions_search_upd AFTER UPDATE OF title, system, external_id, work_item_key ON submissions BEGIN
     UPDATE search SET title = new.title,
                       body = new.system || ' ' || coalesce(new.external_id, '') || ' ' || coalesce(new.work_item_key, '')
@@ -250,7 +254,7 @@ CREATE VIEW v_double_posts AS
      WHERE w.state IN ('sending', 'posted')
      GROUP BY lower(trim(e.title)), e.starts_at, e.ends_at HAVING count(*) > 1;
 
-DROP VIEW v_tile_badges;
+DROP VIEW IF EXISTS v_tile_badges;
 
 -- Counts the Asgard launcher shows on tiles; rows with nothing to show are left out.
 CREATE VIEW v_tile_badges AS
@@ -297,8 +301,77 @@ ALTER TABLE pull_requests ADD COLUMN merge_commit_sha TEXT CHECK (merge_commit_s
 ALTER TABLE pull_requests ADD COLUMN commits_listed INTEGER NOT NULL DEFAULT 0 CHECK (commits_listed IN (0,1));
 CREATE INDEX ix_prs_merge_commit ON pull_requests (merge_commit_sha) WHERE merge_commit_sha IS NOT NULL;
 
+-- The Jira keys collection found in each commit's whole message (the subject and the body, which
+-- isn't stored). When pull request evidence for a commit goes away, its keys fall back to these,
+-- even for commits older than history_days that collection no longer reads.
+ALTER TABLE commits ADD COLUMN message_keys TEXT
+    CHECK (message_keys IS NULL OR (json_valid(message_keys) AND json_type(message_keys) = 'array'));
+
+-- Baldur's pull request lists are read again from the top once: rows stored before v3 have
+-- no commit lists and no merge commit, and an unchanged list (an ETag answer) would never say
+-- so. The cursors only save a request; dropping them loses nothing.
+DELETE FROM sync_cursors WHERE stream LIKE 'github:pulls %';
+
 -- ---------------------------------------------------------------------
--- 9. Indexes for pruning sync runs (ON DELETE SET NULL looks rows up by run_id)
+-- 9. A Baldur worklog counts for the day it was approved for.
+--     v_day_status found what Jira holds for a day by worklog start time
+--     between local midnights. If the laptop's time zone changed between a
+--     post and a changed approval, the earlier post fell outside the new
+--     day's bounds and its time was posted again. Worklogs Odin posted for
+--     an approval now count for that approval's local_date as well as for
+--     the day they start on (moved in Jira, it still counts where it is);
+--     counting a worklog for two days can only lower what is posted. Other
+--     worklogs (from Jira, typed in Odin) count by when they start.
+-- ---------------------------------------------------------------------
+
+DROP VIEW IF EXISTS v_day_status;
+CREATE VIEW v_day_status AS
+    WITH approved AS (
+        SELECT p.id, p.local_date, p.work_item_key, al.work_item_id, p.minutes_final,
+               p.first_started_at, p.basis, p.basis_hash, p.decided_at,
+               strftime('%Y-%m-%dT%H:%M:%SZ', p.local_date, 'utc') AS day_start,
+               strftime('%Y-%m-%dT%H:%M:%SZ', p.local_date, '+1 day', 'utc') AS day_end,
+               row_number() OVER (PARTITION BY p.local_date, coalesce(al.work_item_id, p.work_item_key)
+                                  ORDER BY p.decided_at DESC, p.id DESC) AS rn
+          FROM day_proposals p
+          LEFT JOIN work_item_aliases al ON al.key = p.work_item_key AND al.status <> 'not_found'
+         WHERE p.status = 'approved'
+    )
+    SELECT a.local_date, a.work_item_key, a.work_item_id, a.id AS proposal_id,
+           a.minutes_final AS approved_minutes, a.first_started_at, a.basis, a.basis_hash, a.decided_at,
+           a.day_start, a.day_end,
+           (coalesce((SELECT sum(w.seconds) FROM worklogs w
+                       LEFT JOIN day_proposals wp ON wp.id = w.proposal_id
+                       WHERE w.work_item_id = a.work_item_id
+                         AND w.state IN ('sending', 'posted')
+                         AND w.origin <> 'meeting'
+                         AND ((w.started_at >= a.day_start AND w.started_at < a.day_end)
+                              OR wp.local_date = a.local_date)), 0)
+            + 59) / 60 AS logged_minutes
+      FROM approved a
+     WHERE a.rn = 1;
+
+DROP VIEW IF EXISTS v_worklogs_to_post;
+-- What Odin should post: the shortfall for each approval, at most once per
+-- approval, and nothing while a post for that issue and day is in doubt.
+CREATE VIEW v_worklogs_to_post AS
+    SELECT d.*, d.approved_minutes - d.logged_minutes AS minutes_to_post
+      FROM v_day_status d
+      JOIN work_items wi ON wi.id = d.work_item_id AND wi.deleted_at IS NULL
+     WHERE d.approved_minutes > d.logged_minutes
+       AND NOT EXISTS (SELECT 1 FROM worklogs w
+                        WHERE w.proposal_id = d.proposal_id
+                          AND w.state IN ('sending', 'posted', 'deleted'))
+       AND NOT EXISTS (SELECT 1 FROM worklogs s
+                        LEFT JOIN day_proposals sp ON sp.id = s.proposal_id
+                        WHERE s.work_item_id = d.work_item_id
+                          AND s.state = 'sending'
+                          AND s.origin <> 'meeting'
+                          AND ((s.started_at >= d.day_start AND s.started_at < d.day_end)
+                               OR sp.local_date = d.local_date));
+
+-- ---------------------------------------------------------------------
+-- 10. Indexes for pruning sync runs (ON DELETE SET NULL looks rows up by run_id)
 -- ---------------------------------------------------------------------
 
 CREATE INDEX ix_work_items_run      ON work_items (run_id)      WHERE run_id IS NOT NULL;

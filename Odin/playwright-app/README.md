@@ -69,8 +69,8 @@ cd ../app && PYTHONPATH=src python -m meeting2jira push --input ../playwright-ap
 
 ## Why this is a separate application
 
-`app/` is standard-library only, and that is what made it approvable on a locked-down machine. This
-needs Playwright from pip. Keeping them apart means the working COM app is untouched, its guardrails
+`app/` uses only the standard library, and that is what made it approvable on a locked-down machine. This
+needs Playwright (native: it bundles `node.exe`; alternatives are in `../MODULES.md`). Keeping them apart means the working COM app is untouched, its guardrails
 stay strict, and you can delete this folder without affecting anything.
 
 They meet where every source meets: **schema-v1 JSON**. Nothing in `rules`, `sync`, `jira` or

@@ -19,7 +19,8 @@ _PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._\-]*)(\[[A-Za-z0-9,._\-]+\])?==[A-Z
 STARTUP = ("__init__.py", "paths.py", "launcher.py", "catalog.py", "install.py", "valhalla.py", "runner.py",
            "winutil.py")
 # Import names that differ from the package name on PyPI.
-IMPORT_NAMES = {"pyyaml": "yaml", "pywin32": "win32api", "python_dateutil": "dateutil"}
+IMPORT_NAMES = {"pyyaml": "yaml", "pywin32": "win32api", "python_dateutil": "dateutil",
+                "pyside6_essentials": "PySide6"}
 
 
 def declared():
@@ -90,6 +91,69 @@ class DependencyTests(unittest.TestCase):
     def test_every_declared_package_is_used(self):
         used = {name for _, name in imports(runtime_files())}
         self.assertEqual(sorted(declared()[0] - used), [], "remove packages nothing imports")
+
+
+MODULES_DOC = ROOT / "MODULES.md"
+DOC_ROWS = ("Used in", "If it's missing", "Stdlib alternative", "Package alternatives")
+
+
+def pinned_packages():
+    """{PyPI name, normalised: import name} for every pin in requirements.txt."""
+    out = {}
+    for line in REQUIREMENTS.read_text(encoding="utf-8").splitlines():
+        m = _PIN.match(line.split("#", 1)[0].strip())
+        if m:
+            name = m.group(1).lower().replace("-", "_")
+            out[name] = IMPORT_NAMES.get(name, name)
+    return out
+
+
+def doc_sections(text):
+    """{package heading, normalised: {row name: cell text}} from MODULES.md's "### name" tables."""
+    sections, current = {}, None
+    for line in text.splitlines():
+        if line.startswith("### "):
+            current = sections.setdefault(line[4:].strip().strip("`").lower().replace("-", "_"), {})
+        elif line.startswith("## "):
+            current = None
+        elif current is not None and line.startswith("| ") and line.count("|") >= 3:
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if cells[0] and not set(cells[0]) <= {"-", " "}:
+                current[cells[0]] = " | ".join(cells[1:]).strip()
+    return sections
+
+
+class ModulesDocTests(unittest.TestCase):
+    """MODULES.md says, for every package, where it's used and what to use if it isn't on-prem."""
+
+    def setUp(self):
+        self.assertTrue(MODULES_DOC.is_file(), "write MODULES.md: each package, where it's used, alternatives")
+        self.sections = doc_sections(MODULES_DOC.read_text(encoding="utf-8"))
+        self.packages = pinned_packages()
+
+    def test_every_package_has_a_section_and_nothing_else_does(self):
+        self.assertTrue(self.packages, "requirements.txt pins nothing; this check would pass vacuously")
+        self.assertEqual(sorted(self.sections), sorted(self.packages),
+                         "MODULES.md needs one '### name' section per pinned package, and no others")
+
+    def test_every_section_says_where_and_what_instead(self):
+        for name in self.packages:
+            for row in DOC_ROWS:
+                with self.subTest(package=name, row=row):
+                    self.assertTrue(self.sections.get(name, {}).get(row), f'MODULES.md "{name}" needs a "{row}" row')
+
+    def test_every_file_that_imports_a_package_is_listed(self):
+        for name, import_name in self.packages.items():
+            used_in = self.sections.get(name, {}).get("Used in", "")
+            files = sorted({p.relative_to(ROOT).as_posix() for p, mod in imports(runtime_files()) if mod == import_name})
+            self.assertTrue(files, f"nothing imports {import_name}; remove it from requirements.txt")
+            for path in files:
+                with self.subTest(package=name, file=path):
+                    self.assertIn(path, used_in, f'add {path} to "Used in" for {name} in MODULES.md')
+
+    def test_the_doc_parser_reads_rows(self):
+        parsed = doc_sections("### Some-Pkg\n| | |\n| --- | --- |\n| Used in | `a.py` |\n## Next\n| Used in | x |\n")
+        self.assertEqual(parsed, {"some_pkg": {"Used in": "`a.py`"}})
 
 
 if __name__ == "__main__":
