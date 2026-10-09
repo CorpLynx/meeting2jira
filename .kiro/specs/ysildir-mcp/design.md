@@ -1,5 +1,8 @@
 # Design: Ysildir, Asgard's MCP server
 
+> **Status, 2026-10-09: built** (`Asgard/apps/ysildir/`). The design below is what was built, except where
+> "As built" at the end says otherwise.
+
 ## Overview
 
 Ysildir is a thin adapter on the official MCP Python SDK. An MCP client starts it as a child
@@ -288,7 +291,7 @@ Rules:
 4. Never open muninn.db yourself. Muninn changes only through these tools and Asgard's apps.
 5. If a tool refuses, show the person its message. You may fix the form (a summary, a SHA), never
    the numbers, to get something accepted.
-Guides: baldur-agent-1, muninn-agent-1.
+Guides: baldur-agent-2, muninn-agent-1.
 ```
 
 ### `asgard/muninn/agent-guide.md` (draft)
@@ -356,7 +359,7 @@ this computer's calendar.
 
 | Prompt | Arguments | Text |
 | --- | --- | --- |
-| `record-estimate` | `key` (optional) | "Record in Baldur your estimate of my working time on the change we just finished. 1. Get the full SHAs of the commits you made with me for it today (`git log --since=midnight --format=%H`, then pick ours). 2. Estimate my time: reading, prompting you, reviewing and testing; not your running time. Use clock times if you saw them, and give a range when unsure. 3. Call `baldur_record_estimate` with a report: agent, guide baldur-agent-1, commits, key {key}, minutes, minutes_low, confidence and a one-sentence summary. 4. Tell me the id and that nothing changes until I approve. If Baldur refuses, show me its message." |
+| `record-estimate` | `key` (optional) | "Record in Baldur your estimate of my working time on the change we just finished. 1. Get the full SHAs of the commits you made with me for it today (`git log --since=midnight --format=%H`, then pick ours). 2. Estimate my time: reading, prompting you, reviewing and testing; not your running time. Use clock times if you saw them, and give a range when unsure. 3. Call `baldur_record_estimate` with a report: agent, guide baldur-agent-2, commits, key {key}, minutes, minutes_low, confidence and a one-sentence summary. 4. Tell me the id and that nothing changes until I approve. If Baldur refuses, show me its message." |
 | `my-day` | `date` | "Show me how {date} looks in Baldur. 1. Call `baldur_day` for {date}. 2. For each ticket, give Baldur's estimate and what I've approved. 3. If there are AI-assisted figures, say what they change and why, and give me the commands to take them or keep the estimate. Don't run them. 4. List the day's flags in plain words." |
 | `review-day` | `date` | "Review Baldur's estimate for {date}. 1. Call `baldur_review_pack` for {date}. 2. Follow the prompt it returns exactly, with its pack as the input, and produce only the JSON reply. 3. Call `baldur_submit_review` with that reply. 4. Show me what changed, and the command to take it." |
 | `what-changed` | `since` | "What changed in Asgard since {since}? 1. Call `muninn_what_changed` from {since}. 2. Group it by app and by ticket, newest first. 3. Use `muninn_issue` for any ticket you need to name. Say where each number comes from." |
@@ -370,7 +373,7 @@ A prompt whose tools are switched off isn't registered.
 ```
 agent  → asgard_guide {"topic": "baldur"}                         (once per session)
 agent  → terminal: git rev-parse HEAD                               9f3c1a2b4d5e6f708192a3b4c5d6e7f8091a2b3c
-agent  → baldur_record_estimate {"report": {"agent": "kiro", "guide": "baldur-agent-1", "key": "PROJ-42",
+agent  → baldur_record_estimate {"report": {"agent": "kiro", "guide": "baldur-agent-2", "key": "PROJ-42",
            "commits": ["9f3c1a2b4d5e6f708192a3b4c5d6e7f8091a2b3c"], "minutes": 60, "minutes_low": 45,
            "confidence": "medium", "summary": "Added jittered retry to the poller and its tests.",
            "started_at": "2026-10-01T13:05:00-04:00", "ended_at": "2026-10-01T14:02:00-04:00"}}
@@ -446,12 +449,12 @@ Annotation key: **RO** = `readOnlyHint`, **D** = `destructiveHint`, **I** = `ide
 | `muninn_catalog()` | yes | RO, I | `muninn_tools.catalog` | Tables and views: meaning, owner, row count; the rules |
 | `baldur_record_estimate(report)` | yes | — | `asgard.muninn.baldur.record_agent_estimate(con_baldur, report, via="mcp")` | id, status, replaced, message |
 | `baldur_withdraw_estimate(id)` | yes | D | `asgard.muninn.baldur.withdraw_agent_estimate(con_baldur, n)` | id, status, message |
-| `baldur_estimates(from, to, include_withdrawn)` | yes | RO, I | The same query as `cmd_ai_list` **(repo)**, moved into `asgard.muninn.baldur.list_agent_estimates` so both share it | Reports, as `ai list --json` |
+| `baldur_estimates(date_from, date_to, include_withdrawn)` | yes | RO, I | The same query as `cmd_ai_list` **(repo)**, moved into `asgard.muninn.baldur.list_agent_estimates` so both share it | Reports, as `ai list --json` |
 | `baldur_day(date, include_report)` | no | RO, I | `baldur.desk.load_day(con_ysildir, settings, day)` **(repo)** on the read-only connection, which proves it writes nothing | The day view (below) |
 | `baldur_review_pack(date)` | no | I | `baldur.assist.day_pack(con_baldur, settings, day)`; `review.md` without its version line | pack, prompt, reply_to |
 | `baldur_submit_review(date, reply, model)` | no | — | `baldur.assist.apply_reply(con_baldur, settings, day, reply, tier="mcp", model=model)` | figures, baseline, flags, take |
 | `muninn_what_changed(since, kinds, limit)` | no | RO, I | `SELECT ... FROM events WHERE at > ? ORDER BY at, id LIMIT ?` | Events with allow-listed payload fields |
-| `muninn_day_status(from, to)` | no | RO, I | `v_day_status` and `v_unpostable_days` | Rows per day and ticket |
+| `muninn_day_status(date_from, date_to)` | no | RO, I | `v_day_status` and `v_unpostable_days` | Rows per day and ticket |
 | `muninn_issue(key)` | no | RO, I | `work_item_aliases` → `work_items` | key, summary, status, type, epic, updated |
 | `muninn_search(query, kinds, limit)` | no | RO, I | `search MATCH ?` ranked by bm25; entity id `rowid >> 4`, kind `rowid & 15` | kind, id, title |
 
@@ -485,7 +488,7 @@ class AgentReport(BaseModel):
 
     agent: str = Field(max_length=40, description="Your tool: kiro, copilot or claude-code.")
     model: Optional[str] = Field(None, max_length=80, description="Your model's name, if you know it.")
-    guide: Optional[str] = Field(None, max_length=40, description="The guide version you followed: baldur-agent-1.")
+    guide: Optional[str] = Field(None, max_length=40, description="The guide version you followed: baldur-agent-2.")
     date: Optional[str] = Field(None, pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
                                 description="The day of the work. Default: today, or the day of ended_at.")
     key: Optional[str] = Field(None, max_length=40,
@@ -703,3 +706,24 @@ When setup edits a file itself:
    (decided Oct 2026). A Ysildir page could show each tool's switch and what it sends: an
    `apps/ysildir/ui/manifest.json` and a backend over `config.py`, the way Heimdall's works.
    `ysildir.cmd tools` covers it until the GUI work.
+
+## As built (2026-10-09)
+
+Where the build settled a detail differently from the text above:
+
+| Area | As built | Why |
+| --- | --- | --- |
+| The refusals wrapper | `results.tool(name, fn)`, applied in `server.build` when a tool is registered, not a decorator in `baldur_tools.py` | The tool modules don't import the SDK, so moving SDKs changes only `server.py` and `results.py` |
+| Ysildir's own refusals | `ysildir.Refused` (a `ValueError`), with `SCHEMA`, `reader()`, `parse_day` and `day_range`, in `ysildir/__init__.py`. Baldur's `AssistError` and settings problems become `Refused` in `baldur_tools.py` | `results.py` doesn't import Baldur |
+| An unexpected error | `ToolError` "Ysildir hit a problem it didn't expect (TYPE). The details are in Asgard's logs folder (ysildir.log)" | More useful than the SDK's bare "Error executing tool NAME". The log keeps the traceback without the exception's message |
+| A prompt's bad argument | `results.prompt` turns Ysildir's refusal into a JSON-RPC invalid-params error with Ysildir's message | The SDK would replace it with "Error rendering prompt NAME" |
+| `asgard_guide` | Returns the guide as plain text (no output schema) | A guide is markdown for the model to read |
+| Argument names | `date_from` and `date_to` | `from` is a Python keyword, and the SDK builds the schema from the signature |
+| `muninn_what_changed` | `since` is included (`at >= since`) | "Since 04:00" includes 04:00:00; events are second-precision |
+| `muninn_search` | Only the person's own commits (`is_mine = 1`); kinds `issues`, `commits`, `pull_requests` | Search answers "what did I do"; others' commit subjects stay out of the AI client |
+| Table meanings | `asgard/muninn/tables.py` (`MEANINGS`, `RULES`), with a test that every table and view has one | Kept beside Muninn, not in Ysildir |
+| The client's command | The Python that ran `setup` (`sys.executable`), with `cli.py serve` | `py -3` could pick a Python without the SDK |
+| VS Code | `--vscode DIR` writes `.vscode/mcp.json`; `--vscode-user` runs `code --add-mcp` | `code --add-mcp` adds to the profile, not a workspace |
+| Review packs | A pack over 60 KB is refused with the clipboard command, not cut | A cut pack would be reviewed on part of the evidence |
+| Baldur | `assist.apply_reply` checks `review_mode` first; `assist.review_prompt()`; `muninn.baldur.list_agent_estimates` shared by `ai list` | Found while building: a reply on a day with review off said "make a new pack" |
+| The Baldur guide | `baldur-agent-2`, with worked examples A to E | Task 4 |

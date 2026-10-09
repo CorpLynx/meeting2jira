@@ -130,6 +130,20 @@ comment says so.
 
 `baldur.cmd` tries `py -3`, then `py`, then `python`. If your computer blocks `.cmd` files, run `py -3 cli.py` (or `python cli.py`) from the same folder instead. Settings are in `%LOCALAPPDATA%\Asgard\settings\baldur.json`; the Baldur spec explains each one.
 
+## Ysildir: Asgard for your AI client
+
+Ysildir is an MCP server: an AI client (Kiro, Copilot agent mode in VS Code, Claude Code) starts it and gets tools that teach it Baldur and Muninn, take its estimates of your time into Baldur, and answer questions from Muninn. It never approves, changes or posts anything; it gives you the command instead. It needs Python 3.10+ and the MCP SDK (`mcp` and `pydantic` from `requirements.txt`, with IT's approval of their compiled parts). Without them, `ysildir.cmd` says what's missing, and agents still use `baldur.cmd ai record` and the clipboard review.
+
+```
+ysildir.cmd setup --kiro C:\src\my-service     connect Kiro in that workspace (--vscode DIR, --claude DIR,
+                                               --kiro-user, --vscode-user; --print shows it first)
+ysildir.cmd check                              what an agent will see: tools, switches, Muninn's version
+ysildir.cmd tools                              each tool, on or off, and what it sends to the AI client
+ysildir.cmd tools --on baldur_day              turn a tool on, then restart the MCP server in your client
+```
+
+Each tool's data flow needs your ISSO's approval, so each has a switch in `%LOCALAPPDATA%\Asgard\settings\ysildir.json`. Tools that send Muninn data (commit subjects, Jira summaries, times) start off. [docs/integration/ysildir.md](docs/integration/ysildir.md) lists every tool, what it sends and its command-line equivalent.
+
 ## Heimdall from the command line
 
 Heimdall fills a SeCcHm request in Edge from a saved template, then stops so you can review it and click **Submit** yourself. Its tile opens Heimdall's window (see below), which does everything these commands do; the commands also work on their own:
@@ -246,6 +260,7 @@ Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > 
 | `%LOCALAPPDATA%\Asgard\muninn.before-restore-*.db` | The database as it was before a restore, kept so the restore can be undone |
 | `%LOCALAPPDATA%\Asgard\install-ledger.json` | What setup created, so Valhalla can undo it |
 | `%LOCALAPPDATA%\Asgard\settings\baldur.json` | Baldur's settings |
+| `%LOCALAPPDATA%\Asgard\settings\ysildir.json` | Which Ysildir tools your AI client may use (`ysildir.cmd tools`). No file means the defaults; a file Ysildir can't read leaves only `asgard_guide` on |
 | `%LOCALAPPDATA%\Asgard\settings\ui.json` | Your choices for the shared window: mode, text size, colours |
 | `%LOCALAPPDATA%\Asgard\settings\heimdall.json` | Heimdall's form file: the SeCcHm catalog item and its fields |
 | `%LOCALAPPDATA%\Asgard\settings\heimdall-templates.json` | Your Heimdall templates. Heimdall won't overwrite this file if it can't read it |

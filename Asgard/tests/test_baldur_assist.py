@@ -367,6 +367,10 @@ class ReviewTests(AssistCase):
             settings = config.update({"review_mode": mode})
             with self.assertRaisesRegex(assist.AssistError, message):
                 assist.day_pack(self.con, settings, DAY, now=NOW)
+            # A reply is refused for the same reason, before anything else is looked at (Ysildir's review found a
+            # reply to an unestimated day said "make a new pack", which review being off would then refuse).
+            with self.assertRaisesRegex(assist.AssistError, message):
+                assist.apply_reply(self.con, settings, DAY, {"day": "2026-10-01", "pack": "0" * 16}, now=NOW)
 
     def test_the_pack_is_metadata_and_names_its_evidence(self):
         self.record(commits=self.p51, minutes=90)
@@ -515,7 +519,7 @@ class AssistCliTests(AssistCase):
         code, out, _ = self.cli("ai", "withdraw", "r3")
         self.assertIn("Withdrew r3", out)
         code, out, _ = self.cli("ai", "guide")
-        self.assertIn("baldur-agent-1", out)
+        self.assertIn("baldur-agent-2", out)
 
     def test_refusals_are_messages(self):
         self.worked()

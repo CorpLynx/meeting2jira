@@ -3,7 +3,7 @@ inclusion: auto
 name: baldur-estimates
 description: Use when you finish a code change or make a git commit with the person, or when they ask about their working time, timesheet or Baldur. How to record your estimate of their time on a change in Baldur, and what an agent must never do there.
 ---
-<!-- baldur-agent-1 -->
+<!-- baldur-agent-2 -->
 # Baldur: record your estimate of the person's time
 
 Baldur (Asgard's time app on this computer) estimates the person's development time per Jira
@@ -12,7 +12,7 @@ estimate of *their working time* on that change (reading, prompting you, reviewi
 your own running time, and not how long it "would take" without you):
 
 ```
-{baldur} ai record --agent kiro --guide baldur-agent-1 --minutes 1h --low 45m --confidence medium --commit <full SHA from git rev-parse HEAD> --key PROJ-42 --summary "One plain sentence on what changed." --json
+{baldur} ai record --agent kiro --guide baldur-agent-2 --minutes 1h --low 45m --confidence medium --commit <full SHA from git rev-parse HEAD> --key PROJ-42 --summary "One plain sentence on what changed." --json
 ```
 
 If your tools include `baldur_record_estimate` (Ysildir, Asgard's MCP server), call it instead of

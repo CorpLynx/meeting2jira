@@ -32,6 +32,32 @@ What always stays standard library: `asgard/muninn/` (every app and Odin import 
 | Stdlib alternative | `tkinter`, which the launcher and Baldur's window already use. `asgard/ui/theme.py`, `prefs.py` and `registry.py` are standard library, so a tkinter shell could reuse the tokens, preferences and manifests; the QML pages would be rewritten as Tk widgets, and each app's backend (plain Python) stays as it is |
 | Package alternatives | `PyQt6` (and `PyQt6-Qt6`): the same Qt, so the QML files work unchanged; `shell.py` needs its imports renamed (`Signal` to `pyqtSignal`, `Slot` to `pyqtSlot`, `Property` to `pyqtProperty`). GPL or a commercial licence, which IT may weigh differently from PySide6's LGPL. The full `PySide6` package works too; it's larger |
 
+### mcp
+
+| | |
+| --- | --- |
+| Pin | `mcp==2.3.0`, the official MCP Python SDK; needs Python 3.10+. It brings `mcp-types` at the same version, and about 30 wheels in all |
+| Used in | `apps/ysildir/ysildir/server.py` (the server, and `ysildir.cmd check`'s in-memory client), `apps/ysildir/ysildir/results.py` (`ToolError`) |
+| Needed for | Ysildir: the MCP server an AI client (Kiro, Copilot, Claude Code) starts over stdio. Baldur, Muninn and every command line work without it |
+| Native code | Yes, through its dependencies: `pydantic-core`, `cryptography`, `cffi` and `rpds-py`, plus `pywin32` on Windows. App Control must allow their DLLs. Its HTTP parts (`starlette`, `uvicorn`, `sse-starlette`) are installed but never started |
+| Approval | Pending |
+| If it's missing | `ysildir.cmd` says what's missing (the package, or Python 3.10+) and exits 2. Agents still record through `baldur.cmd ai record`, and the review still runs at the clipboard tier (`ai pack`, `ai review`) |
+| Stdlib alternative | A JSON-RPC 2.0 server over stdio on the standard library: about 300 lines, Python 3.9+, over the same handlers (`baldur_tools.py`, `muninn_tools.py`, `teach.py`). The Ysildir spec's first revision (commit `d510709`) designs it. It has to track MCP's protocol versions by hand |
+| Package alternatives | The newest `mcp` 1.x on the mirror (`from mcp.server.fastmcp import FastMCP`, with the same `add_tool`, decorators, annotations and `ToolError`); `fastmcp` 4.x, the standalone framework, which has more dependencies. Either changes only `server.py` and `results.py` |
+
+### pydantic
+
+| | |
+| --- | --- |
+| Pin | `pydantic==2.14.0`. `mcp` installs it too; it's pinned because Ysildir imports it |
+| Used in | `apps/ysildir/ysildir/models.py` (every tool's arguments and results), `apps/ysildir/ysildir/config.py` (reading `ysildir.json`) |
+| Needed for | Ysildir's argument and result models, from which the SDK builds each tool's schemas and checks each call |
+| Native code | Yes: `pydantic-core` |
+| Approval | Pending |
+| If it's missing | The same as for `mcp`, which needs it: `ysildir.cmd` says what's missing, and the CLI and clipboard tier still work |
+| Stdlib alternative | `dataclasses` with hand-written checks and JSON Schemas, in the standard-library server |
+| Package alternatives | `attrs` with `cattrs` (pure Python), or `msgspec` (native). The MCP SDK doesn't build schemas from either, so both go with the standard-library server |
+
 ## Deliberately standard library
 
 Reviewed 2026-10-09 against "the best module for each job". Muninn, Baldur and Baldur's agent hooks import no packages. For each job below that is the best choice, not a leftover of the old rule. Each row says what a package would add, and when it would win.
@@ -52,11 +78,7 @@ Reviewed 2026-10-09 against "the best module for each job". Muninn, Baldur and B
 
 ## Planned (not pinned yet)
 
-A package is pinned, and gets its section above, in the change that first imports it. The tests fail on a pin that nothing imports.
-
-| Package | For | Notes |
-| --- | --- | --- |
-| `mcp` (2.3.0, the official MCP SDK) and `pydantic` | Ysildir, Asgard's MCP server (`../.kiro/specs/ysildir-mcp/`) | Needs Python 3.10+. The native wheels are `pydantic-core`, `cryptography`, `cffi` and `rpds-py`, plus `pywin32` on Windows. The spec's design has both sections ready to paste, with the alternatives: `mcp` 1.x, `fastmcp`, a standard-library JSON-RPC server, or Baldur's CLI and clipboard tier |
+Nothing right now. A package is pinned, and gets its section above, in the change that first imports it: the tests fail on a pin that nothing imports.
 
 ## Dev only (never shipped)
 

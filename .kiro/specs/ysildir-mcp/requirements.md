@@ -1,10 +1,14 @@
 # Requirements: Ysildir, Asgard's MCP server (teaching agents Baldur and Muninn)
 
+> **Status, 2026-10-09: built** on branch `claude/baldur-estimation` (`Asgard/apps/ysildir/`,
+> `Asgard/tests/test_ysildir.py`), tasks 1 to 9 and 11. Tasks 0 and 10 run on the workstation. Where the
+> build settled a detail, this text says what was built; design.md, "As built", lists the changes.
+
 ## Read this first (for the implementing agent)
 
 This spec was written off-premises against the `Asgard/` folder of the `meeting2jira` repository,
 on branch `claude/baldur-estimation`. That branch has Muninn schema v4, Baldur's AI-assisted
-method, and the agent guide `baldur-agent-1`. The on-premises copy may be ahead of it.
+method, and the agent guide `baldur-agent-2`. The on-premises copy may be ahead of it.
 Statements about existing code are tagged **(repo)**. Check each one in task 0 and edit the spec
 (all three files) to match what you find. Untagged requirements describe intended behaviour;
 change them only with the person.
@@ -116,7 +120,7 @@ network.
 6. WHEN Baldur or Muninn refuses THEN the tool SHALL raise the SDK's `ToolError` with Baldur's
    message. The agent receives it as an `isError` result, after the SDK's prefix "Error
    executing tool NAME: ".
-7. WHEN a tool raises any other exception THEN the agent SHALL get the SDK's generic error, and
+7. WHEN a tool raises any other exception THEN the agent SHALL get a generic error naming Ysildir's log, and
    Ysildir SHALL log the traceback without any argument values.
 8. A call to a tool that isn't registered SHALL get the SDK's "Unknown tool" error. That covers a
    tool that is switched off, and one that never existed.
@@ -158,7 +162,7 @@ every client.
 
    | Topic | Guide |
    | --- | --- |
-   | `baldur` | Baldur's agent guide, version `baldur-agent-1` **(repo: `apps/baldur/prompts/agent-guide.md`)** |
+   | `baldur` | Baldur's agent guide, version `baldur-agent-2` **(repo: `apps/baldur/prompts/agent-guide.md`)** |
    | `muninn` | A new Muninn guide for agents, version `muninn-agent-1` |
    | `review` | Baldur's review prompt **(repo: `apps/baldur/prompts/review.md`)** |
    | `tools` | Every Ysildir tool, whether it is on, and how to turn it on |
@@ -211,7 +215,7 @@ straight into Baldur, so that Baldur can check its own numbers against it.
    or a future date.
 4. `baldur_withdraw_estimate(id)` SHALL call `withdraw_agent_estimate` **(repo)**. A withdrawn
    report stays in Muninn, marked withdrawn.
-5. `baldur_estimates(from, to, include_withdrawn)` SHALL list reports the way
+5. `baldur_estimates(date_from, date_to, include_withdrawn)` SHALL list reports the way
    `baldur.cmd ai list --json` does **(repo: `cmd_ai_list`)**, for at most 31 days at a time.
 6. WHEN Muninn isn't set up, or its schema is outside the range Ysildir supports, THEN these tools
    SHALL refuse with Muninn's own message **(repo: `open_app` errors)**.
@@ -263,10 +267,10 @@ that I can ask in chat instead of opening each app.
 2. `muninn_catalog()` SHALL list what Muninn holds: each table and view with a one-line meaning,
    its owning app and its row count, plus the rules for writing to Muninn. It SHALL NOT return
    rows.
-3. `muninn_what_changed(since, kinds, limit)` SHALL return the events after a time **(repo:
+3. `muninn_what_changed(since, kinds, limit)` SHALL return the events since a time, that second included **(repo:
    `events`, `ix_events_at`)**: id, time, app, kind, entity type and ref. Payload fields SHALL be
    returned only for event kinds on an allow-list whose payloads hold no free text.
-4. `muninn_day_status(from, to)` SHALL return, for at most 31 days at a time **(repo:
+4. `muninn_day_status(date_from, date_to)` SHALL return, for at most 31 days at a time **(repo:
    `v_day_status`, `v_unpostable_days`)**:
    - the approved and logged minutes per day and ticket;
    - the days that can't be posted, with the reason.
@@ -275,7 +279,8 @@ that I can ask in chat instead of opening each app.
 6. `muninn_search(query, kinds, limit)` SHALL search Muninn's FTS5 index **(repo: `search`, with
    entity id `rowid >> 4` and kind `rowid & 15`)**. It SHALL return each hit's kind, entity id
    and title, ranked by bm25. Each term of the query SHALL be quoted, so that FTS5 syntax in the
-   query can't change it or make it fail.
+   query can't change it or make it fail. Commits SHALL be the person's own (`is_mine`).
+
 7. `v_review_evidence` (Freya's), and Loki's and Freya's prompts, SHALL wait until those apps
    collect data (phase 2).
 
@@ -342,7 +347,8 @@ don't hand-edit JSON on a locked-down machine.
    | --- | --- | --- |
    | `--kiro DIR` | none known | `DIR\.kiro\settings\mcp.json` |
    | `--kiro-user` | none known | `%USERPROFILE%\.kiro\settings\mcp.json` |
-   | `--vscode DIR` | `code --add-mcp` (adds the server to your VS Code profile) | `DIR\.vscode\mcp.json` |
+   | `--vscode DIR` | none (one workspace) | `DIR\.vscode\mcp.json` |
+   | `--vscode-user` | `code --add-mcp` (adds the server to your VS Code profile) | none |
    | `--claude DIR` | `claude mcp add ysildir --scope project -- ...`, run in `DIR` | `DIR\.mcp.json` |
 
    `--print` SHALL print the commands and snippets instead of running or writing anything.

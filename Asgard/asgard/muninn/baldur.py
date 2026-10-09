@@ -313,7 +313,7 @@ def record_agent_estimate(con: sqlite3.Connection, report: Dict[str, Any], *, vi
         raise MuninnError("model must be the model's name, under 80 characters.")
     guide = _text(report, "guide")
     if guide and not _GUIDE_RE.match(guide):
-        raise MuninnError("guide must be the agent guide's version, like \"baldur-agent-1\".")
+        raise MuninnError("guide must be the agent guide's version, like \"baldur-agent-2\".")
     key = _text(report, "key")
     if key:
         try:
@@ -395,6 +395,25 @@ def withdraw_agent_estimate(con: sqlite3.Connection, estimate_id: int) -> None:
         con.execute("UPDATE agent_estimates SET status = 'withdrawn', withdrawn_at = ? WHERE id = ?",
                     (utcnow(), estimate_id))
         emit(con, "baldur", "agent_estimate.withdrawn", "agent_estimates", estimate_id, row["work_item_key"], {})
+
+
+def list_agent_estimates(con: sqlite3.Connection, first: str, last: str, *, include_withdrawn: bool = False,
+                         limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Reports dated first to last (YYYY-MM-DD, both included), oldest first, as `ai list --json` gives them.
+
+    Baldur's CLI and Ysildir both list through here, so the two can't disagree.
+    """
+    sql = ("SELECT e.*, (SELECT count(*) FROM agent_estimate_commits a WHERE a.estimate_id = e.id) AS n "
+           "FROM agent_estimates e WHERE e.local_date BETWEEN ? AND ? " +
+           ("" if include_withdrawn else "AND e.status = 'recorded' ") + "ORDER BY e.local_date, e.id")
+    params: List[Any] = [first, last]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    return [{"id": f"r{r['id']}", "date": r["local_date"], "agent": r["agent"], "key": r["work_item_key"],
+             "minutes": r["minutes"], "minutes_low": r["minutes_low"], "confidence": r["confidence"],
+             "commits": r["n"], "summary": r["summary"], "status": r["status"]}
+            for r in con.execute(sql, params)]
 
 
 # --------------------------------------------------------------------------

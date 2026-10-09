@@ -423,10 +423,14 @@ def day_pack(con: sqlite3.Connection, settings: Settings, day: dt.date,
     return build_pack(con, settings, day, inputs, est, load_reports(con, day, day, inputs.commits))
 
 
+def review_prompt() -> str:
+    """The review prompt as a model reads it: review.md without its version line."""
+    return "\n".join(PROMPT_FILE.read_text(encoding="utf-8").splitlines()[1:]).strip()
+
+
 def clipboard_text(pack: Dict[str, Any]) -> str:
     """The prompt and the pack, ready to paste into an approved AI chat (the clipboard tier)."""
-    prompt = "\n".join(PROMPT_FILE.read_text(encoding="utf-8").splitlines()[1:]).strip()
-    return f"{prompt}\n\nInput:\n{json.dumps(pack, indent=1)}\n"
+    return f"{review_prompt()}\n\nInput:\n{json.dumps(pack, indent=1)}\n"
 
 
 def apply_reply(con: sqlite3.Connection, settings: Settings, day: dt.date, reply: Any, *, tier: str = "clipboard",
@@ -438,6 +442,7 @@ def apply_reply(con: sqlite3.Connection, settings: Settings, day: dt.date, reply
     """
     if tier not in ("clipboard", "mcp", "api"):
         raise AssistError("tier is clipboard, mcp or api.")
+    _check_mode(settings)                  # first, so review off says so rather than "make a new pack"
     data = rules.parse_reply(reply)
     inputs, est = store.compute_with_inputs(con, settings, day, day, now)
     plan = store.plan(con, settings, est, day, day)

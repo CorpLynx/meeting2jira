@@ -3,7 +3,7 @@
 
 Prints one line into the agent's context when a shell command made a commit, and nothing
 otherwise, so it costs no tokens the rest of the time. The line names the command that records
-the estimate (Baldur's agent guide, baldur-agent-1). Standard library only, Python 3.9+; a bug
+the estimate (Baldur's agent guide, baldur-agent-2). Standard library only, Python 3.9+; a bug
 in this script prints nothing and never fails the agent's command.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import Any, Iterator
 COMMAND_KEYS = {"command", "cmd", "script", "commandLine", "command_line"}
 COMMIT = re.compile(r"(?:^|[\s;&|(])git(?:\.exe)?(?:\s+-[cC]\s+\S+)*\s+commit\b(?![^;&|\n]*--(?:dry-run|help)\b)", re.I)
 REMINDER = ("Baldur: you just committed. If this was work you did with the person, record your estimate of their "
-            "time on it: baldur.cmd ai record --agent <your tool> --guide baldur-agent-1 --minutes <estimate> "
+            "time on it: baldur.cmd ai record --agent <your tool> --guide baldur-agent-2 --minutes <estimate> "
             "--commit <git rev-parse HEAD> --confidence <high|medium|low> --summary \"<one sentence, no code>\" "
             "--json   (full guide: baldur.cmd ai guide)")
 

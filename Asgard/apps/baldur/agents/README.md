@@ -6,7 +6,7 @@ They're the AI-assisted method's front door: the agent records, Baldur checks, y
 
 | File | What it does |
 | --- | --- |
-| `../prompts/agent-guide.md` | The full guide (version `baldur-agent-1`): when to record, what "minutes" means, the JSON form, the rules. `baldur.cmd ai guide` prints it; Ysildir serves it as its MCP instructions |
+| `../prompts/agent-guide.md` | The full guide (version `baldur-agent-2`): when to record, what "minutes" means, the JSON form, the rules. `baldur.cmd ai guide` prints it; Ysildir serves it as its MCP instructions |
 | `kiro-steering.md` | The short version, as a Kiro steering file (`inclusion: auto`: loaded when a change is done or time comes up) |
 | `hooks/guard_baldur.py` | PreToolUse guard: blocks `approve`, `reject`, `change`, `actual`, `calibrate --accept`, `setup` changes, key and repository changes, `schedule`, the GitHub token, and anything touching `muninn.db` |
 | `hooks/after_commit.py` | PostToolUse reminder: after a `git commit`, one line telling the agent how to record its estimate |

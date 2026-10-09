@@ -8,21 +8,28 @@ Baldur's estimation is finished, in two methods side by side (`docs/baldur-spec.
   - **Calibration is built** (`calibrate.py`; CLI `actual`, `actuals`, `calibrate [--accept]`). It is the grid search over gap, lead-in and ambient weight, keeping the lowest daily error among settings that estimate low on average.
   - **A search-index repair fix.** SQLite 3.45 can't rebuild an emptied search index, because the table won't open; `integrity.repair_search` now puts back an empty index's own records first.
 - **The AI-assisted method.**
-  - **Agent estimates.** Muninn **schema v4** (`0004_agent_estimates.sql`, owned by Baldur) keeps what an AI coding agent says your time on a change was. It is recorded through `asgard.muninn.baldur.record_agent_estimate()` (CLI `ai record`, or Ysildir later).
+  - **Agent estimates.** Muninn **schema v4** (`0004_agent_estimates.sql`, owned by Baldur) keeps what an AI coding agent says your time on a change was. It is recorded through `asgard.muninn.baldur.record_agent_estimate()` (CLI `ai record`, or Ysildir's `baldur_record_estimate`).
   - **Checking.** `assist.py` turns the reports, or an AI review pasted back at the clipboard tier (`ai pack`, `ai review`), into suggestions. They are checked by `muninn.baldur.check_review`: they never raise a day, every one cites evidence, they never add a ticket, and they round down.
   - **Taking them.** `approve --date D --ai` takes the suggestions. Odin's worklog comment gets a `Reviewed:` line.
   - **`review_mode=content` is refused** (rule 6).
 - **Agent files.** `apps/baldur/prompts/agent-guide.md` is the guide (`ai guide`). `apps/baldur/agents/` holds the Kiro steering, a guard hook that blocks approvals and settings changes, and an after-commit reminder. `ai kiro --into REPO` installs them.
-- **The Ysildir spec.** `.kiro/specs/ysildir-mcp/` (requirements, design, tasks) is a Kiro spec for the MCP server that teaches agents Baldur and Muninn, takes their estimates and answers questions. It is built on the official MCP SDK (`mcp` 2.3.0), with the alternatives listed in case the SDK isn't available on-premises. It isn't built yet. Task 0 reconciles it with the on-premises code and steering.
-- **Modules.** This branch's code is standard library, and pins nothing: `asgard.muninn` must stay standard library, and the Baldur parts have no gap a package fills (the review is in `MODULES.md`, "Deliberately standard library"). Ysildir's spec pins `mcp` and `pydantic`, with their `MODULES.md` sections, when its code lands.
-- **Verified after the merge.** 408 Asgard tests (380 pass; 28 skip here for want of Tk, PySide6, Playwright or Python 3.12), and the full suite on Python 3.9. Also the zone loop, the schema check (171 checks), vermin and ruff clean, and the smoke script (PROJ-42 1h30m, PROJ-51 30m).
+- **Ysildir is built** (`apps/ysildir/`, `docs/integration/ysildir.md`), from the Kiro spec in `.kiro/specs/ysildir-mcp/`. It is the MCP server that teaches agents Baldur and Muninn (instructions, `asgard_guide`, resources, four prompts), takes their estimates and runs the day's review at the MCP tier through Baldur's own functions, and answers read-only questions from Muninn.
+  - **Built on** the official MCP SDK (`mcp` 2.3.0, stdio only), with `pydantic` for the models. It needs Python 3.10+. The alternatives, if the SDK isn't approved on-premises, are in `MODULES.md`.
+  - **Twelve tools, each with a switch** in `settings\ysildir.json`. Tools that send Muninn data start off. A file Ysildir can't read leaves only `asgard_guide` on.
+  - **No decision is a tool.** Kiro's guard hook also blocks `ysildir.cmd tools --on/--off`, `setup` and `ysildir.json`.
+  - **The client** starts the Python that ran `ysildir.cmd setup` (Kiro, VS Code or Claude Code).
+  - **Tests:** `tests/test_ysildir.py`, 54 of them, run through the SDK's own client in memory and over stdio. They skip without the SDK, and the mutation checks fail a test each time.
+  - **Still to do, on the workstation:** spec task 0 (reconcile; IT approval of the SDK's five compiled wheels) and task 10 (the acceptance walkthrough with Kiro).
+  - **The Baldur agent guide is now `baldur-agent-2`.** It adds worked examples for the MCP route.
+- **Modules.** Baldur and Muninn stay standard library: `asgard.muninn` must, and the Baldur parts have no gap a package fills (the review is in `MODULES.md`, "Deliberately standard library"). Ysildir pins `mcp==2.3.0` and `pydantic==2.14.0`, each with its `MODULES.md` section; only Ysildir imports them.
+- **Verified with Ysildir in.** 462 Asgard tests: with the MCP SDK installed (Python 3.11), 434 pass and 28 skip (Tk, PySide6, Playwright, Python 3.12). Without the SDK, Ysildir's 42 SDK tests skip too (392 pass). On Python 3.9, 390 pass. The repo-root runner passes 512. Also clean: the schema check (171 checks), vermin, ruff, and the smoke script (PROJ-42 1h30m, PROJ-51 30m). Each of eight mutations to Ysildir's guarantees fails a test.
 - **Owed before calling it done (AGENTS.md):**
   - an independent review of calibration and the AI-assisted method, since they change estimates and approvals;
   - carrying the snapshot edits in `docs/baldur-spec.md` and `docs/muninn-design.md` over to the live docs (each snapshot's header lists them);
   - a `VERSION` bump and zip when this ships.
 - **Version label.** Schema v3 and v4 are labelled Asgard 0.4.0, the next release. If 0.4.0 ships from main before this branch merges, relabel v4 (`0004_agent_estimates.sql`, the docs) as 0.5.0.
 
-Asgard is a suite of small Python apps for a federal software engineer, Brandon, on a locked-down Windows 11 workstation. A launcher shows one tile per app, and the apps share one SQLite database, Muninn. Built so far: the launcher, installer and uninstaller; Muninn's schema (v4: v3 hardened, plus agent estimates), its Python package and its maintenance commands; Baldur's git collector, estimator, GitHub sync, window, calibration and AI-assisted method; Heimdall; and the shared Qt window. 408 Asgard tests: 380 pass, and 28 skip without tkinter, PySide6, Playwright or Python 3.12.
+Asgard is a suite of small Python apps for a federal software engineer, Brandon, on a locked-down Windows 11 workstation. A launcher shows one tile per app, and the apps share one SQLite database, Muninn. Built so far: the launcher, installer and uninstaller; Muninn's schema (v4: v3 hardened, plus agent estimates), its Python package and its maintenance commands; Baldur's git collector, estimator, GitHub sync, window, calibration and AI-assisted method; Heimdall; the shared Qt window; and Ysildir, the MCP server for AI clients. 462 Asgard tests: 434 pass with the MCP SDK installed, and 28 skip without tkinter, PySide6, Playwright or Python 3.12 (Ysildir's SDK tests skip too where the SDK isn't installed).
 
 **Where this lives now.** Since 0.3.1 Asgard is the `Asgard/` folder of Brandon's `meeting2jira` repository, next to `Odin/` (Odin's code, docs and tests). Paths in this file are relative to `Asgard/`; `../Odin/` means the sibling folder. From the repo root, `python tools/run_tests.py` runs both suites through pytest (500 pass on 2026-10-09, after this branch's merge); the plain `unittest` command below still works from `Asgard/`. The repo's `.kiro/steering/` rules describe Odin; for `Asgard/`, this file and `AGENTS.md` win. The retired first attempt at Muninn and Baldur (`munnin-layer/`, `baldur/`) is archived in `../context-docs/` and isn't used. On Windows, the schema-check wrapper and the 25-hour-day test skip, because Windows Python can't switch time zones. Read `AGENTS.md` before changing anything; it holds the rules this project runs on.
 
@@ -66,7 +73,7 @@ The three specs are snapshots of live Claude Docs that Brandon can open and comm
 | Heimdall | SeCcHm submissions | CLI and window built: form file, templates, `fill` through Playwright and Edge, stopping before Submit. Its tile opens the shared Qt window (Templates, Form, Dashboard, Settings). Tested against a fake ServiceNow with Chrome, and the window offscreen, on macOS only. Real Edge, PIV, the SeCcHm form and the window on Windows are untested. No Muninn `submissions` rows yet |
 | Shared window | `asgard.ui`: one PySide6/QML window apps plug pages into | Built (shell, theming, Dashboard, Settings, Heimdall's pages). Odin's and Bifrost's pages not built; the launcher and Baldur's window are still tkinter |
 | Bifrost | BEARs workbooks and Confluence uploads | Specified, not built |
-| Ysildir | MCP server so approved AI tools can use Asgard | Specified as a Kiro spec (`../.kiro/specs/ysildir-mcp/`), not built |
+| Ysildir | MCP server so approved AI tools can use Asgard | Built (`apps/ysildir/`, on the MCP SDK 2.3.0): teaching, Baldur's agent intake, day view and MCP-tier review, Muninn reads, switches, `setup` for Kiro, VS Code and Claude Code. Not yet tried on the workstation (spec tasks 0 and 10); no tile window (the GUI comes later) |
 | Valkyrie | Setup scripts for new engineers | Specified, not built |
 
 Names reserved in the specs: Huginn (scheduled collectors), Mímir (the one module that picks an AI tier: API, MCP or clipboard).
@@ -83,7 +90,7 @@ Names reserved in the specs: Huginn (scheduled collectors), Mímir (the one modu
 | `asgard/muninn/` | `db.py` (connect, `open_app`, migrate, backup, restore, `prepare`, `transaction`, `retry_busy`), `guard.py` (authorizer and row rules per app), `integrity.py` (housekeeping, `check`, schema drift, repairs), `redact.py` (secret scrubbing), `keys.py` (Jira key rule), `cli.py` (`--muninn` commands), `sync.py` (`Run`, events, identities), `odin.py` (Odin's flows and posting protocol), `baldur.py` (approval rules, agent estimates, the review check), `badges.py` (tile counts) |
 | `asgard/muninn/migrations/` | `0001_initial.sql` (v1), `0002_copies_arent_activity.sql` (v2), `0003_hardening.sql` (v3) and `0004_agent_estimates.sql` (v4): not shipped, so they may still change; frozen once 0.4.0 ships. Never edit a shipped migration. Baldur opens Muninn with `supported=(4, 4)` |
 | `apps/baldur/baldur/` | `settings.py`, `keys.py`, `gitread.py`, `collect.py`, `estimate.py` (pure), `store.py`, `report.py`, `cli.py`, `github.py`, `desk.py` and `window.py` (the window), `calibrate.py` (calibration), `assist.py` (the AI-assisted method), `agents.py` (installs the Kiro files) |
-| `apps/baldur/prompts/`, `apps/baldur/agents/` | `review.md` (the review prompt, `baldur-review-2`), `agent-guide.md` (the agent guide, `baldur-agent-1`); the Kiro steering, `hooks/guard_baldur.py` and `hooks/after_commit.py` |
+| `apps/baldur/prompts/`, `apps/baldur/agents/` | `review.md` (the review prompt, `baldur-review-2`), `agent-guide.md` (the agent guide, `baldur-agent-2`); the Kiro steering, `hooks/guard_baldur.py` and `hooks/after_commit.py` |
 | `apps/baldur/cli.py`, `apps/baldur/baldur.cmd` | CLI entry points (the `.cmd` tries `py -3`, then `py`, then `python`) |
 | `apps/heimdall/heimdall/` | `form.py` (the form file, `settings\heimdall.json`), `templates.py` (`settings\heimdall-templates.json`, and `plan()`: form default < template < `--set`), `browser.py` (the only module that imports Playwright, lazily), `cli.py` (`init`, `fields`, `template list/show/save/edit/delete`, `fill`; `--json` for a UI) |
 | `asgard/ui/` | Shared window: `theme.py` (tokens; built-in < app manifest < `ui.json`; derived colours keep 4.5:1 contrast), `prefs.py` (`settings\ui.json`), `registry.py` (finds `apps/<id>/ui/manifest.json`), `shell.py` (the only PySide6 module: theme map, navigation, `Bridge`, dashboard, settings), `qml/AsgardUI/` (components, Dashboard, Settings). `python -m asgard.ui [--app ID]` |
@@ -144,7 +151,7 @@ The worked example in the spec (meetings 09:00-12:00 and 12:30-16:30, eight comm
   - **A stored review** counts only while its pack hash matches the day's evidence.
   - **`review_mode=content` is refused** under rule 6.
   - **Calibration** fits only to real hours you noted, never to approvals, and accepting needs at least 10 days.
-- **Ysildir (spec, 2026-10-09).**
+- **Ysildir (built 2026-10-09).**
   - Built on the official MCP SDK (`mcp` 2.3.0, `MCPServer`), stdio transport only. It needs
     Python 3.10+, and IT must approve five native wheels. If it isn't available on-premises, the
     alternatives in order are: `mcp` 1.x, `fastmcp`, a standard-library server, the CLI and
@@ -152,6 +159,7 @@ The worked example in the spec (meetings 09:00-12:00 and 12:30-16:30, eight comm
   - Writes only through Baldur's functions, under Baldur's identity.
   - Never a tool for a decision.
   - A switch per tool, with tools that send Muninn data off by default.
+  - The client config names the Python that ran `setup` (it has the SDK), not `py -3`, which could pick another.
 
 ## What's next
 
@@ -163,7 +171,7 @@ In priority order. Each step should end with tests, the specs updated, and a ver
 3. *(Done, except alerts: GitHub, build step 4.)* Read-only token in Credential Manager; pull requests, reviews, the `review-requested:@me` search with conditional requests; review-only `repos` rows; alerts via `Shell_NotifyIcon`; PR head-branch keys (`keys.choose(pr_branches=...)` is ready); the squash rule with PR data. The host is decided (Enterprise Server; `settings.github_api_url()` and `Settings.github_host()` are ready). Needs Brandon's answer on token access (fine-grained or classic) and the server's version.
 3a. **The independent review this branch owes.** A fresh agent tries to break calibration and the AI-assisted method with scripts it runs: agent drafts that raise a day, stale packs, review replies that slip a rule, a figure taken then changed by hand, Odin's `Reviewed:` line. Record it like `docs/review-2026-10-04.md`.
 3b. **Agents on the workstation.** Install Baldur's Kiro files in one repository (`baldur.cmd ai kiro --into ...`), then reconcile them with the on-premises steering that already asks agents for estimates (`apps/baldur/agents/README.md`, "Reconciling"). Run a calibration trial alongside: the real hours you note there also show whether agents' estimates help.
-3c. **Ysildir**, following `../.kiro/specs/ysildir-mcp/tasks.md`. Task 0 runs on the workstation and stops for Brandon.
+3c. **Ysildir on the workstation** (`../.kiro/specs/ysildir-mcp/tasks.md`). Task 0 reconciles the spec with the on-premises steering and checks the SDK's approval, then stops for Brandon. Task 10 is the acceptance walkthrough with Kiro. Until IT approves the SDK's compiled wheels, agents use `baldur.cmd ai record` and the clipboard review.
 3d. **The AI-assisted figures in a window** (with the planned GUI work). `desk.load_day` already returns them in `DayView.ai`, and `desk.approve_day(..., take_ai=True)` takes them. Moving Baldur's window to the shared Qt window is optional ("Shared window, decided", below); if it moves, a `ui/manifest.json`, QML pages and a backend over `desk.py` are the pattern Heimdall set.
 4. **Odin into Muninn (steps 2 to 7 of the Muninn doc's plan).** This happens in Odin's code, in `../Odin/app/src/meeting2jira/`. Odin targets Python 3.8 and `%LOCALAPPDATA%\meeting2jira`, so it reaches Muninn through `ASGARD_APP` as the README shows, and only when Asgard is installed. Step 7's one-time importer reads Odin's `synced` table; its schema is `_SCHEMA` plus `_MIGRATIONS` in `../Odin/app/src/meeting2jira/state.py`.
 5. *(Done on `claude/baldur-estimation`: calibration, build step 8.)* `actual`, `actuals`, `calibrate [--accept]`; the trial itself is Brandon's.
@@ -183,7 +191,7 @@ In priority order. Each step should end with tests, the specs updated, and a ver
   - Is an AI coding agent's estimate acceptable evidence for moving or lowering time?
   - Is an AI chat approved for the review in `metadata` mode?
   - What does the on-premises steering ask agents to estimate: time spent, which is Baldur's figure, or a "without AI" size, which doesn't belong in Baldur?
-- **Ysildir's default switches.** Which tools may send Muninn data to the AI client (ISSO). The proposal is in the spec's requirement 6.1.
+- **Ysildir.** The ISSO's view on the default switches (which tools may send Muninn data to the AI client; requirement 6.1 of the spec, as built), and IT's approval of the SDK's five compiled wheels (`pydantic-core`, `cryptography`, `cffi`, `rpds-py`, `pywin32`).
 - Optional: whether to compare Odin's old `gitwork.py` (`../Odin/app/src/meeting2jira/gitwork.py`, tests in `../Odin/app/tests/test_gitwork.py`) against Baldur.
 
 ## Known limitations

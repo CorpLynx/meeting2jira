@@ -47,8 +47,9 @@ def kiro_files() -> Dict[str, str]:
         "hooks/baldur-guard.json": _hook(
             "Baldur: the person decides",
             "Blocks an agent from approving, rejecting or changing time in Baldur, noting real hours, accepting a "
-            "calibration, changing Baldur's settings, keys or repositories, and from touching muninn.db. Recording "
-            "its own estimate (ai record) and reading are allowed.", "PreToolUse", "guard_baldur.py"),
+            "calibration, changing Baldur's settings, keys or repositories, switching Ysildir's tools or "
+            "connecting clients to it, and from touching muninn.db or ysildir.json. Recording its own estimate "
+            "(ai record) and reading are allowed.", "PreToolUse", "guard_baldur.py"),
         "hooks/baldur-after-commit.json": _hook(
             "Baldur: record the estimate after a commit",
             "After a git commit, adds one line telling the agent how to record its estimate of the person's time "

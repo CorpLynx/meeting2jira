@@ -12,7 +12,7 @@ Muninn is one SQLite file per user (`%LOCALAPPDATA%\Asgard\muninn.db`) that ever
 | [loki.md](loki.md) | Loki: meeting recaps, action items, BLUFs | Spec |
 | [heimdall.md](heimdall.md) | Heimdall: SeCcHm submissions | Diverging on-prem; contract only |
 | [bifrost.md](bifrost.md) | Bifrost: BEARs workbooks and Confluence uploads | Spec |
-| [ysildir.md](ysildir.md) | Ysildir: MCP server that teaches AI agents Baldur and Muninn, takes their estimates, answers questions | Spec (the Kiro spec is in the repository at `.kiro/specs/ysildir-mcp/`) |
+| [ysildir.md](ysildir.md) | Ysildir: MCP server that teaches AI agents Baldur and Muninn, takes their estimates, answers questions | Built (`apps/ysildir/`); not yet tried on the workstation |
 | [valkyrie.md](valkyrie.md) | Valkyrie and Valhalla: install and uninstall | Spec |
 | [huginn.md](huginn.md) | Huginn: scheduled collection | Spec |
 | [mimir.md](mimir.md) | Mímir: the one AI switch; writes nothing itself | Spec |

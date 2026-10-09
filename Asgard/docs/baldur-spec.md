@@ -298,11 +298,11 @@ Your on-premises steering already asks coding agents to estimate how long their 
   - a one-sentence summary.
 
   It records through `baldur.cmd ai record` (options or JSON), or Ysildir's `baldur_record_estimate` tool. `asgard.muninn.baldur.record_agent_estimate()` validates every field and refuses code-like summaries. The same report twice is stored once, and a newer report from the same agent on the same commits withdraws the older one. Reports are facts (Muninn v4).
-- **Teaching the agent.** `apps/baldur/prompts/agent-guide.md` (`baldur-agent-1`, printed by `baldur.cmd ai guide`) is the full guide. `baldur.cmd ai kiro --into REPO` installs a Kiro steering file (the short version) and two hooks:
+- **Teaching the agent.** `apps/baldur/prompts/agent-guide.md` (`baldur-agent-2`, printed by `baldur.cmd ai guide`) is the full guide. `baldur.cmd ai kiro --into REPO` installs a Kiro steering file (the short version) and two hooks:
   - One blocks the agent from approving, rejecting or changing time, noting real hours, accepting a calibration, changing Baldur's settings, keys or repositories, and touching `muninn.db`.
   - The other reminds it to record after each `git commit`.
 
-  Ysildir will teach the same through MCP (`.kiro/specs/ysildir-mcp/`).
+  Ysildir teaches the same through MCP: instructions, `asgard_guide`, and the guide's worked examples (`docs/integration/ysildir.md`).
 - **Turning reports into a suggestion** (`assist.agent_draft`):
   - A report counts its low end when it gave a range (of two readings, the smaller wins).
   - Its figure is shared across the commits it cites, so a report covering two tickets splits like Baldur's own attribution. Where two reports cite one commit, the smaller share counts.
@@ -318,7 +318,7 @@ On the worked example day, two reports put the PROJ-42 change at 45m and the PRO
 The review uses whichever of Asgard's AI tiers you have:
 
 - **Clipboard** (built): `baldur.cmd ai pack DATE` stores the day's estimate and prints the prompt with the day's evidence. You paste it into your approved AI chat, then give Baldur the answer with `baldur.cmd ai review DATE ANSWER.json`.
-- **MCP** (specified): Ysildir's `baldur_review_pack` and `baldur_submit_review` do the same inside your AI client.
+- **MCP** (built): Ysildir's `baldur_review_pack` and `baldur_submit_review` do the same inside your AI client, through `assist.day_pack` and `assist.apply_reply(tier="mcp")`.
 - **API** (not built): Mímir sends the pack to an approved endpoint and uses its smallest model.
 
 The pack (`baldur.review_pack/1`) holds:
@@ -440,7 +440,7 @@ Steps 1–7 deliver review alerts and the report-only product. Posting starts on
     - the checked review at the clipboard tier;
     - `approve --ai`, and Odin's `Reviewed:` line.
 
-    The MCP tier is specified as Ysildir (`.kiro/specs/ysildir-mcp/`). The API tier waits for an approved endpoint (Mímir).
+    The MCP tier is built as Ysildir (`apps/ysildir/`). The API tier waits for an approved endpoint (Mímir).
 
 ## Tests
 

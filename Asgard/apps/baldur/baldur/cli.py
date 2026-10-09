@@ -572,14 +572,9 @@ def cmd_ai_record(con: sqlite3.Connection, s: config.Settings, args: argparse.Na
 
 def cmd_ai_list(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
     first, last = date_range(args, 14)
-    rows = con.execute("SELECT e.*, (SELECT count(*) FROM agent_estimate_commits a WHERE a.estimate_id = e.id) AS n "
-                       "FROM agent_estimates e WHERE e.local_date BETWEEN ? AND ? " +
-                       ("" if args.all else "AND e.status = 'recorded' ") + "ORDER BY e.local_date, e.id",
-                       (first.isoformat(), last.isoformat())).fetchall()
+    rows = approvals.list_agent_estimates(con, first.isoformat(), last.isoformat(), include_withdrawn=args.all)
     if args.json:
-        print(json.dumps([{"id": f"r{r['id']}", "date": r["local_date"], "agent": r["agent"], "key": r["work_item_key"],
-                           "minutes": r["minutes"], "minutes_low": r["minutes_low"], "confidence": r["confidence"],
-                           "commits": r["n"], "summary": r["summary"], "status": r["status"]} for r in rows]))
+        print(json.dumps(rows))
         return 0
     if not rows:
         print(f"No agent estimates between {first.isoformat()} and {last.isoformat()}.")
@@ -587,8 +582,8 @@ def cmd_ai_list(con: sqlite3.Connection, s: config.Settings, args: argparse.Name
     for r in rows:
         low = f" (low {E.fmt(r['minutes_low'])})" if r["minutes_low"] else ""
         gone = "  WITHDRAWN" if r["status"] != "recorded" else ""
-        print(f"  r{r['id']:<5} {r['local_date']}  {r['agent'][:12]:<12} {E.fmt(r['minutes']):>6}{low:<12} "
-              f"{r['confidence']:<7} {r['work_item_key'] or '-':<11} {store.plural(r['n'], 'commit'):<10} "
+        print(f"  {r['id']:<6} {r['date']}  {r['agent'][:12]:<12} {E.fmt(r['minutes']):>6}{low:<12} "
+              f"{r['confidence']:<7} {r['key'] or '-':<11} {store.plural(r['commits'], 'commit'):<10} "
               f"{r['summary'][:60]}{gone}")
     return 0
 

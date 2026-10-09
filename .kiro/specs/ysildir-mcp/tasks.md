@@ -1,5 +1,9 @@
 # Tasks: Ysildir, Asgard's MCP server
 
+> **Status, 2026-10-09:** tasks 1 to 9 and 11 are built and tested on branch `claude/baldur-estimation`.
+> Tasks 0 and 10 need the workstation; task 12 only if the SDK can't be used there. The wheel download
+> for `vendor/` (task 1) happens at release time.
+
 Work through these in order. Each task ends with its tests passing. The commands, run from
 `Asgard/`, are:
 
@@ -50,7 +54,7 @@ Use the best module for each job, and note the alternatives in case it isn't on-
   - **Stop. Report what you found and the spec edits you made, and wait for the person to
     confirm.**
 
-- [ ] 1. Add the SDK (`Asgard/requirements.txt`, `vendor/`, `ysildir.cmd`)
+- [x] 1. Add the SDK (`Asgard/requirements.txt`, `vendor/`, `ysildir.cmd`)
   - Pin `mcp` and `pydantic` with the comment block from the design ("Pins to add"). It says what
     each is for, why the standard library isn't enough, that it's native, and its approval status.
     Use the version task 0 found.
@@ -68,7 +72,7 @@ Use the best module for each job, and note the alternatives in case it isn't on-
     sections. The missing-SDK message runs with `mcp` hidden (a `sys.modules` stub).
   - _R1.9–R1.12_
 
-- [ ] 2. The server on the SDK (`server.py`, `results.py`, `models.py`)
+- [x] 2. The server on the SDK (`server.py`, `results.py`, `models.py`)
   - `server.build(config)`: `MCPServer("ysildir", title=..., version=..., instructions=...,
     log_level="WARNING")`. Then `add_tool(..., annotations=ToolAnnotations(...),
     structured_output=True)` for each tool that's on. `serve()` runs `run("stdio")` and nothing
@@ -93,7 +97,7 @@ Use the best module for each job, and note the alternatives in case it isn't on-
     on EOF.
   - _R1.1–R1.8, R6.6–R6.8_
 
-- [ ] 3. Switches (`config.py`) and the `tools` command
+- [x] 3. Switches (`config.py`) and the `tools` command
   - Read `settings/ysildir.json` through a pydantic model, with its defaults. A broken file fails
     closed, and the message names the bad entry. Unknown names are logged.
   - A tool that is off isn't registered, so it isn't in `list_tools`, and calling it gets
@@ -105,7 +109,7 @@ Use the best module for each job, and note the alternatives in case it isn't on-
     equal to the design's table.
   - _R6.1, R6.2_
 
-- [ ] 4. The teaching surface (`teach.py`, `instructions.md`, `asgard/muninn/agent-guide.md`)
+- [x] 4. The teaching surface (`teach.py`, `instructions.md`, `asgard/muninn/agent-guide.md`)
   - Write `instructions.md` and the Muninn guide from the design's drafts.
   - `asgard_guide(topic)` covers `baldur`, `muninn`, `review` and `tools`. The `tools` topic is
     generated: each tool's switch, what it sends, and its command-line equivalent.
@@ -127,7 +131,7 @@ Use the best module for each job, and note the alternatives in case it isn't on-
   *Done on this branch.*
   - _R2.9_
 
-- [ ] 5. Baldur tools: the agent's estimates (`baldur_tools.py`)
+- [x] 5. Baldur tools: the agent's estimates (`baldur_tools.py`)
   - `baldur_record_estimate(report: AgentReport)` calls `record_agent_estimate(..., via="mcp")`
     on `as_baldur()`, and returns id, status, replaced and the message.
     `baldur_withdraw_estimate` calls `withdraw_agent_estimate`.
@@ -144,7 +148,7 @@ Use the best module for each job, and note the alternatives in case it isn't on-
     - a Muninn at version 3 or 5.
   - _R3.1–R3.6_
 
-- [ ] 6. Baldur tools: the day and the MCP-tier review (`baldur_tools.py`)
+- [x] 6. Baldur tools: the day and the MCP-tier review (`baldur_tools.py`)
   - `baldur_day`: `desk.load_day` on the read-only `ysildir` connection, mapped to the design's
     output. `take` and `keep` appear only when the AI-assisted figures change the day.
     `include_report` adds the report text.
@@ -163,7 +167,7 @@ Use the best module for each job, and note the alternatives in case it isn't on-
     - approving afterwards stores the `review` note and gives Odin's `Reviewed:` line.
   - _R4.1–R4.7_
 
-- [ ] 7. Muninn tools (`muninn_tools.py`)
+- [x] 7. Muninn tools (`muninn_tools.py`)
   - `muninn_catalog`: tables and views from `sqlite_schema`, owners from `guard.OWNERS` and
     `SHARED`, a one-line meaning per table, and row counts. Keep the meanings in
     `asgard/muninn/agent-guide.md` or beside `guard.OWNERS`, not in Ysildir.
@@ -179,8 +183,8 @@ Use the best module for each job, and note the alternatives in case it isn't on-
     - every query runs on a read-only connection.
   - _R5.1–R5.7, R6.3–R6.5_
 
-- [ ] 8. Connecting clients (`clients.py`, `cli.py setup | check`) and the guard
-  - `setup --kiro DIR | --kiro-user | --vscode DIR | --claude DIR | --print [--force]`. Use the
+- [x] 8. Connecting clients (`clients.py`, `cli.py setup | check`) and the guard
+  - `setup --kiro DIR | --kiro-user | --vscode DIR | --vscode-user | --claude DIR | --print [--force]`. Use the
     client's own command where task 0 found one (`code --add-mcp`,
     `claude mcp add --scope project`); otherwise use the design's merge rules. `autoApprove` lists
     only the read-only tools that are on.
@@ -197,7 +201,7 @@ Use the best module for each job, and note the alternatives in case it isn't on-
     - `check`'s output.
   - _R7.1–R7.5_
 
-- [ ] 9. The scripted walkthrough and the stdio tests
+- [x] 9. The scripted walkthrough and the stdio tests
   - A scripted client (the SDK's `Client` over stdio) replays examples A to F against the smoke
     data. It then approves through the CLI and checks the `Reviewed:` line.
   - Check that the forged decision tools get "Unknown tool", and run the static AST checks from
@@ -221,7 +225,7 @@ Use the best module for each job, and note the alternatives in case it isn't on-
     the rules.
   - _R8.5_
 
-- [ ] 11. Docs, and the definition of done
+- [x] 11. Docs, and the definition of done
   - Update:
     - `docs/integration/ysildir.md`: built status, the tool table, switches and data flows;
     - `docs/integration/README.md`: Ysildir's row, and the events it reads;
