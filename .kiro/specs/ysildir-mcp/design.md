@@ -50,8 +50,10 @@ drift.
 
 ## Modules, and what to use if one isn't on-premises
 
-The rule (Brandon, 2026-10-09): use the best module for each job, and note the alternatives in
-case it isn't available on-premises.
+The rule (Brandon, 2026-10-09): use the best module for each job. Each package Ysildir imports gets
+a section in `Asgard/MODULES.md` with its alternatives, in case it isn't available on-premises
+(dependency policy rule 8; `tests/test_dependencies.py` checks it). This table is the design's
+view. Once the code lands, `MODULES.md` is where it's kept up to date.
 
 | Need | Use | Why it's the best choice | Compiled? | If it isn't on-premises |
 | --- | --- | --- | --- | --- |
@@ -65,26 +67,60 @@ case it isn't available on-premises.
 | Tests | The SDK's `Client`, in memory and over stdio, under `unittest.IsolatedAsyncioTestCase` | A real MCP client runs the real protocol | No | The fallback server's own tests |
 | Trying it by hand, on a dev machine only | MCP Inspector (`npx @modelcontextprotocol/inspector`), or `mcp dev` from the `mcp[cli]` extra | Shows the tools, prompts and resources as a client sees them | Needs Node.js, or the extra's packages | `ysildir.cmd check` |
 
-Only `server.py` and `results.py` import `mcp`. So moving to an alternative SDK (rows 1 and 2
-above) changes the imports in those two files and nothing else.
+Only `server.py` and `results.py` import `mcp`, and only `models.py` and `config.py` import
+`pydantic`. So moving to an alternative SDK (rows 1 and 2 above) changes the imports in those
+files and nothing else, and the "Used in" rows below list exactly them.
 
 ### Pins to add to `Asgard/requirements.txt`
 
 Add these in task 1, together with the code that imports them. `tests/test_dependencies.py` fails
-on a declared package that nothing imports, so the pins can't land before the code.
+on a declared package that nothing imports, so the pins can't land before the code. The comments
+follow the repo's convention: what it's for, why the standard library isn't enough, whether it's
+native, and its approval. The alternatives go in `MODULES.md`.
 
 ```
-# Ysildir: the official MCP Python SDK (MCPServer; Ysildir runs only its stdio transport and never
-# starts its HTTP server parts). Needs Python 3.10+.
-# Native: its dependencies pydantic-core, cryptography, cffi, rpds-py and, on Windows, pywin32 are
-# compiled, so App Control needs IT to approve their DLLs. approval: pending
-# If it isn't on-prem: the newest mcp 1.x (from mcp.server.fastmcp import FastMCP: same decorators);
-# else fastmcp 4.x; else the standard-library JSON-RPC server (.kiro/specs/ysildir-mcp, first
-# revision, commit d510709); else no MCP: baldur.cmd ai ... --json and the clipboard tier still work.
+# Ysildir's MCP server: the official MCP Python SDK (MCPServer; Ysildir runs only its stdio transport
+# and never starts its HTTP server parts). The standard library has no MCP, and a hand-written JSON-RPC
+# server would track the protocol's versions by hand. Needs Python 3.10+. Native: its dependencies
+# pydantic-core, cryptography, cffi, rpds-py and, on Windows, pywin32 are compiled, so App Control
+# needs IT to approve their DLLs. approval: pending. Alternatives: MODULES.md, "mcp".
 mcp==2.3.0
-# Ysildir's argument and result models; installed with mcp, pinned because Ysildir imports it.
-# Native: pydantic-core (as above). If it isn't on-prem, neither is mcp: see above. approval: pending
+# Ysildir's argument and result models (Ysildir imports pydantic itself; mcp installs it too).
+# Native: pydantic-core. approval: pending. Alternatives: MODULES.md, "pydantic".
 pydantic==2.14.0
+```
+
+### Sections to add to `Asgard/MODULES.md`
+
+Paste these into "Packages" in the same change, and remove Ysildir's row from "Planned". The
+tests check every row named here.
+
+```markdown
+### mcp
+
+| | |
+| --- | --- |
+| Pin | `mcp==2.3.0`, the official MCP Python SDK; needs Python 3.10+. It brings `mcp-types` at the same version, and about 30 wheels in all |
+| Used in | `apps/ysildir/ysildir/server.py`, `apps/ysildir/ysildir/results.py` |
+| Needed for | Ysildir: the MCP server an AI client (Kiro, Copilot, Claude Code) starts over stdio. Baldur, Muninn and every command line work without it |
+| Native code | Yes, through its dependencies: `pydantic-core`, `cryptography`, `cffi` and `rpds-py`, plus `pywin32` on Windows. App Control must allow their DLLs. Its HTTP parts (`starlette`, `uvicorn`, `sse-starlette`) are installed but never started |
+| Approval | Pending |
+| If it's missing | `ysildir.cmd` says what's missing (the package, or Python 3.10+) and exits 2. Agents still record through `baldur.cmd ai record`, and the review still runs at the clipboard tier (`ai pack`, `ai review`) |
+| Stdlib alternative | A JSON-RPC 2.0 server over stdio on the standard library: about 300 lines, Python 3.9+, over the same handlers. The spec's first revision (commit `d510709`) designs it. It has to track MCP's protocol versions by hand |
+| Package alternatives | The newest `mcp` 1.x on the mirror (`from mcp.server.fastmcp import FastMCP`, with the same decorators, annotations and `ToolError`); `fastmcp` 4.x, the standalone framework, which has more dependencies |
+
+### pydantic
+
+| | |
+| --- | --- |
+| Pin | `pydantic==2.14.0`. `mcp` installs it too; it's pinned because Ysildir imports it |
+| Used in | `apps/ysildir/ysildir/models.py`, `apps/ysildir/ysildir/config.py` |
+| Needed for | Ysildir's argument and result models, from which the SDK builds each tool's schemas, and reading `ysildir.json` |
+| Native code | Yes: `pydantic-core` |
+| Approval | Pending |
+| If it's missing | The same as for `mcp`, which needs it: `ysildir.cmd` says what's missing, and the CLI and clipboard tier still work |
+| Stdlib alternative | `dataclasses` with hand-written checks and JSON Schemas, in the standard-library server |
+| Package alternatives | `attrs` with `cattrs` (pure Python), or `msgspec` (native). The MCP SDK doesn't build schemas from either, so both go with the standard-library server |
 ```
 
 **The wheels.** The payload carries every wheel in `vendor/`, with its hash in `payload.sha256`
@@ -663,3 +699,7 @@ When setup edits a file itself:
 7. **Sizing figures.** If the on-premises steering also asks for "how long without AI", that
    figure has no place in Baldur, which records time actually spent. Store it somewhere else, or
    drop it (task 0).
+8. **A switches page in the shared window.** New windows are PySide6 and QML through `asgard.ui`
+   (decided Oct 2026). A Ysildir page could show each tool's switch and what it sends: an
+   `apps/ysildir/ui/manifest.json` and a backend over `config.py`, the way Heimdall's works.
+   `ysildir.cmd tools` covers it until the GUI work.

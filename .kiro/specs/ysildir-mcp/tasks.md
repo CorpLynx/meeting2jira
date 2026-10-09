@@ -52,17 +52,21 @@ Use the best module for each job, and note the alternatives in case it isn't on-
 
 - [ ] 1. Add the SDK (`Asgard/requirements.txt`, `vendor/`, `ysildir.cmd`)
   - Pin `mcp` and `pydantic` with the comment block from the design ("Pins to add"). It says what
-    each is for, that it's native, its approval status, and the alternatives if it isn't
-    on-premises. Use the version task 0 found.
+    each is for, why the standard library isn't enough, that it's native, and its approval status.
+    Use the version task 0 found.
+  - Paste the two sections from the design ("Sections to add to `Asgard/MODULES.md`") into
+    `MODULES.md`'s "Packages", and remove Ysildir's row from "Planned". Each section gives where
+    the package is used, what happens without it, and the standard-library and package
+    alternatives. Keep each "Used in" row matching the files that import it.
   - Download the wheel set for the workstation's Python (`pip download ... --platform win_amd64`)
     and list it, marking the native wheels, in the release notes. The payload carries the wheels
     in `vendor/` with their hashes **(repo: `docs/updates.md`)**.
   - `ysildir.cmd`, modelled on `baldur.cmd`, finds Python 3.10+. When `mcp` won't import, it
     prints what's missing and what still works (`baldur.cmd ai ... --json`, the clipboard tier),
     and exits 2.
-  - Tests: `tests/test_dependencies.py` passes with the new pins and imports. The missing-SDK
-    message runs with `mcp` hidden (a `sys.modules` stub).
-  - _R1.9–R1.11_
+  - Tests: `tests/test_dependencies.py` passes with the new pins, imports and `MODULES.md`
+    sections. The missing-SDK message runs with `mcp` hidden (a `sys.modules` stub).
+  - _R1.9–R1.12_
 
 - [ ] 2. The server on the SDK (`server.py`, `results.py`, `models.py`)
   - `server.build(config)`: `MCPServer("ysildir", title=..., version=..., instructions=...,
@@ -244,5 +248,5 @@ Use the best module for each job, and note the alternatives in case it isn't on-
      revision (commit `d510709`);
   4. no MCP: say so in the guides, and keep the CLI and clipboard tier as the route.
 
-  Update the pin, its comment and the tests to match.
+  Update the pin, its comment, its `MODULES.md` section and the tests to match.
   - _R1.1–R1.11_

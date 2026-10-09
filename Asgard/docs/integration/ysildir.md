@@ -31,7 +31,8 @@ The official MCP Python SDK (`mcp` 2.3.0, `MCPServer`), running only its stdio t
   3. a standard-library JSON-RPC server over the same handlers;
   4. no MCP: Baldur's `ai ... --json` commands and the clipboard tier.
 
-The design's "Modules" table has the details.
+The design's "Modules" table has the details. When the code lands, `mcp` and `pydantic` get their
+sections in `Asgard/MODULES.md`; the design drafts both.
 
 ## Connections
 

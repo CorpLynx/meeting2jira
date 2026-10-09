@@ -128,6 +128,11 @@ network.
     commands and the clipboard tier.
 11. THE SDK and everything it pulls in SHALL ship as reviewed wheels in the payload's `vendor/`
     folder **(repo: `docs/updates.md`)**. Nothing runs pip on the workstation.
+12. EACH package Ysildir imports (`mcp`, `pydantic`) SHALL be pinned in `Asgard/requirements.txt`
+    and have a section in `Asgard/MODULES.md` **(repo: dependency policy rule 8,
+    `tests/test_dependencies.py`)**. The section gives where the package is used, what happens
+    without it, the standard-library alternative and the package alternatives. The design drafts
+    both sections.
 
 ### Requirement 2: The server teaches the agent
 
@@ -388,7 +393,8 @@ what only the workstation can show.
 4. THE definition of done in AGENTS.md SHALL apply:
    - the suite passes on Python 3.9 (where Ysildir's tests skip) and on current Python with the
      SDK installed;
-   - `tests/test_dependencies.py` passes, with every new import pinned in `requirements.txt`;
+   - `tests/test_dependencies.py` passes, with every new import pinned in `requirements.txt` and
+     documented in `MODULES.md`;
    - vermin and ruff are clean;
    - `check_muninn_schema` passes;
    - the smoke script still ends with PROJ-42 1h30m and PROJ-51 30m;
