@@ -7,7 +7,7 @@ Oct 3, 2026 · @Brandon
 
 Muninn is one SQLite file of normalized facts, each keyed by its source system's ID, plus an append-only event log. Every app writes through one Python module, so the schema, provenance and migrations live in one place. Jira issue keys join the apps: Baldur records the keys it finds in git, Odin resolves them and is the only app that writes to Jira, and Freya keeps a durable copy of every issue you finish.
 
-The executable version ships in Asgard 0.2 and later as `asgard/muninn/migrations/0001_initial.sql`: 34 tables plus the search index, 48 indexes, 30 triggers and 10 views. The `asgard.muninn` package applies it and carries each app's write rules. Schema v2 (`0002_copies_arent_activity.sql`, Asgard 0.3.1) takes squash copies out of `v_activity`. The schema's own script runs 125 checks on SQLite 3.45, and the package's 48 tests cover migrations, sync runs, Odin's flows, Baldur's approvals and the tile badges; Asgard 0.3 adds Baldur's collector and estimator with 79 more tests.
+The executable version ships in Asgard 0.2 and later as `asgard/muninn/migrations/0001_initial.sql`: 34 tables plus the search index, 48 indexes, 30 triggers and 10 views. The `asgard.muninn` package applies it and carries each app's write rules. Schema v2 (`0002_copies_arent_activity.sql`, Asgard 0.3.1) takes squash copies out of `v_activity`. Schema v3 (`0003_hardening.sql`, Asgard 0.4.0) moves rules that held only in Python into the database: key shapes, size limits, posted time and consent. It also adds `pull_request_commits` and `v_double_posts`. Schema v4 (`0004_agent_estimates.sql`, also Asgard 0.4.0) adds Baldur's agent estimates and is additive. At v4 the schema has 37 tables plus the search index, 57 indexes, 61 triggers and 11 views. The schema's own script runs 125 checks on SQLite 3.45, and the package's 48 tests cover migrations, sync runs, Odin's flows, Baldur's approvals and the tile badges; Asgard 0.3 adds Baldur's collector and estimator with 79 more tests.
 
 ## Rules every app follows
 
@@ -30,7 +30,7 @@ Each app writes only its own tables and reads anything it needs; the views in th
 | App | Writes (sole owner) | Reads from other apps |
 | --- | --- | --- |
 | Odin | `work_items`, `work_item_aliases`, `work_item_transitions`, `calendar_events`, `worklogs` | `v_unknown_keys` (keys to look up), `v_worklogs_to_post` (approved time to post) |
-| Baldur | `repos`, `commits`, `commit_work_items`, `reflog_entries`, `pull_requests`, `pr_reviews`, `calibration_runs`, `estimate_runs`, `work_sessions`, `session_commits`, `session_allocations`, `day_proposals`, `time_actuals` | `work_item_aliases` and `work_items` (titles, status), `v_busy_meetings`, `v_day_status` (what Jira already holds) |
+| Baldur | `repos`, `commits`, `commit_work_items`, `reflog_entries`, `pull_requests`, `pull_request_commits`, `pr_reviews`, `calibration_runs`, `estimate_runs`, `work_sessions`, `session_commits`, `session_allocations`, `day_proposals`, `time_actuals`, `agent_estimates`, `agent_estimate_commits` | `work_item_aliases` and `work_items` (titles, status), `v_busy_meetings`, `v_day_status` (what Jira already holds) |
 | Loki | `meetings`, `action_items`, `blufs` | `calendar_events`, `commits`, `pull_requests`, `work_items` |
 | Freya | `accomplishments`, `review_periods`, `review_drafts`, `citations` | `events` (done and reopened), `work_items`, `v_day_status`, `commits`, `pull_requests`, `blufs` |
 | Heimdall, Bifrost | `submissions`, `submission_status_history` | `work_items` |
@@ -347,6 +347,32 @@ Three rules hold its lifecycle together:
 
 **`time_actuals`**: real hours you note during a calibration trial: `on_date`, `minutes` 0–1440, `work_item_key` (NULL = the whole day) and `note`. `ux_time_actuals_day_item` allows one row per day and ticket, including one whole-day row.
 
+### Agent estimates (v4)
+
+An AI coding agent that worked a change with you can record what it thinks your working time on that change was. It records through Baldur's CLI (`baldur.cmd ai record`) or Ysildir's MCP tool, both of which call `asgard.muninn.baldur.record_agent_estimate()`. A report is evidence, never a number on its own: Baldur's AI-assisted method uses it only to move minutes between tickets or lower them, so a day never rises because of one. Baldur owns both tables.
+
+**`agent_estimates`**: one report per row.
+
+| Column | Type | Rules | Notes |
+| --- | --- | --- | --- |
+| `id` | INTEGER | primary key | Shown as `r12` |
+| `recorded_at` | ts | not null |  |
+| `via` | TEXT | cli, mcp, window | How it arrived |
+| `agent`, `model`, `guide_version` | TEXT | agent 1–40 characters, model ≤ 80, guide ≤ 40 | Which tool, which model, which version of Baldur's agent guide it followed |
+| `work_item_key` | TEXT | a key like PROJ-123, or NULL | The ticket the agent named; NULL means its commits' keys |
+| `local_date` | date | not null | The day the work happened |
+| `started_at`, `ended_at` | ts | ended ≥ started | Only when the agent read them from a clock |
+| `minutes` | INTEGER | 1–1440 | The agent's estimate of your working time on the change |
+| `minutes_low` | INTEGER | 1 to `minutes` | The low end of a range; Baldur counts it, since of two readings the smaller wins |
+| `confidence` | TEXT | high, medium, low |  |
+| `summary` | TEXT | 1–300 characters | One sentence. Baldur refuses code-like text before it gets here |
+| `report_hash` | TEXT | unique | The same report twice is stored once |
+| `status`, `withdrawn_at` | TEXT, ts | recorded, withdrawn; a withdrawal has its time | A newer report from the same agent on the same commits withdraws the older one |
+
+**`agent_estimate_commits`**: the commits a report is about: `estimate_id` and `sha` (7–64 lower-case hex characters). A SHA may be short, because an agent can record before Baldur has collected the commit; Baldur matches it by prefix when it reads the report. A report without commits is shown to you and never counted.
+
+Reports are facts. The trigger `agent_estimates_are_facts` allows one change, recorded → withdrawn with its time. `agent_estimates_are_kept` and the two triggers on `agent_estimate_commits` refuse every other edit or delete. `ix_agent_estimates_day` serves "the day's recorded reports", and `ix_agent_estimate_commits_sha` serves "reports citing these commits".
+
 ## Meeting and BLUF tables (Loki)
 
 Loki owns three tables. They keep what a BLUF needs (titles, Copilot's notes, decisions, owners) and nothing from raw transcripts.
@@ -574,6 +600,8 @@ Each of the 48 explicit indexes exists for a named query; the 18 marked checked 
 | `ux_day_proposals_open` | day\_proposals (local\_date, coalesce(work\_item\_key, '')) where proposed; unique | Days waiting for review; one open row each | Yes |
 | `ux_day_proposals_approved` | day\_proposals (local\_date, work\_item\_key) where approved; unique | `v_day_status`; one approval each | Yes |
 | `ux_time_actuals_day_item` | time\_actuals (on\_date, coalesce(work\_item\_key, '')); unique | One actual per day and ticket |  |
+| `ix_agent_estimates_day` | agent\_estimates (local\_date) where recorded | Baldur: a day's agent reports (v4) | Yes |
+| `ix_agent_estimate_commits_sha` | agent\_estimate\_commits (sha) | Baldur: reports citing a day's commits (v4) | Yes |
 | `ix_meetings_starts` | meetings (starts\_at) | Meetings by day |  |
 | `ix_meetings_calendar_event` | meetings (calendar\_event\_id) where not null | Recap for a calendar entry |  |
 | `ix_action_items_meeting` | action\_items (meeting\_id) | A meeting's actions; cascade deletes |  |
@@ -696,7 +724,7 @@ Schema changes are forward-only numbered SQL files, each applied after an automa
 
 - **Version.** `PRAGMA user_version` holds the schema version; `0001_initial.sql` sets it to 1.
 - **One migrator.** Only Asgard applies migrations, at startup and off its window's thread. Every other app, including Odin, opens Muninn with `muninn.open_app()`, which checks the version against the range the app declares and never changes it.
-- **Files.** Later changes are `asgard/muninn/migrations/0002_<name>.sql`, `0003_…`. The runner wraps each in `BEGIN IMMEDIATE`, rechecks the version inside the lock and sets `user_version` itself, so two processes upgrading at once apply each file once. A file that fails is undone whole.
+- **Files.** Later changes are `asgard/muninn/migrations/0002_<name>.sql`, `0003_…`. So far: `0002_copies_arent_activity.sql`, `0003_hardening.sql` and `0004_agent_estimates.sql`. The runner wraps each in `BEGIN IMMEDIATE`, rechecks the version inside the lock and sets `user_version` itself, so two processes upgrading at once apply each file once. A file that fails is undone whole.
 - **Constraint changes.** SQLite's ALTER TABLE can't change a CHECK, so those use the create-copy-drop-rename recipe. A file that starts with `-- muninn: foreign_keys=off` runs with foreign keys off and must pass `PRAGMA foreign_key_check` before it commits.
 - **Backups.** `VACUUM INTO` copies Muninn to `%LOCALAPPDATA%\Asgard\backups` once a day (7 kept), before each schema upgrade (3 kept) and from Asgard's menu (5 kept). Each copy is written under a private name and moved into place, so two processes never touch the same file.
 - **Abandoned runs.** At startup, Asgard closes any sync run still marked running after six hours as failed.

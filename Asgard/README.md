@@ -36,7 +36,7 @@ You need Python 3.9 or newer with Tcl/Tk (tkinter). Most catalog Python installs
 
 ## Baldur from the command line
 
-Baldur's window isn't built yet, so its tile still says **Coming soon**, but its collector and estimator work today from Command Prompt:
+Baldur's window opens from its tile. Everything Baldur does also works from Command Prompt:
 
 ```
 cd /d "%LOCALAPPDATA%\Asgard\app\apps\baldur"
@@ -53,6 +53,80 @@ baldur.cmd approve --date 2026-10-01
 - `estimate` turns the last 14 days into one proposal per ticket per day. `report` shows a day with the basis of every number. Nothing reaches Jira until you `approve` it, and only Odin posts.
 - `keys SHA PROJ-123` gives a commit a Jira key by hand, and `repos --off NAME` leaves a repository out of estimates.
 - `setup --set github_api=github.agency.gov` names your GitHub Enterprise Server (the host is enough; `github.com` works too). Only remotes on that host count as GitHub repositories, and the squash commits it writes are skipped as copies. Pull request alerts aren't built yet.
+
+### Calibrating the estimate
+
+Baldur's settings start as guesses. To measure them, note your real hours during a trial of two
+to four weeks:
+
+```
+baldur.cmd actual 2026-10-01 6h15m
+baldur.cmd actual 2026-10-01 1h45m --key PROJ-42
+baldur.cmd actual 2026-10-01 --remove
+baldur.cmd actuals
+baldur.cmd calibrate
+baldur.cmd calibrate --accept
+```
+
+- `actual 2026-10-01 6h15m` records a day's total. Add `--key PROJ-42` to record one ticket's time
+  instead, and `--remove` to take a note back.
+- `actuals` lists what you noted.
+- `calibrate` searches three settings for the lowest daily error against your notes:
+  - the idle gap, from 60 to 180 minutes;
+  - the lead-in, from 0 to 60 minutes;
+  - the ambient weight, from 0.3 to 0.8.
+
+  It only picks settings that estimate low on average, then shows the old and new error side by
+  side.
+- `calibrate --accept` writes the fit into `baldur.json`. Nothing changes until you accept, and
+  past estimates keep their settings.
+
+### AI-assisted figures
+
+Baldur has two ways to estimate. The manual engine above uses only git, your calendar and your
+settings. The AI-assisted method puts suggested figures beside the engine's numbers, from two
+sources.
+
+**An AI coding agent's estimate.** After a change made with an agent (Kiro, Copilot, Claude Code),
+the agent records its estimate of your working time on it:
+
+```
+baldur.cmd ai record --agent kiro --minutes 1h --low 45m --confidence medium --commit <SHA> --key PROJ-42 --summary "One sentence."
+baldur.cmd ai list
+baldur.cmd ai withdraw r12
+```
+
+To teach Kiro to do this in a repository, run `baldur.cmd ai kiro --into C:\src\my-service`. That
+writes a steering file and two hooks into the repository's `.kiro` folder. One hook blocks the
+agent from approving, rejecting or changing your time. `baldur.cmd ai guide` prints the full
+guide for any agent.
+
+**An AI review of the day.** Paste the day's evidence into your approved AI chat, then give
+Baldur its answer:
+
+```
+baldur.cmd ai pack 2026-10-01 --out pack.txt
+baldur.cmd ai review 2026-10-01 answer.json
+```
+
+The review needs `setup --set review_mode=metadata` first. That sends commit subjects, times, line
+counts and keys to the chat, never code.
+
+**Seeing and taking the figures.**
+
+```
+baldur.cmd ai show 2026-10-01
+baldur.cmd approve --date 2026-10-01 --ai
+```
+
+- `ai show` lists the suggestions, and `report` shows them under the day.
+- `approve --date ... --ai` takes them. Add `--set PROJ-42=1h` to give your own figure for a
+  ticket.
+
+Every suggestion is checked in code. A suggestion never raises a day, adds a ticket, or goes
+without cited evidence. An agent's estimate can move time between tickets or lower it, never add
+time git doesn't show. Nothing changes until you approve. When you take a figure, Odin's worklog
+comment says so.
 
 `baldur.cmd` tries `py -3`, then `py`, then `python`. If your computer blocks `.cmd` files, run `py -3 cli.py` (or `python cli.py`) from the same folder instead. Settings are in `%LOCALAPPDATA%\Asgard\settings\baldur.json`; the Baldur spec explains each one.
 

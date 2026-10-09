@@ -53,6 +53,7 @@ KEY_COLUMNS: Tuple[Tuple[str, str], ...] = (
     ("day_proposals", "work_item_key"), ("session_allocations", "work_item_key"),
     ("time_actuals", "work_item_key"), ("action_items", "work_item_key"),
     ("submissions", "work_item_key"), ("calendar_events", "logged_as_key"),
+    ("agent_estimates", "work_item_key"),
 )
 
 
@@ -279,13 +280,24 @@ def search_only(lines: List[str]) -> bool:
     return bool(lines) and all("fts5" in line.lower() for line in lines)
 
 
+def search_broken(exc: BaseException) -> bool:
+    """Whether an SQLite error comes from a damaged search index rather than the file.
+
+    Older SQLite names FTS5 ('invalid fts5 file format'). From 3.45, an index whose own records
+    are gone fails as the table opens, before any check can run: 'vtable constructor failed:
+    search'. Either way the index holds no data of its own, so a rebuild fixes it.
+    """
+    text = str(exc).lower()
+    return "fts5" in text or "vtable constructor failed: search" in text
+
+
 def file_check(con: sqlite3.Connection, *, full: bool = False) -> List[str]:
     """SQLite's own check as a list of lines; ['ok'] when healthy. A damaged search index can make
     the PRAGMA itself fail ('invalid fts5 file format'); that comes back as a line too."""
     try:
         return [str(r[0]) for r in con.execute("PRAGMA integrity_check(20)" if full else "PRAGMA quick_check(20)")]
     except sqlite3.DatabaseError as exc:
-        if "fts5" in str(exc).lower():
+        if search_broken(exc):
             return [f"fts5: {exc}"]
         raise
 
@@ -398,7 +410,10 @@ def check(con: sqlite3.Connection, *, full: bool = True) -> CheckReport:
                    f"approve {r['approved_minutes']} min (the figure changed after it was posted).",
                    f"Edit or delete the worklog on {r['work_item_key']} in Jira to match.")
 
+    present = {r[0] for r in con.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")}
     for table, col in KEY_COLUMNS:
+        if table not in present:          # a file at an older schema version than this code
+            continue
         bad = [r[0] for r in con.execute(f"SELECT DISTINCT {col} FROM {table} WHERE {col} IS NOT NULL")
                if not keys.is_key(r[0])]
         if bad:
@@ -432,11 +447,13 @@ def check(con: sqlite3.Connection, *, full: bool = True) -> CheckReport:
 # Repairs
 # --------------------------------------------------------------------------
 
-def _fts5_version() -> str:
+def _empty_index() -> Tuple[int, List[Tuple[int, bytes]]]:
+    """(format version, internal records) of a new, empty FTS5 index made by this SQLite."""
     mem = sqlite3.connect(":memory:")
     try:
         mem.execute("CREATE VIRTUAL TABLE t USING fts5(x)")
-        return str(mem.execute("SELECT v FROM t_config WHERE k = 'version'").fetchone()[0])
+        version = int(mem.execute("SELECT v FROM t_config WHERE k = 'version'").fetchone()[0])
+        return version, [(int(i), bytes(b)) for i, b in mem.execute("SELECT id, block FROM t_data ORDER BY id")]
     finally:
         mem.close()
 
@@ -444,19 +461,25 @@ def _fts5_version() -> str:
 def repair_search(con: sqlite3.Connection) -> int:
     """Rebuild the search index from its tables, in one transaction. Returns the entries written.
 
-    Works on a damaged index too: FTS5's own 'rebuild' first (after putting back its format
-    version if that was lost), then every entry rewritten from the tables it indexes. Run on
-    Asgard's own connection: apps can't write the index's internal tables.
+    Works on a damaged index too: FTS5's own 'rebuild' first. If the index can't even open (its
+    format version or its own records were lost), those are put back as a new, empty index has
+    them, and 'rebuild' rewrites everything else. Then every entry is rewritten from the tables it
+    indexes. Run on Asgard's own connection: apps can't write the index's internal tables.
     """
     total = 0
     with transaction(con):
         try:
             con.execute("INSERT INTO search (search) VALUES ('rebuild')")
         except sqlite3.DatabaseError as exc:
-            if "fts5 file format" not in str(exc).lower():
+            if not search_broken(exc):
                 raise
+            version, records = _empty_index()
             con.execute("INSERT INTO search_config (k, v) VALUES ('version', ?) "
-                        "ON CONFLICT (k) DO UPDATE SET v = excluded.v", (int(_fts5_version()),))
+                        "ON CONFLICT (k) DO UPDATE SET v = excluded.v", (version,))
+            # The index's structure and totals records: without them SQLite 3.45+ can't open the
+            # table at all, so even FTS5's own rebuild fails. Rebuild replaces both.
+            con.executemany("INSERT INTO search_data (id, block) VALUES (?, ?) "
+                            "ON CONFLICT (id) DO UPDATE SET block = excluded.block", records)
             con.execute("INSERT INTO search (search) VALUES ('rebuild')")
         con.execute("DELETE FROM search")
         for code, (table, title, body) in SEARCH_SOURCES.items():

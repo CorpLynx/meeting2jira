@@ -23,11 +23,11 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from asgard import muninn, paths
 from asgard.muninn import baldur as approvals
 
-from . import collect, desk, github, gitread, report, store
+from . import agents, assist, calibrate, collect, desk, github, gitread, report, store
 from . import estimate as E
 from . import settings as config
 
-SCHEMA = (2, 3)     # 2: squash copies are stored, and v_activity leaves them out; 3: hardening, nothing to change
+SCHEMA = (4, 4)     # 4: agent estimates, which the AI-assisted method reads and writes (v2 and v3 needed nothing)
 MAX_DAYS_BACK = 3650
 TASK_NAME = "Asgard Baldur collect"
 ENTRY = Path(__file__).resolve().parent.parent / "cli.py"
@@ -293,7 +293,7 @@ def cmd_report(con: sqlite3.Connection, s: config.Settings, args: argparse.Names
     for n, day in enumerate(days):
         if n:
             print()
-        print(report.render_day(con, est, day, s, plan=todo))
+        print(report.render_day(con, est, day, s, plan=todo, ai=assist.suggestions(con, s, day)))
     return 0
 
 
@@ -324,10 +324,15 @@ def cmd_approve(con: sqlite3.Connection, s: config.Settings, args: argparse.Name
                 raise CliError(f"--set takes KEY=MINUTES, like PROJ-42=1h15m; got {item!r}")
             overrides[key.strip().upper()] = parse_day_minutes(value)
         day = parse_day(args.date)
-        ids = approvals.approve_day(con, day.isoformat(), overrides)
+        if args.ai:
+            ids = assist.approve_day(con, s, day, overrides)
+        else:
+            ids = approvals.approve_day(con, day.isoformat(), overrides)
         if not ids:
             raise CliError(f"Nothing to approve on {day.isoformat()}. See cli.py report {day.isoformat()}")
     else:
+        if args.ai:
+            raise CliError("--ai goes with --date: it takes a whole day's AI-assisted figures.")
         if args.set:
             raise CliError("--set goes with --date; for one proposal use --minutes")
         if args.minutes and len(args.ids) > 1:
@@ -391,6 +396,284 @@ def cmd_keys(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespa
     print(f"{head['sha'][:10]} {head['subject']} now counts toward {', '.join(wanted)}. "
           "Run cli.py estimate to update its day.")
     return 0
+
+
+def signed(minutes: float) -> str:
+    """+15m, -1h05m, 0m: a difference, rounded toward zero so it never reads bigger than it is."""
+    m = int(minutes)
+    return "0m" if m == 0 else ("+" if m > 0 else "-") + E.fmt(abs(m))
+
+
+def cmd_actual(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    day = parse_day(args.date)
+    what = args.key.strip().upper() if args.key else "development"
+    if args.remove:
+        if args.time:
+            raise CliError("--remove takes no time.")
+        gone = calibrate.forget(con, day, args.key)
+        print(f"Removed the real {what} time for {report.day_name(day)}." if gone
+              else f"Nothing was noted for {what} on {report.day_name(day)}.")
+        return 0
+    if not args.time:
+        raise CliError("Give the real time too, like: cli.py actual 2026-10-01 6h15m")
+    minutes = parse_day_minutes(args.time)
+    done = calibrate.note(con, day, minutes, args.key, args.note)
+    print(f"Noted {E.fmt(minutes)} of {what} on {report.day_name(day)} ({done}).")
+    days = sum(1 for figures in calibrate.actuals(con).values() if None in figures)
+    if days < calibrate.MIN_DAYS:
+        print(f"{store.plural(days, 'day')} noted so far; calibration needs {calibrate.MIN_DAYS}.")
+    else:
+        print("Enough days to calibrate: cli.py calibrate")
+    return 0
+
+
+def cmd_actuals(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    first, last = date_range(args, 28)
+    noted = calibrate.actuals(con, first, last)
+    if not noted:
+        print(f"No real hours noted between {first.isoformat()} and {last.isoformat()}. "
+              "Note a day with: cli.py actual DATE TIME")
+        return 0
+    est = store.compute(con, s, first, last)
+    renamed = store.current_keys(con)
+    print(f"  {'Day':<18}{'Real':>8}{'Estimate':>10}{'Difference':>12}")
+    for day, figures in noted.items():
+        props = est.proposals_for(day)
+        total = sum(x.minutes_proposed for x in props)        # untracked counts: it's development too
+        real = figures.get(None)
+        print(f"  {report.day_name(day):<18}{E.fmt(real) if real is not None else '-':>8}{E.fmt(total):>10}"
+              f"{signed(total - real) if real is not None else '':>12}")
+        for key in (k for k in figures if k is not None):
+            mine = next((x.minutes_proposed for x in props if x.key == renamed.get(key, key)), 0)
+            print(f"    {key:<16}{E.fmt(figures[key]):>8}{E.fmt(mine):>10}{signed(mine - figures[key]):>12}")
+    days = sum(1 for figures in noted.values() if None in figures)
+    print(f"\n{store.plural(days, 'day')} with a total in this range. Calibrate with: cli.py calibrate")
+    return 0
+
+
+def cmd_calibrate(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    today = dt.date.today()
+    first = parse_day(args.start, today) if args.start else None
+    last = parse_day(args.to, today) if args.to else None
+    result = calibrate.fit(con, s, first, last)
+    days = result.days
+    print(f"Calibration against {store.plural(len(days), 'day')} of real hours ({days[0].isoformat()} to "
+          f"{days[-1].isoformat()}), {result.tried} settings tried")
+    print()
+    print(f"  {'':<20}{'gap':>6}{'lead-in':>9}{'weight':>8}{'daily error':>13}{'average':>10}")
+
+    def row(label: str, sc: calibrate.Score) -> None:
+        d = sc.dials
+        lean = "low" if sc.runs_low else "HIGH"
+        print(f"  {label:<20}{d.idle_gap_minutes:>5}m{d.lead_in_minutes:>8}m{d.ambient_weight:>8g}"
+              f"{E.fmt(sc.mae):>13}{signed(sc.bias):>7} {lean}")
+    row("Now", result.current)
+    if result.best is not None and result.changes:
+        row("Best that runs low", result.best)
+    print()
+    print(f"  {'Day':<18}{'Real':>8}{'Now':>8}" + (f"{'Best':>8}" if result.changes else ""))
+    for day in days:
+        line = f"  {report.day_name(day):<18}{E.fmt(result.actual[day]):>8}{E.fmt(result.current.estimates[day]):>8}"
+        if result.changes:
+            line += f"{E.fmt(result.best.estimates[day]):>8}"
+        print(line)
+    if result.left_out:
+        print(f"\n  Left out {store.plural(len(result.left_out), 'day')} with real hours but no commits of yours "
+              f"({', '.join(d.isoformat() for d in result.left_out[:4])}{', ...' if len(result.left_out) > 4 else ''}): "
+              "work Baldur can't see can't calibrate it.")
+    if result.unmeasured:
+        print(f"  These days can't tell settings apart for: "
+              f"{', '.join(calibrate.DIAL_NAMES[n] for n in result.unmeasured)}; those stay as they are.")
+    print()
+    if result.best is None:
+        print("No setting estimates low on average against your notes, so none can be accepted. "
+              "Check the hours you noted: cli.py actuals")
+        return 0
+    if not result.changes:
+        print("Your current settings already fit best.")
+        return 0
+    if args.accept:
+        cid = calibrate.accept(con, s, result)
+        print(f"Accepted calibration {cid}: {result.best.dials.text()}. Past estimates keep their settings; "
+              "re-estimate open days with: cli.py estimate")
+        return 0
+    if not result.enough:
+        print(f"Note at least {calibrate.MIN_DAYS} days before accepting ({len(days)} so far): cli.py actual DATE TIME")
+    else:
+        print("Accept it with: cli.py calibrate --accept")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# The AI-assisted method
+# --------------------------------------------------------------------------
+
+def _read_input(source: Optional[str], what: str) -> str:
+    """Text from a file, or from standard input for - (or nothing, when something is piped in)."""
+    if source in (None, "-"):
+        if source is None and sys.stdin.isatty():
+            raise CliError(f"Give {what} as a file, or pipe it in: ... | cli.py ai ...")
+        return sys.stdin.read()
+    path = Path(source)
+    if not path.is_file():
+        raise CliError(f"{source} isn't a file.")
+    return path.read_text(encoding="utf-8-sig")
+
+
+def _estimate_id(text: str) -> int:
+    t = text.strip().lower()
+    if re.fullmatch(r"r?[1-9][0-9]{0,9}", t):
+        return int(t.lstrip("r"))
+    raise CliError(f"{text!r} isn't an agent estimate id like r12.")
+
+
+def cmd_ai_record(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    if args.minutes:
+        if args.file:
+            raise CliError("Give the report as a file or as options (--minutes ...), not both.")
+        reports: List[Dict[str, object]] = [{
+            "agent": args.agent, "minutes": parse_day_minutes(args.minutes), "commits": args.commit,
+            "key": args.key, "date": args.date and parse_day(args.date).isoformat(), "confidence": args.confidence,
+            "summary": args.summary, "minutes_low": parse_day_minutes(args.low) if args.low else None,
+            "model": args.model, "guide": args.guide}]
+        reports = [{k: v for k, v in r.items() if v not in (None, [], "")} for r in reports]
+    else:
+        text = _read_input(args.file, "a JSON report")
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            raise CliError(f"The report isn't JSON ({exc.msg} at line {exc.lineno}).") from None
+        reports = data if isinstance(data, list) else [data]
+        if not reports or len(reports) > 100:
+            raise CliError("Give from 1 to 100 reports at a time.")
+    results = []
+    for n, item in enumerate(reports, 1):
+        try:
+            done = approvals.record_agent_estimate(con, item, via="cli")   # type: ignore[arg-type]
+        except muninn.MuninnError as exc:
+            raise CliError(f"Report {n} wasn't recorded: {exc}" if len(reports) > 1 else str(exc)) from None
+        results.append(done)
+    if args.json:
+        print(json.dumps([{"id": f"r{r.id}", "status": r.status, "replaced": [f"r{x}" for x in r.replaced]}
+                          for r in results]))
+        return 0
+    for r in results:
+        row = con.execute("SELECT * FROM agent_estimates WHERE id = ?", (r.id,)).fetchone()
+        ticket = row["work_item_key"] or "the tickets of its commits"
+        what = f"{row['agent']}, {E.fmt(row['minutes'])} on {ticket} ({row['local_date']})"
+        if r.status == "duplicate":
+            print(f"Already recorded as r{r.id}: {what}.")
+        else:
+            print(f"Recorded r{r.id}: {what}" + (f"; replaces {', '.join(f'r{x}' for x in r.replaced)}" if r.replaced
+                                                  else "") + ".")
+    print("Baldur shows it beside the day (cli.py ai show DATE); nothing changes until you approve.")
+    return 0
+
+
+def cmd_ai_list(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    first, last = date_range(args, 14)
+    rows = con.execute("SELECT e.*, (SELECT count(*) FROM agent_estimate_commits a WHERE a.estimate_id = e.id) AS n "
+                       "FROM agent_estimates e WHERE e.local_date BETWEEN ? AND ? " +
+                       ("" if args.all else "AND e.status = 'recorded' ") + "ORDER BY e.local_date, e.id",
+                       (first.isoformat(), last.isoformat())).fetchall()
+    if args.json:
+        print(json.dumps([{"id": f"r{r['id']}", "date": r["local_date"], "agent": r["agent"], "key": r["work_item_key"],
+                           "minutes": r["minutes"], "minutes_low": r["minutes_low"], "confidence": r["confidence"],
+                           "commits": r["n"], "summary": r["summary"], "status": r["status"]} for r in rows]))
+        return 0
+    if not rows:
+        print(f"No agent estimates between {first.isoformat()} and {last.isoformat()}.")
+        return 0
+    for r in rows:
+        low = f" (low {E.fmt(r['minutes_low'])})" if r["minutes_low"] else ""
+        gone = "  WITHDRAWN" if r["status"] != "recorded" else ""
+        print(f"  r{r['id']:<5} {r['local_date']}  {r['agent'][:12]:<12} {E.fmt(r['minutes']):>6}{low:<12} "
+              f"{r['confidence']:<7} {r['work_item_key'] or '-':<11} {store.plural(r['n'], 'commit'):<10} "
+              f"{r['summary'][:60]}{gone}")
+    return 0
+
+
+def cmd_ai_withdraw(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    eid = _estimate_id(args.id)
+    approvals.withdraw_agent_estimate(con, eid)
+    print(f"Withdrew r{eid}. It stays in Muninn, marked withdrawn, and no longer counts.")
+    return 0
+
+
+def _suggestion_json(found: Optional[assist.DaySuggestions], day: dt.date) -> Dict[str, object]:
+    if found is None:
+        return {"day": day.isoformat(), "method": None, "tickets": [], "flags": []}
+    return {"day": day.isoformat(), "method": found.method, "source": found.source, "pack": found.pack_hash,
+            "reports": [f"r{x}" for x in found.reports], "flags": found.flags,
+            "tickets": [{"key": t.key, "estimate": t.baseline, "ai_assisted": t.figure, "reason": t.reason,
+                         "confidence": t.confidence} for t in found.tickets.values()]}
+
+
+def cmd_ai_show(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    day = parse_day(args.date) if args.date else _latest_day(con)
+    found = assist.suggestions(con, s, day)
+    if args.json:
+        print(json.dumps(_suggestion_json(found, day)))
+        return 0
+    print(report.render_ai(found, day) if found else
+          f"{report.day_name(day)}: no agent estimates or AI review for this day; the estimate stands as it is.")
+    return 0
+
+
+def cmd_ai_pack(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    day = parse_day(args.date)
+    text = assist.clipboard_text(assist.day_pack(con, s, day))
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(f"Wrote the prompt and {day.isoformat()}'s evidence to {args.out}. Paste it into your approved AI chat, "
+              f"save its JSON answer, then: cli.py ai review {day.isoformat()} ANSWER.json")
+    else:
+        print(text)
+    return 0
+
+
+def cmd_ai_review(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    day = parse_day(args.date)
+    reply = _read_input(args.file, "the AI's JSON answer")
+    try:
+        checked = assist.apply_reply(con, s, day, reply, tier=args.tier, model=args.model)
+    except approvals.ReviewRejected as exc:
+        raise CliError(f"The answer wasn't used: {exc} The estimate stands as it is.") from None
+    changed = [k for k in checked.figures if checked.figures[k] != checked.baseline[k]]
+    print(f"Checked and stored the AI review of {report.day_name(day)}: " +
+          (", ".join(f"{k} {E.fmt(checked.baseline[k])} -> {E.fmt(checked.figures[k])}" for k in changed)
+           if changed else "no changes") + ".")
+    for flag in checked.flags:
+        print(f"  ! {flag}")
+    if changed:
+        print(f"Take them with: cli.py approve --date {day.isoformat()} --ai")
+    return 0
+
+
+def cmd_ai_guide(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    print(assist.GUIDE_FILE.read_text(encoding="utf-8"))
+    return 0
+
+
+def cmd_ai_kiro(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    try:
+        done = agents.install(Path(args.into), force=args.force)
+    except ValueError as exc:
+        raise CliError(str(exc)) from None
+    for path, what in done:
+        print(f"  {what:<9}{path}")
+    if any(what == "kept" for _, what in done):
+        print("Files that were already there were kept; add --force to replace them.")
+    print("Open the folder in Kiro and check the Agent Steering and Agent Hooks panels list them.")
+    return 0
+
+
+def cmd_ai(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
+    func = getattr(args, "ai_func", None)
+    if func is None:
+        raise CliError("cli.py ai needs an action: record, list, withdraw, show, pack, review, guide or kiro "
+                       "(cli.py ai --help).")
+    return int(func(con, s, args) or 0)
 
 
 def github_client(s: config.Settings) -> "github.Client":
@@ -540,6 +823,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--date", metavar="DATE", help="approve every open ticket that day")
     p.add_argument("--minutes", metavar="TIME", help="approve one proposal at another figure, like 1h15m")
     p.add_argument("--set", action="append", default=[], metavar="KEY=TIME", help="with --date: another figure")
+    p.add_argument("--ai", action="store_true", help="with --date: take the day's AI-assisted figures (cli.py ai show)")
 
     p = add("reject", cmd_reject, "Reject proposals, by id or a whole day")
     p.add_argument("ids", nargs="*", type=int, metavar="ID")
@@ -552,6 +836,64 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("keys", cmd_keys, "Show a commit's Jira keys, or set them by hand")
     p.add_argument("sha", metavar="SHA")
     p.add_argument("keys", nargs="*", metavar="KEY")
+
+    p = add("actual", cmd_actual, "Note your real development time for a day, for calibration")
+    p.add_argument("date", metavar="DATE")
+    p.add_argument("time", nargs="?", metavar="TIME", help="like 6h15m, 375 or 6:15")
+    p.add_argument("--key", metavar="KEY", help="one ticket's time instead of the day's total")
+    p.add_argument("--note", metavar="TEXT", help="a short note to yourself")
+    p.add_argument("--remove", action="store_true", help="remove what you noted")
+
+    p = add("actuals", cmd_actuals, "Your real hours beside Baldur's estimate (default: the last 28 days)")
+    ranged(p)
+
+    p = add("calibrate", cmd_calibrate, "Fit the idle gap, lead-in and meeting weight to your real hours")
+    p.add_argument("--from", dest="start", metavar="DATE", help="first noted day to use")
+    p.add_argument("--to", metavar="DATE", help="last noted day to use")
+    p.add_argument("--accept", action="store_true", help="make the best fit your settings")
+
+    p = add("ai", cmd_ai, "The AI-assisted method: agent estimates and AI review (see: cli.py ai guide)")
+    ai = p.add_subparsers(dest="ai_action", metavar="action")
+
+    def ai_add(name: str, func, help_text: str) -> argparse.ArgumentParser:
+        q = ai.add_parser(name, help=help_text, description=help_text)
+        q.set_defaults(ai_func=func)
+        return q
+
+    q = ai_add("record", cmd_ai_record, "Record an AI agent's estimate of your time on a change")
+    q.add_argument("file", nargs="?", metavar="FILE", help="JSON report(s); - or nothing reads what's piped in")
+    q.add_argument("--minutes", metavar="TIME", help="instead of JSON: your time on the change, like 1h15m")
+    q.add_argument("--low", metavar="TIME", help="the low end, if the agent gave a range")
+    q.add_argument("--commit", action="append", default=[], metavar="SHA", help="a commit of the change (repeat)")
+    q.add_argument("--key", metavar="KEY", help="the Jira key the change was for")
+    q.add_argument("--date", metavar="DATE", help="the day of the work (default: today)")
+    q.add_argument("--agent", metavar="NAME", help="the AI tool, like kiro or copilot")
+    q.add_argument("--model", metavar="NAME")
+    q.add_argument("--guide", metavar="VERSION", help="the agent guide version it followed")
+    q.add_argument("--confidence", choices=("high", "medium", "low"))
+    q.add_argument("--summary", metavar="TEXT", help="one sentence on what the change was; no code")
+    q.add_argument("--json", action="store_true", help="print the result as JSON")
+    q = ai_add("list", cmd_ai_list, "Agent estimates (default: the last 14 days)")
+    ranged(q)
+    q.add_argument("--all", action="store_true", help="include withdrawn ones")
+    q.add_argument("--json", action="store_true")
+    q = ai_add("withdraw", cmd_ai_withdraw, "Withdraw an agent estimate (it stays, marked withdrawn)")
+    q.add_argument("id", metavar="ID", help="like r12")
+    q = ai_add("show", cmd_ai_show, "A day's AI-assisted figures beside the estimate")
+    q.add_argument("date", nargs="?", metavar="DATE")
+    q.add_argument("--json", action="store_true")
+    q = ai_add("pack", cmd_ai_pack, "The prompt and a day's evidence (no code), to paste into an approved AI chat")
+    q.add_argument("date", metavar="DATE")
+    q.add_argument("--out", metavar="FILE", help="write it to a file instead of the screen")
+    q = ai_add("review", cmd_ai_review, "Check an AI's JSON answer for a day and store it if it keeps the rules")
+    q.add_argument("date", metavar="DATE")
+    q.add_argument("file", nargs="?", metavar="FILE", help="the answer; - or nothing reads what's piped in")
+    q.add_argument("--model", metavar="NAME", help="which model answered, for the record")
+    q.add_argument("--tier", choices=("clipboard", "mcp", "api"), default="clipboard")
+    ai_add("guide", cmd_ai_guide, "How an AI agent records its estimates in Baldur")
+    q = ai_add("kiro", cmd_ai_kiro, "Put Baldur's agent steering and guard hooks into a workspace's .kiro folder")
+    q.add_argument("--into", required=True, metavar="FOLDER", help="the workspace (repository) folder")
+    q.add_argument("--force", action="store_true", help="replace files that are already there")
 
     p = add("github", cmd_github, "Your pull requests and the reviews requested of you (read-only)")
     p.add_argument("action", nargs="?", choices=("status", "sync", "token"), default="status")
@@ -596,7 +938,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         return int(args.func(con, s, args) or 0)
     except (CliError, collect.CollectError, muninn.MuninnError, config.SettingsError, gitread.GitError,
-            github.GitHubError, desk.DeskError) as exc:
+            github.GitHubError, desk.DeskError, calibrate.CalibrationError, assist.AssistError) as exc:
         print(f"Baldur: {exc}", file=sys.stderr)
         return 1
     except sqlite3.Error as exc:

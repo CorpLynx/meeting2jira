@@ -23,6 +23,7 @@ from typing import Dict, List, Optional
 from asgard import muninn
 from asgard.muninn import baldur as approvals
 
+from . import assist
 from . import collect as collector
 from . import estimate as E
 from . import github, report, store
@@ -81,6 +82,7 @@ class DayView:
     tickets: List[TicketRow] = field(default_factory=list)
     untracked: int = 0
     flags: List[str] = field(default_factory=list)
+    ai: Optional[assist.DaySuggestions] = None      # the AI-assisted figures, when there are any
 
 
 def load_week(con: sqlite3.Connection, settings: Settings, monday: dt.date) -> List[DayRow]:
@@ -114,7 +116,9 @@ def load_week(con: sqlite3.Connection, settings: Settings, monday: dt.date) -> L
 def load_day(con: sqlite3.Connection, settings: Settings, day: dt.date) -> DayView:
     est = store.compute(con, settings, day, day)
     todo = store.plan(con, settings, est, day, day)
-    view = DayView(day, report.render_day(con, est, day, settings, plan=todo), flags=list(est.days[day].flags))
+    ai = assist.suggestions(con, settings, day)
+    view = DayView(day, report.render_day(con, est, day, settings, plan=todo, ai=ai), flags=list(est.days[day].flags),
+                   ai=ai)
     for t in report.tickets_for(con, est, day, todo):
         approved = t.approved
         view.tickets.append(TicketRow(
@@ -127,12 +131,21 @@ def load_day(con: sqlite3.Connection, settings: Settings, day: dt.date) -> DayVi
 
 
 def approve_day(con: sqlite3.Connection, settings: Settings, day: dt.date,
-                figures: Optional[Dict[str, int]] = None) -> List[int]:
-    """Store the day's estimate, then approve it; figures replace the proposals for those tickets."""
+                figures: Optional[Dict[str, int]] = None, take_ai: bool = False) -> List[int]:
+    """Store the day's estimate, then approve it; figures replace the proposals for those tickets.
+
+    take_ai approves at the day's AI-assisted figures instead (assist.approve_day); figures you
+    typed still win for their tickets.
+    """
     figures = {k.upper(): int(v) for k, v in (figures or {}).items()}
     for key, minutes in figures.items():
         if not 0 <= minutes <= 24 * 60:
             raise DeskError(f"{key}: {minutes} minutes doesn't fit in a day.")
+    if take_ai:
+        try:
+            return assist.approve_day(con, settings, day, figures)
+        except assist.AssistError as exc:
+            raise DeskError(str(exc)) from None
     store.run(con, settings, day, day)
     open_keys = {r["work_item_key"] for r in con.execute(
         "SELECT work_item_key FROM day_proposals WHERE local_date = ? AND status = 'proposed' "

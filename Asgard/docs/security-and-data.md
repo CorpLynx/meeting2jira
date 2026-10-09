@@ -1,6 +1,6 @@
 # Security and data handling
 
-Oct 6, 2026 · for the ISSO review · covers Asgard 0.4.0 and Muninn schema v3
+Oct 9, 2026 · for the ISSO review · covers Asgard 0.4.0 and Muninn schema v4
 
 Asgard is a per-user desktop tool set. It runs on the catalog's Python as the signed-in user, needs no admin rights, opens no network port, and keeps its data in `%LOCALAPPDATA%\Asgard` (BitLocker covers it at rest; the folder is readable only by the user and administrators). This page lists what it stores, what leaves the machine, how secrets are kept, and what the protections do and don't cover.
 
@@ -9,6 +9,7 @@ Asgard is a per-user desktop tool set. It runs on the catalog's Python as the si
 | Where | What | Sensitivity |
 | --- | --- | --- |
 | `muninn.db` | Jira issue metadata (key, summary, status, assignee, labels; not descriptions), your calendar entries (title, times, response; not bodies or attendees), your worklogs, git commit metadata (subject, author, times, file counts; not code or diffs), pull request titles and reviews, time estimates and your approvals | Work metadata; may be CUI depending on project names and titles |
+| `muninn.db` (v4) | AI coding agents' estimates of your time on a change: agent and model name, ticket key, day, minutes, commit SHAs and a one-sentence summary (code-like text is refused). Your real hours from a calibration trial. A checked AI review's suggested figures and reasons on each open proposal | Work metadata, same as above |
 | `muninn.db` (planned apps) | Meeting recap summaries and action items (never transcripts), BLUFs, accomplishments and review drafts, submission field values (SeCcHm, BEARs) | Submission fields can hold the same detail as those systems; handled like their exports |
 | `backups\` | Copies of `muninn.db`: 7 daily, 3 before each schema upgrade, 5 manual | Same as the database |
 | `muninn.before-restore-*.db` | The database as it was before a restore, kept so the restore can be undone | Same as the database; removed by an uninstall with purge |
@@ -25,7 +26,10 @@ Asgard is a per-user desktop tool set. It runs on the catalog's Python as the si
 | Jira, GitHub, calendar (reads) | Odin, Baldur | Syncs you run or schedule | Your own tokens and access |
 | Confluence attachment, SeCcHm form | Bifrost, Heimdall (planned) | After you approve; the SeCcHm Submit click stays yours | Per submission |
 | AI completions | Mímir's tier 1 (planned) | Only for purposes your settings allow | An approved endpoint and data flow, per purpose |
-| AI client reads | Ysildir (planned), stdio to VS Code | When the client calls a tool | Copilot's MCP policy; per-tool review |
+| Baldur's AI review, clipboard tier | You, by pasting | When you run `baldur.cmd ai pack` and paste the text into your approved AI chat (M365 Copilot) | Baldur's `review_mode` must be `metadata` (off by default). The pack holds commit subjects (one line, at most 120 characters), times, line counts, ticket keys and agent reports' summaries, never code; `content` mode is refused |
+| AI client reads | Ysildir (planned), stdio to the AI client (Kiro, VS Code) | When the client calls a tool | The client's MCP policy (Copilot's org policy, VS Code's `ChatMCP`); a switch per tool in `settings\ysildir.json`, with tools that send Muninn data off by default |
+
+An AI coding agent recording its estimate (`baldur.cmd ai record`) sends nothing out: the agent writes into Muninn on this machine. What the agent itself sends to its model is the agent's own data flow, approved with the agent.
 
 Nothing is sent anywhere else: no telemetry, no update check unless an update source is configured ([updates.md](updates.md)).
 

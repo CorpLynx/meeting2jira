@@ -202,12 +202,18 @@ def load(con: sqlite3.Connection, first: dt.date, last: dt.date, p: E.Params,
 def compute(con: sqlite3.Connection, settings: Settings, first: dt.date, last: dt.date,
             now: Optional[dt.datetime] = None) -> E.Estimate:
     """The estimate for these days from Muninn as it is now, without writing anything."""
+    return compute_with_inputs(con, settings, first, last, now)[1]
+
+
+def compute_with_inputs(con: sqlite3.Connection, settings: Settings, first: dt.date, last: dt.date,
+                        now: Optional[dt.datetime] = None) -> Tuple[Inputs, E.Estimate]:
+    """The estimate and the evidence it was made from (the AI-assisted method needs both)."""
     p = E.Params.from_settings(settings)
     inputs = load(con, first, last, p, settings.project_keys)
-    return E.estimate(inputs.commits, inputs.checkouts, inputs.meetings, days_between(first, last), p,
-                      calendar=inputs.calendar, calendar_synced=inputs.calendar_synced,
-                      reflog_since=inputs.reflog_since, prior_patches=inputs.prior_patches, now=now,
-                      copies=inputs.copies)
+    return inputs, E.estimate(inputs.commits, inputs.checkouts, inputs.meetings, days_between(first, last), p,
+                              calendar=inputs.calendar, calendar_synced=inputs.calendar_synced,
+                              reflog_since=inputs.reflog_since, prior_patches=inputs.prior_patches, now=now,
+                              copies=inputs.copies)
 
 
 # --------------------------------------------------------------------------
@@ -339,9 +345,20 @@ def _rows_for(con: sqlite3.Connection, day: dt.date, key: Optional[str]) -> List
                        (day.isoformat(), key)).fetchall()
 
 
-def _active_calibration(con: sqlite3.Connection) -> Optional[int]:
-    row = con.execute("SELECT id FROM calibration_runs WHERE is_active = 1").fetchone()
-    return int(row[0]) if row else None
+def active_calibration(con: sqlite3.Connection, settings: Settings) -> Optional[int]:
+    """The active calibration's id, while your settings are still the ones it fitted; otherwise None.
+
+    A dial changed by hand after accepting means the numbers no longer come from that
+    calibration, so an estimate run doesn't claim it.
+    """
+    row = con.execute("SELECT id, gap_minutes, lead_in_minutes, ambient_weight FROM calibration_runs "
+                      "WHERE is_active = 1").fetchone()
+    if row is None:
+        return None
+    v = settings.values
+    same = (row[1] == v["idle_gap_minutes"] and row[2] == v["lead_in_minutes"]
+            and abs(row[3] - float(v["ambient_weight"])) < 1e-9)
+    return int(row[0]) if same else None
 
 
 def run(con: sqlite3.Connection, settings: Settings, first: dt.date, last: dt.date, *,
@@ -409,7 +426,7 @@ def _save(con: sqlite3.Connection, settings: Settings, est: E.Estimate, result: 
             "INSERT INTO estimate_runs (date_from, date_to, model_version, params, params_hash, calibration_id) "
             "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
             (first_iso, last_iso, MODEL_VERSION, json.dumps(settings.estimate_params(), sort_keys=True),
-             settings.params_hash(), _active_calibration(con))).fetchone()[0])
+             settings.params_hash(), active_calibration(con, settings))).fetchone()[0])
         for day in sorted({x[0].local_date for x in inserts}):
             for part in est.parts_on(day):
                 _store_part(con, result.run_id, part)

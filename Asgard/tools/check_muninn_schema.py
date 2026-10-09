@@ -292,8 +292,10 @@ if one("PRAGMA user_version") >= 2:
 # =====================================================================
 # Key resolution: v_unknown_keys
 # =====================================================================
-con.execute(ALIAS, ("GONE-9", None, "not_found", "2026-10-01T00:00:00Z"))
-con.execute(ALIAS, ("OLD-2", None, "not_found", "2026-09-20T00:00:00Z"))
+# v_unknown_keys retries a miss after 7 days of the real clock ('now'), so these are dated from it:
+# fixed dates turned the recent miss stale a week after the check was written.
+con.execute(ALIAS, ("GONE-9", None, "not_found", one("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 days')")))
+con.execute(ALIAS, ("OLD-2", None, "not_found", one("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-12 days')")))
 unknown = [r[0] for r in rows("SELECT key FROM v_unknown_keys ORDER BY key")]
 check("v_unknown_keys: new keys and stale misses, not moved or recent misses",
       unknown == ["NEW-7", "OLD-2", "POR-88", "POR-90"], unknown)
@@ -660,6 +662,51 @@ if one("PRAGMA user_version") >= 3:
     con.execute("RELEASE v3")
 
 # =====================================================================
+# Schema v4: agent estimates, for Baldur's AI-assisted method
+# =====================================================================
+if one("PRAGMA user_version") >= 4:
+    con.execute("SAVEPOINT v4")          # everything here is undone at the end
+    AE = ("INSERT INTO agent_estimates (agent, work_item_key, local_date, minutes, minutes_low, confidence, summary, "
+          "report_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id")
+    ae = one(AE, ("kiro", "XYZ-45", "2026-10-01", 90, 60, "medium", "Retry with backoff in the poller", "rh1"))
+    check("an agent estimate is recorded (v4)", ae is not None)
+    for name, params in (("its key is checked", ("kiro", "xyz-45", "2026-10-01", 90, None, "low", "s", "rh2")),
+                         ("it is at least a minute", ("kiro", None, "2026-10-01", 0, None, "low", "s", "rh3")),
+                         ("it fits in a day", ("kiro", None, "2026-10-01", 1441, None, "low", "s", "rh4")),
+                         ("its low end isn't above it", ("kiro", None, "2026-10-01", 30, 45, "low", "s", "rh5")),
+                         ("its confidence is high, medium or low", ("kiro", None, "2026-10-01", 30, None, "sure", "s",
+                                                                    "rh6")),
+                         ("its summary is one short line", ("kiro", None, "2026-10-01", 30, None, "low", "x" * 301,
+                                                            "rh7")),
+                         ("the same report is stored once", ("kiro", None, "2026-10-01", 30, None, "low", "s", "rh1")),
+                         ("it names its agent", ("", None, "2026-10-01", 30, None, "low", "s", "rh9"))):
+        rejects(f"an agent estimate: {name} (v4)", AE, params)
+    rejects("an agent session can't end before it starts (v4)",
+            "INSERT INTO agent_estimates (agent, local_date, started_at, ended_at, minutes, confidence, summary, "
+            "report_hash) VALUES ('kiro', '2026-10-01', '2026-10-01T15:00:00Z', '2026-10-01T14:00:00Z', 30, 'low', "
+            "'s', 'rh8')")
+    con.execute("INSERT INTO agent_estimate_commits (estimate_id, sha) VALUES (?, ?)", (ae, "a" * 40))
+    con.execute("INSERT INTO agent_estimate_commits (estimate_id, sha) VALUES (?, ?)", (ae, "b1c2d3e"))
+    check("an agent estimate cites full and short SHAs (v4)",
+          one("SELECT count(*) FROM agent_estimate_commits WHERE estimate_id = ?", (ae,)) == 2)
+    for bad in ("ABCDEF1", "abc12", "g" * 40):
+        rejects(f"an agent estimate's commit is a lower-case hex SHA of 7 to 64 characters: {bad!r} (v4)",
+                "INSERT INTO agent_estimate_commits (estimate_id, sha) VALUES (?, ?)", (ae, bad))
+    rejects("an agent estimate is never edited (v4)", "UPDATE agent_estimates SET minutes = 30 WHERE id = ?", (ae,))
+    rejects("an agent estimate is never deleted (v4)", "DELETE FROM agent_estimates WHERE id = ?", (ae,))
+    rejects("its commits are never removed (v4)", "DELETE FROM agent_estimate_commits WHERE estimate_id = ?", (ae,))
+    rejects("its commits are never changed (v4)",
+            "UPDATE agent_estimate_commits SET sha = 'c1c2c3c4' WHERE estimate_id = ?", (ae,))
+    rejects("withdrawing records when (v4)", "UPDATE agent_estimates SET status = 'withdrawn' WHERE id = ?", (ae,))
+    con.execute("UPDATE agent_estimates SET status = 'withdrawn', withdrawn_at = ? WHERE id = ?", (NOW, ae))
+    check("an agent estimate can be withdrawn (v4)",
+          one("SELECT status FROM agent_estimates WHERE id = ?", (ae,)) == "withdrawn")
+    rejects("and stays withdrawn (v4)",
+            "UPDATE agent_estimates SET status = 'recorded', withdrawn_at = NULL WHERE id = ?", (ae,))
+    con.execute("ROLLBACK TO v4")
+    con.execute("RELEASE v4")
+
+# =====================================================================
 # Housekeeping
 # =====================================================================
 run2 = one("INSERT INTO sync_runs (app, source_id, stream) VALUES ('odin',1,'issues') RETURNING id")
@@ -735,6 +782,12 @@ plans = {
     "Ysildir: history of one row": (
         "SELECT * FROM events WHERE entity_type = 'work_items' AND entity_id = 1", "ix_events_entity"),
 }
+if one("PRAGMA user_version") >= 4:
+    plans["Baldur: agent estimates for a day (v4)"] = (
+        "SELECT id FROM agent_estimates WHERE status = 'recorded' AND local_date BETWEEN '2026-10-01' AND '2026-10-02'",
+        "ix_agent_estimates_day")
+    plans["Baldur: agent estimates citing a commit (v4)"] = (
+        "SELECT estimate_id FROM agent_estimate_commits WHERE sha = 'b1c2d3e'", "ix_agent_estimate_commits_sha")
 for name, (sql, want) in plans.items():
     plan = " | ".join(r[3] for r in con.execute("EXPLAIN QUERY PLAN " + sql))
     check("index used: " + name, want in plan, plan)

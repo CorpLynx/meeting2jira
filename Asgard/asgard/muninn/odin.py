@@ -45,6 +45,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+from . import baldur as baldur_rules
 from .db import MuninnError, ago, from_ts, to_ts, transaction, utcnow
 from .keys import normalize_key
 from .redact import scrub
@@ -686,6 +687,11 @@ def begin_post(con: sqlite3.Connection, proposal_id: int) -> Optional[PendingPos
             return None
         marker = new_marker("baldur")
         lines = [row["basis"]]
+        # When the approved figure is an AI-assisted one you took, the comment says so.
+        review = con.execute("SELECT review FROM day_proposals WHERE id = ?", (proposal_id,)).fetchone()
+        reviewed = baldur_rules.review_line(review[0] if review else None, row["approved_minutes"])
+        if reviewed:
+            lines.append(reviewed)
         if row["logged_minutes"]:
             origins = [r[0] for r in con.execute(
                 "SELECT DISTINCT origin FROM worklogs WHERE work_item_id = ? AND state IN ('sending', 'posted') "
