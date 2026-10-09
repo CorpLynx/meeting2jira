@@ -16,6 +16,8 @@ import fake_github as f  # noqa: E402
 from baldur import github, store  # noqa: E402
 from test_baldur import DAY, GIT, NOW, CollectBase, MuninnCase, t  # noqa: E402
 
+NOW_TS = "2026-10-03T18:00:00Z"
+
 
 class GitHubCase(MuninnCase):
     def setUp(self):
@@ -196,6 +198,7 @@ class WithRealGit(CollectBase):
               env={"GIT_COMMITTER_NAME": "GitHub", "GIT_COMMITTER_EMAIL": "noreply@github.com",
                    "GIT_AUTHOR_DATE": "2026-10-01T15:40:00", "GIT_COMMITTER_DATE": "2026-10-01T15:40:00"})
         squash = g.git("rev-parse", "HEAD").strip()
+        self.collect()                                            # the PR's own commits are collected
         g.git("branch", "-q", "-D", "work")
         self.collect()
         self.server.pulls["csb/asgard"] = [f.pr(7, "Retry on 503", "bdoe", "feature/PROJ-42-retry",
@@ -208,6 +211,135 @@ class WithRealGit(CollectBase):
         self.collect()                                            # and collection doesn't undo it
         row = self.con.execute("SELECT is_merge FROM commits WHERE sha = ?", (squash,)).fetchone()
         self.assertEqual((row[0], self.keys_of(squash)), (1, []))
+
+
+class Rereview(GitHubCase):
+    """The second, independent review (G1-G8 in docs/review-2026-10-06.md)."""
+
+    def merged(self, number, head, merge_sha=None, updated="2026-10-02T11:00:00Z", **kw):
+        return f.pr(number, f"PR {number}", "bdoe", head, merged_at=updated, updated=updated,
+                    merge_commit_sha=merge_sha, **kw)
+
+    def patch(self, cid, patch_id):
+        self.con.execute("UPDATE commits SET patch_id = ? WHERE id = ?", (patch_id, cid))
+
+    def test_g1_prs_stored_before_v3_are_listed_even_when_the_list_is_unchanged(self):
+        x = self.commit(t(1, 9, 50), subject="OPS-7 tidy")
+        self.server.pulls["csb/asgard"] = [f.pr(40, "Old", "bdoe", "feature/PROJ-40", updated="2026-09-01T09:00:00Z")]
+        self.server.commits[("csb/asgard", 40)] = []
+        self.sync()
+        # As a v2 database left it: a 'pr' key, no commit list, and a cursor that answers 304.
+        self.con.execute("DELETE FROM pull_request_commits")
+        self.con.execute("UPDATE pull_requests SET commits_listed = 0")
+        self.con.execute("INSERT INTO commit_work_items (commit_id, work_item_key, method) VALUES (?, 'PROJ-40', 'pr')"
+                         " ON CONFLICT DO NOTHING", (x,))
+        self.con.execute("DELETE FROM commit_work_items WHERE commit_id = ? AND method <> 'pr'", (x,))
+        self.sync()
+        self.assertEqual(self.keys(x), [("OPS-7", "message")], "PR #40 doesn't hold it, so its message decides")
+
+    def test_g2_a_squash_titled_like_one_of_its_commits_is_still_a_copy(self):
+        a, b = self.commit(t(1, 9, 50), subject="retry work"), self.commit(t(1, 10, 20), subject="retry tests")
+        s = self.commit(t(1, 15, 40), subject="retry work")          # squash, titled like the first commit
+        self.patch(a, "p-a")
+        self.patch(b, "p-b")
+        self.patch(s, "p-squash")
+        self.server.pulls["csb/asgard"] = [self.merged(7, "feature/PROJ-42-retry", self.sha(s))]
+        self.server.commits[("csb/asgard", 7)] = [self.sha(a), self.sha(b)]
+        self.sync()
+        self.assertEqual(self.con.execute("SELECT is_merge FROM commits WHERE id = ?", (s,)).fetchone()[0], 1)
+
+    def test_g6_g7_a_rebase_merge_counts_once_with_the_prs_key(self):
+        a, b = self.commit(t(1, 9, 50)), self.commit(t(1, 10, 20))
+        a2, b2 = self.commit(t(1, 9, 50, ), subject="rebased a"), self.commit(t(1, 10, 20), subject="rebased b")
+        for cid, p in ((a, "p-a"), (b, "p-b"), (a2, "p-a"), (b2, "p-b")):
+            self.patch(cid, p)
+        self.server.pulls["csb/asgard"] = [self.merged(7, "feature/PROJ-42-retry", self.sha(b2))]
+        self.server.commits[("csb/asgard", 7)] = [self.sha(a), self.sha(b)]
+        self.sync()
+        self.assertEqual(self.con.execute("SELECT is_merge FROM commits WHERE id = ?", (b2,)).fetchone()[0], 0,
+                         "a rebase copy isn't a squash")
+        self.assertEqual([self.keys(c) for c in (a, b, a2, b2)], [[("PROJ-42", "pr")]] * 4,
+                         "the rebased copies carry the PR's key too, so either copy counts the same")
+
+    def test_g7_a_squash_of_work_done_elsewhere_counts(self):
+        s = self.commit(t(1, 15, 40), subject="Retry on 503")
+        self.patch(s, "p-squash")
+        self.server.pulls["csb/asgard"] = [self.merged(7, "feature/PROJ-42-retry", self.sha(s))]
+        self.server.commits[("csb/asgard", 7)] = ["a" * 40, "b" * 40]  # never collected here
+        self.sync()
+        self.assertEqual(self.con.execute("SELECT is_merge FROM commits WHERE id = ?", (s,)).fetchone()[0], 0)
+
+    def test_g3_g4_merged_beats_closed_and_draft_and_numbers_stay_in_their_repo(self):
+        a = self.commit(t(1, 9, 50))
+        fork = self.add_repo("asgard-fork")
+        self.con.execute("UPDATE repos SET github_repo = 'bdoe/asgard' WHERE id = ?", (fork,))
+        self.server.pulls["bdoe/asgard"] = [f.pr(2, "wip", "bdoe", "wip", updated="2026-10-01T15:00:00Z",
+                                                 repo="bdoe/asgard")]
+        self.server.commits[("bdoe/asgard", 2)] = [self.sha(a)]
+        self.server.pulls["csb/asgard"] = [
+            self.merged(12, "feature/PROJ-42-retry"),
+            f.pr(13, "spike", "bdoe", "feature/PROJ-41-spike", state="closed", updated="2026-10-03T09:00:00Z"),
+            f.pr(14, "later", "bdoe", "feature/OPS-9-later", draft=True, updated="2026-10-08T09:00:00Z")]
+        for n in (12, 13, 14):
+            self.server.commits[("csb/asgard", n)] = [self.sha(a)]
+        self.server.commits[("csb/asgard", 12)].append("c" * 40)       # the merged PR is the bigger one
+        self.sync()
+        self.assertEqual(self.keys(a), [("PROJ-42", "pr")])
+
+    def test_g4_two_lists_cut_off_at_250_are_no_evidence(self):
+        a = self.commit(t(1, 9, 50), "OPS-3", subject="OPS-3 retry")
+        self.server.page_size = 1000
+        self.server.pulls["csb/asgard"] = [self.merged(3, "release/PROJ-900"), self.merged(5, "feature/PROJ-42")]
+        self.server.commits[("csb/asgard", 3)] = [self.sha(a)] + [f"{n:040x}" for n in range(10**6, 10**6 + 249)]
+        self.server.commits[("csb/asgard", 5)] = [self.sha(a)] + [f"{n:040x}" for n in range(2 * 10**6, 2 * 10**6 + 249)]
+        self.sync()
+        self.assertEqual(self.keys(a), [("OPS-3", "message")], "neither PR's size can be known: the message decides")
+
+    def test_g5_a_stored_newest_pr_doesnt_stop_the_first_read(self):
+        # A review-only row folded into this clone holds the newest PR; the rest were never read.
+        self.server.page_size = 2
+        mine = self.commit(t(1, 9, 50))
+        self.server.pulls["csb/asgard"] = [f.pr(n, f"PR {n}", "bdoe" if n == 2 else "sam", f"feature/PROJ-{n}",
+                                                updated=f"2026-10-0{n}T09:00:00Z") for n in (1, 2, 3, 4)]
+        self.server.commits[("csb/asgard", 2)] = [self.sha(mine)]
+        run = self.con.execute("INSERT INTO sync_runs (app, stream) VALUES ('baldur', 'x') RETURNING id").fetchone()[0]
+        self.con.execute("INSERT INTO pull_requests (repo_id, number, title, author, head_ref, state, created_at, "
+                         "updated_at, url, first_seen_at, last_seen_at, run_id) VALUES (?, 4, 'PR 4', 'sam', "
+                         "'feature/PROJ-4', 'open', ?, '2026-10-04T09:00:00Z', 'u', ?, ?, ?)",
+                         (self.repo, NOW_TS, NOW_TS, NOW_TS, run))
+        self.sync()
+        self.assertEqual(self.keys(mine), [("PROJ-2", "pr")])
+
+    def test_g5_a_list_longer_than_the_page_limit_is_read_over_the_next_passes(self):
+        self.server.page_size = 5
+        mine = self.commit(t(1, 9, 50))
+        self.server.pulls["csb/asgard"] = [f.pr(n, f"Bot {n}", "bot", f"bot/{n}",
+                                                updated=f"2026-10-02T{n // 60:02d}:{n % 60:02d}:00Z")
+                                           for n in range(100, 160)]
+        self.server.pulls["csb/asgard"].append(f.pr(1, "Mine", "bdoe", "feature/PROJ-1", updated="2026-10-01T09:00:00Z"))
+        self.server.commits[("csb/asgard", 1)] = [self.sha(mine)]
+        first = self.sync()
+        self.assertTrue(any("next passes" in p for p in first.problems), first.problems)
+        for _ in range(3):
+            self.sync()
+        self.assertEqual(self.con.execute("SELECT count(*) FROM pull_requests").fetchone()[0], 61)
+        self.assertEqual(self.keys(mine), [("PROJ-1", "pr")])
+
+    def test_g8_falling_back_uses_the_whole_message(self):
+        x = self.commit(t(1, 9, 50), subject="tidy")
+        self.server.pulls["csb/asgard"] = [f.pr(7, "Retry", "bdoe", "feature/PROJ-42", updated="2026-10-01T15:00:00Z")]
+        self.server.commits[("csb/asgard", 7)] = [self.sha(x)]
+        self.sync()
+        self.server.commits[("csb/asgard", 7)] = []
+        self.touch(7, "2026-10-02T09:00:00Z")
+        self.sync()
+        from baldur import collect as C
+        C.apply_pr_evidence(self.con, ["PROJ"], {x: ["PROJ-77"]})      # what collection found in the body
+        self.assertEqual(self.keys(x), [])                              # already fell back to the subject: none
+        self.con.execute("INSERT INTO commit_work_items (commit_id, work_item_key, method) VALUES (?, 'PROJ-42', 'pr')",
+                         (x,))
+        C.apply_pr_evidence(self.con, ["PROJ"], {x: ["PROJ-77"]})
+        self.assertEqual(self.keys(x), [("PROJ-77", "message")])
 
 
 if __name__ == "__main__":

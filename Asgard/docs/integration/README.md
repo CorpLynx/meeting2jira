@@ -1,6 +1,6 @@
 # Integrating an app with Muninn
 
-Oct 6, 2026 · schema v3 · Asgard 0.4.0
+Oct 9, 2026 · schema v3 · Asgard 0.4.0 (unshipped)
 
 Muninn is one SQLite file per user (`%LOCALAPPDATA%\Asgard\muninn.db`) that every Asgard app shares. Apps never call each other: each writes the facts it owns and reads what the others wrote. This folder is the contract for doing that. Start here, then read your app's page.
 
@@ -26,7 +26,7 @@ Each rule is enforced in code or in the schema; the last column says where, so n
 | # | Rule | Enforced by |
 | --- | --- | --- |
 | 1 | Only Asgard creates and migrates Muninn (`muninn.prepare()` at launcher start). Apps open it with `muninn.open_app(app, supported=(low, high))`, which never changes the schema. | `open_app` has no migrate path; the guard refuses DDL and `PRAGMA user_version` |
-| 2 | An app writes only the tables it owns, plus the shared operations every app needs. | `guard.py`: an SQLite authorizer on every `open_app` connection |
+| 2 | An app writes only the tables it owns, plus the shared operations every app needs, and in shared tables only its own rows: its events, runs and event cursor, the sources it reads (a source belongs to the first app that runs a stream on it), and the identity kinds it collects (`guard.IDENTITY_KINDS`). | `guard.py`: an SQLite authorizer and per-connection row rules on every `open_app` connection |
 | 3 | Write through `asgard.muninn` (`Run`, `transaction`, `emit`, the per-app modules), never by holding a lock across a network call, a git call or a UI wait. | `transaction()` refuses to nest; `Run` writes in short batches |
 | 4 | Every fact carries provenance: `source_id`, its ID in that system, `first_seen_at`/`last_seen_at`, `run_id`. | Schema (NOT NULL, UNIQUE natural keys) |
 | 5 | Upserts are idempotent (`INSERT … ON CONFLICT DO UPDATE`). Nothing synced is deleted; it gets `deleted_at`, and only a `mode="full"` run may set it. | `sweep_calendar` refuses incremental runs; a test bans `INSERT OR REPLACE` |

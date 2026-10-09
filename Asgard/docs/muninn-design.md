@@ -7,11 +7,28 @@ Oct 3, 2026 · @Brandon
 
 Muninn is one SQLite file of normalized facts, each keyed by its source system's ID, plus an append-only event log. Every app writes through one Python module, so the schema, provenance and migrations live in one place. Jira issue keys join the apps: Baldur records the keys it finds in git, Odin resolves them and is the only app that writes to Jira, and Freya keeps a durable copy of every issue you finish.
 
-The executable version ships in Asgard 0.2 and later as `asgard/muninn/migrations/0001_initial.sql`: 34 tables plus the search index, 48 indexes, 30 triggers and 10 views. The `asgard.muninn` package applies it and carries each app's write rules. Schema v2 (`0002_copies_arent_activity.sql`, Asgard 0.3.1) takes squash copies out of `v_activity`. The schema's own script runs 125 checks on SQLite 3.45, and the package's 48 tests cover migrations, sync runs, Odin's flows, Baldur's approvals and the tile badges; Asgard 0.3 adds Baldur's collector and estimator with 79 more tests.
+The executable version ships in Asgard 0.2 and later as `asgard/muninn/migrations/0001_initial.sql`: 34 tables plus the search index, 48 indexes, 30 triggers and 10 views. The `asgard.muninn` package applies it and carries each app's write rules. Schema v2 (`0002_copies_arent_activity.sql`, Asgard 0.3.1) takes squash copies out of `v_activity`. Schema v3 (`0003_hardening.sql`, Asgard 0.4.0) moves rules that held only in Python into the database. It adds:
+
+- Jira-key checks on every cross-app key column.
+- Size limits: 1440 minutes for an approval and for a day's approvals together; 24 hours for a worklog Asgard sends.
+- Posted worklogs can't go back or be deleted.
+- Baldur time only for an approved day.
+- Event cursors can't pass the newest event.
+- `v_double_posts` and its tile badge.
+- `pull_request_commits`, `pull_requests.merge_commit_sha` and `commits.message_keys` for Baldur's GitHub evidence.
+- Day status that counts a Baldur worklog for its approved day.
+- `run_id` indexes for pruning.
+
+The schema's own script runs 148 checks. The tests cover migrations, sync runs, Odin's flows, Baldur's approvals, the tile badges, the guard and the hardening (`tests/test_muninn*.py`). Two independent reviews of the hardening are recorded in [review-2026-10-06.md](review-2026-10-06.md), and running the file by hand is [muninn-operations.md](muninn-operations.md).
 
 ## Rules every app follows
 
-These nine rules are the contract. The writer module enforces them, so no app has to remember them.
+These nine rules are the contract. The writer module and the schema enforce them, so no app has to remember them. From Asgard 0.4 the connection `open_app()` returns also carries a guard (`asgard/muninn/guard.py`):
+
+- An SQLite authorizer refuses writes to tables the app doesn't own, schema changes, ATTACH, and setting any PRAGMA but `busy_timeout`, `cache_size` and `foreign_keys = ON`.
+- Per-connection triggers keep the app to its own rows in the shared tables: its own events, runs, cursors, sources it reads and identity kinds.
+
+How each app integrates is in [integration/](integration/README.md).
 
 1. **One writer module.** Apps call `muninn.upsert_*()` and `muninn.emit()`, never raw SQL. The module ships inside Asgard as `asgard.muninn`, and Odin imports it from the Asgard install, so there is one copy of the schema, migrations and connection settings.
 2. **Every fact carries provenance.** A row records its source system (`source_id`), its ID there (Jira id, commit SHA, meeting ID) and the sync run that last touched it.
@@ -636,7 +653,7 @@ How Odin calls the package. The run records itself, writes each fetched page in 
 from asgard import muninn
 from asgard.muninn import odin
 
-con = muninn.open_app("odin", supported=(1, 1))
+con = muninn.open_app("odin", supported=(1, 3))
 jira = muninn.ensure_source(con, "jira", "jira-dc", "https://jira.example.gov")
 ctx = odin.JiraContext.load(con, jira, epic_field="customfield_10008")
 
@@ -680,7 +697,7 @@ Odin never edits or deletes a worklog in Jira. If you lower an approved day afte
 Odin moves into Muninn, and Asgard 0.2 ships the package it needs. Each step replaces one part of Odin's `state.db` and can ship on its own, so Odin keeps working throughout. Jira stays the source of truth, so Odin re-reads it rather than converting its cache.
 
 1. **Install Asgard 0.2 or later.** It creates Muninn at first start and ships `asgard.muninn`.
-2. **Load the package.** Odin adds the `load_muninn()` function from Asgard's README and opens Muninn with `muninn.open_app("odin", supported=(1, 1))`.
+2. **Load the package.** Odin adds the `load_muninn()` function from Asgard's README and opens Muninn with `muninn.open_app("odin", supported=(1, 3))`.
 3. **Issues.** Odin's Jira sync passes each issue's JSON to `odin.upsert_issue()` inside a `muninn.Run`. The Assigned to Me view becomes `odin.assigned_to_me()`, and the tracked-parent pull reads `odin.children_of()`. The list of tracked parents stays in Odin's settings file.
 4. **Calendar and meeting logging.** The meeting sync calls `odin.upsert_calendar_event()`, then `odin.sweep_calendar()` for the window it read. Logging a meeting becomes `odin.begin_meeting_post()`, the Jira call, then `odin.finish_post()`.
 5. **Worklogs.** Odin reads your worklogs from `/worklog/updated` and stores them with `odin.upsert_worklog()`. The first run reaches back a year.
@@ -700,16 +717,19 @@ Schema changes are forward-only numbered SQL files, each applied after an automa
 - **Constraint changes.** SQLite's ALTER TABLE can't change a CHECK, so those use the create-copy-drop-rename recipe. A file that starts with `-- muninn: foreign_keys=off` runs with foreign keys off and must pass `PRAGMA foreign_key_check` before it commits.
 - **Backups.** `VACUUM INTO` copies Muninn to `%LOCALAPPDATA%\Asgard\backups` once a day (7 kept), before each schema upgrade (3 kept) and from Asgard's menu (5 kept). Each copy is written under a private name and moved into place, so two processes never touch the same file.
 - **Abandoned runs.** At startup, Asgard closes any sync run still marked running after six hours as failed.
+- **Checks at start.** `prepare()` runs `quick_check`. A damaged file stops with the newest backup and the restore command named; nothing is moved until you ask. A damaged search index is rebuilt, and Muninn's own protections (triggers, indexes, views) that are missing or altered are put back, each with a warning.
+- **Housekeeping.** Once a day, after the backup: `PRAGMA optimize`, a WAL checkpoint, removal of half-written backup copies, and pruning if retention is on.
+- **By hand.** `Asgard.pyw --muninn status|check|repair|backup|restore [FILE]|maintain|retention on|off|show` ([muninn-operations.md](muninn-operations.md)). `restore` checks the backup in full, keeps the current file as `muninn.before-restore-<time>.db`, and puts it back if anything fails partway.
 - **Export.** Valhalla's export is the same copy, zipped to a folder you pick.
 
-Proposed retention defaults:
+Retention defaults. Pruning is **off** until you confirm them (`--muninn retention on`); when on, it runs at most 2 s a day in small transactions:
 
 | Data | Kept | Why |
 | --- | --- | --- |
 | Facts: work items, aliases, calendar, worklogs, commits, PRs, meetings, BLUFs, submissions | Life of the database | Freya needs at least a full year, and rows are small |
 | Accomplishments | Life of the database | Freya's durable record, frozen once a period closes |
 | events | Life of the database | Append-only by trigger; history is the point |
-| Estimate runs with no approved or rejected proposal | 90 days, then pruned with their sessions | Each run is a full recompute; decisions stay for audit, and a posted approval can't be deleted |
+| Estimate runs with no decided proposal and no day still open for review | 90 days, then pruned with their sessions | Each run is a full recompute; decisions stay for audit, and a posted approval can't be deleted |
 | sync\_runs | 180 days, then pruned | Operational only; facts' run\_id becomes NULL |
 | reflog\_entries | 1 year | Only recent calibration uses them |
 | Transcripts | Never stored | Rule 9 |
@@ -726,6 +746,6 @@ Rows are short text, so a year of one engineer's work should stay in the tens of
 - [ ] **state.db layout.** Step 7 of moving Odin needs the layout of Odin's `state.db` tables (the output of `sqlite3 state.db .schema`, no data).
 - [ ] **Posting mode.** Odin posts approved worklogs on its next run (proposed, since approving in Baldur is the consent), or waits for a Post button in Odin?
 - [ ] **Which resolutions count as wins.** Proposed: all except Won't Do, Duplicate and Cannot Reproduce, editable in Freya's settings.
-- [ ] **Time zone travel.** A day is local to wherever the laptop is when Baldur estimates it and Odin posts it. Proposed: accept the rare shift rather than pin a zone in `meta`.
+- [x] **Time zone travel.** Decided (Brandon, Oct 9): US time zones only. A day is local to wherever the laptop is when Baldur estimates it and Odin posts it. The rare shift is accepted rather than pinning a zone in `meta`. Baldur's own worklogs count for their approved day whatever the zone; a worklog logged by hand near midnight can fall in the neighbouring day after a move between US zones (at most 6 hours apart).
 - [ ] **Encryption beyond BitLocker.** SQLCipher needs a compiled extension, which breaks the pure-Python rule.
 - [ ] **Retention.** Confirm the defaults above against your records schedule.

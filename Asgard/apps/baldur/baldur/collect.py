@@ -23,6 +23,7 @@ Git expires reflog entries after 90 days, so collect at least weekly.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,6 +49,7 @@ class RepoResult:
     skipped_copies: int = 0
     coauthored: int = 0
     reflog_new: int = 0
+    message_keys: Dict[int, List[str]] = field(default_factory=dict)   # keys in each commit's message
     error: Optional[str] = None
 
 
@@ -107,7 +109,10 @@ def collect(con: sqlite3.Connection, settings: Settings, only: Optional[Sequence
         result.repos.append(_collect_repo(con, settings, source, folder, emails, since))
     # Pull requests synced before these commits arrived still key them: the order of collect and
     # the GitHub sync doesn't matter.
-    result.pr_keyed = apply_pr_evidence(con, settings.project_keys)
+    found_in_messages: Dict[int, List[str]] = {}
+    for r in result.repos:
+        found_in_messages.update(r.message_keys)
+    result.pr_keyed = apply_pr_evidence(con, settings.project_keys, found_in_messages)
     return result
 
 
@@ -115,74 +120,123 @@ def collect(con: sqlite3.Connection, settings: Settings, only: Optional[Sequence
 # Evidence from pull requests (method 'pr'), from what the GitHub sync stored
 # --------------------------------------------------------------------------
 
-def squash_commits(con: sqlite3.Connection) -> Dict[str, Set[str]]:
-    """{sha of the commit GitHub made merging one of your PRs: subjects of the PR's own commits}.
+@dataclass
+class _Merge:
+    """What a merged PR of yours tells about the commit GitHub made when merging it."""
+    listed: Set[str]                  # the PR's own commits, as GitHub lists them
+    listed_patches: Set[str]          # their patch ids, for the ones collected here
 
-    That commit is a copy (a squash), never work, unless GitHub listed it as one of the PR's own
-    commits, or it carries the subject of one of them (a rebase-merge keeps each commit's subject,
-    and its patch then counts once, like any cherry-pick).
-    """
-    out: Dict[str, Set[str]] = {}
+
+def pr_merges(con: sqlite3.Connection) -> Dict[str, _Merge]:
+    """{merge_commit_sha of each merged PR of yours, when it isn't one of the PR's own commits: _Merge}."""
+    out: Dict[str, _Merge] = {}
     for r in con.execute(
             "SELECT p.id, p.merge_commit_sha FROM pull_requests p WHERE p.is_mine = 1 AND p.state = 'merged' "
-            "AND p.merge_commit_sha IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pull_request_commits m "
-            "WHERE m.pr_id = p.id AND m.sha = p.merge_commit_sha)"):
-        subjects = {s[0] for s in con.execute(
-            "SELECT DISTINCT c.subject FROM pull_request_commits m JOIN commits c ON c.sha = m.sha "
-            "WHERE m.pr_id = ?", (r[0],))}
-        out.setdefault(str(r[1]), set()).update(subjects)
+            "AND p.commits_listed = 1 AND p.merge_commit_sha IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "
+            "pull_request_commits m WHERE m.pr_id = p.id AND m.sha = p.merge_commit_sha)"):
+        listed = {x[0] for x in con.execute("SELECT sha FROM pull_request_commits WHERE pr_id = ?", (r[0],))}
+        patches = {x[0] for x in con.execute(
+            "SELECT DISTINCT c.patch_id FROM pull_request_commits m JOIN commits c ON c.sha = m.sha "
+            "WHERE m.pr_id = ? AND c.is_mine = 1 AND c.patch_id IS NOT NULL", (r[0],))}
+        known = con.execute("SELECT 1 FROM pull_request_commits m JOIN commits c ON c.sha = m.sha "
+                            "WHERE m.pr_id = ? AND c.is_mine = 1 LIMIT 1", (r[0],)).fetchone() is not None
+        merge = out.setdefault(str(r[1]), _Merge(set(), set()))
+        merge.listed |= listed if known else set()
+        merge.listed_patches |= patches
     return out
 
 
-def _smallest_pr_head(con: sqlite3.Connection, sha: str) -> Optional[str]:
-    """The head branch of the smallest of your PRs that lists sha (fewest commits, then lowest number).
+def is_squash_copy(merge: Optional[_Merge], patch_id: Optional[str]) -> bool:
+    """Whether the commit GitHub made merging a PR is a copy of work already counted.
 
-    A commit in a stacked PR and in the PR made for it, or in a feature PR and a release PR, belongs
-    to the one it was made for, which is the smallest; the choice doesn't depend on which PR GitHub
-    last changed.
+    A squash combines the PR's commits into one, so its patch matches none of theirs: a copy. A
+    rebase-merge replays each commit, so the merge commit's patch matches one of them, and it then
+    counts once with its original, like any cherry-pick. When none of the PR's own commits were
+    collected here (the work was done on another machine), the merge commit is the only evidence of
+    that work, so it counts.
     """
-    row = con.execute(
-        "SELECT p.head_ref FROM pull_request_commits m JOIN pull_requests p ON p.id = m.pr_id "
-        "WHERE m.sha = ? AND p.is_mine = 1 "
-        "ORDER BY (SELECT count(*) FROM pull_request_commits x WHERE x.pr_id = p.id), p.number, p.id LIMIT 1",
-        (sha,)).fetchone()
-    return None if row is None else str(row[0])
+    if merge is None or not merge.listed:
+        return False
+    return patch_id is None or patch_id not in merge.listed_patches
 
 
-def apply_pr_evidence(con: sqlite3.Connection, projects: Sequence[str]) -> int:
+_STATE_RANK = "CASE WHEN p.state = 'merged' THEN 0 WHEN p.state = 'open' AND p.is_draft = 0 THEN 1 " \
+              "WHEN p.state = 'open' THEN 2 ELSE 3 END"
+LIST_CAP = 250                      # GitHub lists at most this many commits of one PR
+
+
+def _best_pr_head(con: sqlite3.Connection, shas: Sequence[str], repo_id: int) -> Optional[str]:
+    """The head branch of the PR of yours a commit was made for, among those listing any of shas.
+
+    Merged beats open, open beats draft, draft beats closed-unmerged: a PR you abandoned or haven't
+    finished never takes a commit from the one that shipped it. Then a PR in the commit's own
+    repository, then the smallest (a commit in a stacked PR and in the PR made for it, or in a
+    feature PR and a release PR, belongs to the smaller one). Numbers are compared only within one
+    repository. GitHub cuts a PR's commit list off at 250, so two such lists can't be told apart
+    by size: that is no evidence, and the commit's message decides.
+    """
+    if not shas:
+        return None
+    marks = ",".join("?" * len(shas))
+    rows = con.execute(
+        f"WITH sizes AS (SELECT pr_id, count(*) AS n FROM pull_request_commits GROUP BY pr_id) "
+        f"SELECT p.head_ref, {_STATE_RANK} AS rank, p.repo_id = ? AS here, z.n >= ? AS cut "
+        f"FROM pull_request_commits m JOIN pull_requests p ON p.id = m.pr_id "
+        f"JOIN sizes z ON z.pr_id = p.id WHERE m.sha IN ({marks}) AND p.is_mine = 1 "
+        f"ORDER BY rank, here DESC, cut, z.n, p.repo_id, p.number, p.id LIMIT 2",
+        (repo_id, LIST_CAP, *shas)).fetchall()
+    if not rows:
+        return None
+    best = rows[0]
+    if best["cut"] and len(rows) > 1 and (rows[1]["rank"], rows[1]["here"]) == (best["rank"], best["here"]):
+        return None
+    return str(best["head_ref"])
+
+
+def apply_pr_evidence(con: sqlite3.Connection, projects: Sequence[str],
+                      message_keys: Optional[Dict[int, List[str]]] = None) -> int:
     """Bring every commit's 'pr' keys and squash copies in line with the stored pull requests.
 
     Uses Muninn only (no network), so it runs after a GitHub sync and after a collection alike.
-    - A commit GitHub made when squash-merging your PR becomes a copy with no keys.
-    - Your commits in your PRs get the keys the smallest such PR's head branch names. If that head
-      names none, the PR is no evidence and the commit's message decides.
+    - The commit GitHub made squash-merging your PR becomes a copy with no keys (is_squash_copy).
+    - Your commits in your PRs, and their rebased copies (same patch), get the keys of the head
+      branch of the PR they were made for (_best_pr_head). If that head names none, the PR is no
+      evidence and the commit's message decides.
     - A commit no PR lists any more loses its 'pr' keys and falls back to its message.
-    Reflog, branch and hand-set keys are never touched. Returns how many commits changed.
+    message_keys holds the keys collection just found in each commit's full message (the body
+    isn't stored); without it, the subject is used. Reflog, branch and hand-set keys are never
+    touched. Returns how many commits changed.
     """
+    message_keys = message_keys or {}
     changed = 0
     with muninn.transaction(con):
-        for sha, subjects in squash_commits(con).items():
-            for r in con.execute("SELECT id, subject FROM commits WHERE sha = ? AND is_mine = 1 AND is_merge = 0",
+        for sha, merge in pr_merges(con).items():
+            for r in con.execute("SELECT id, patch_id FROM commits WHERE sha = ? AND is_mine = 1 AND is_merge = 0",
                                  (sha,)).fetchall():
-                if r["subject"] in subjects:
-                    continue
-                con.execute("UPDATE commits SET is_merge = 1, patch_id = NULL WHERE id = ?", (r["id"],))
-                con.execute("DELETE FROM commit_work_items WHERE commit_id = ?", (r["id"],))
-                changed += 1
+                if is_squash_copy(merge, r["patch_id"]):
+                    con.execute("UPDATE commits SET is_merge = 1, patch_id = NULL WHERE id = ?", (r["id"],))
+                    con.execute("DELETE FROM commit_work_items WHERE commit_id = ?", (r["id"],))
+                    changed += 1
         # Repositories with PRs of yours whose commits weren't read yet: their 'pr' keys can't be judged.
         unread = {r[0] for r in con.execute("SELECT DISTINCT repo_id FROM pull_requests WHERE is_mine = 1 "
                                             "AND commits_listed = 0")}
+        listed = ("SELECT m.sha FROM pull_request_commits m JOIN pull_requests p ON p.id = m.pr_id "
+                  "WHERE p.is_mine = 1")
         candidates = con.execute(
-            "SELECT c.id, c.sha, c.subject, c.repo_id FROM commits c WHERE c.is_mine = 1 AND c.is_merge = 0 AND ("
-            "c.sha IN (SELECT m.sha FROM pull_request_commits m JOIN pull_requests p ON p.id = m.pr_id "
-            "WHERE p.is_mine = 1) OR EXISTS (SELECT 1 FROM commit_work_items w WHERE w.commit_id = c.id "
-            "AND w.method = 'pr'))").fetchall()
+            "SELECT c.id, c.sha, c.subject, c.repo_id, c.patch_id, c.message_keys FROM commits c WHERE c.is_mine = 1 "
+            f"AND c.is_merge = 0 AND (c.sha IN ({listed}) OR (c.patch_id IS NOT NULL AND c.patch_id IN ("
+            f"SELECT x.patch_id FROM commits x WHERE x.patch_id IS NOT NULL AND x.sha IN ({listed}))) "
+            "OR EXISTS (SELECT 1 FROM commit_work_items w WHERE w.commit_id = c.id AND w.method = 'pr'))").fetchall()
         for c in candidates:
             stored = {(r[0], r[1]) for r in con.execute(
                 "SELECT work_item_key, method FROM commit_work_items WHERE commit_id = ?", (c["id"],))}
             if any(m in ("manual", "reflog", "branch") for _, m in stored):
                 continue
-            head = _smallest_pr_head(con, c["sha"])
+            shas = [c["sha"]]
+            if c["patch_id"]:
+                shas += [r[0] for r in con.execute("SELECT DISTINCT sha FROM commits WHERE patch_id = ? AND sha <> ?",
+                                                   (c["patch_id"], c["sha"]))]
+            head = _best_pr_head(con, shas, c["repo_id"])
             found = keys.branch_keys(head, projects) if head else []
             if found:
                 want = {(k, "pr") for k in found}
@@ -192,10 +246,15 @@ def apply_pr_evidence(con: sqlite3.Connection, projects: Sequence[str]) -> int:
                                     "VALUES (?, ?, 'pr')", [(c["id"], k) for k in found])
                     changed += 1
             elif any(m == "pr" for _, m in stored) and (head is not None or c["repo_id"] not in unread):
+                fallback = message_keys.get(c["id"])
+                if fallback is None and c["message_keys"]:
+                    allowed = {p.upper() for p in projects}
+                    fallback = [k for k in json.loads(c["message_keys"]) if k.split("-", 1)[0] in allowed]
+                if fallback is None:
+                    fallback = keys.find_keys(c["subject"], projects)
                 con.execute("DELETE FROM commit_work_items WHERE commit_id = ?", (c["id"],))
                 con.executemany("INSERT INTO commit_work_items (commit_id, work_item_key, method) "
-                                "VALUES (?, ?, 'message')",
-                                [(c["id"], k) for k in keys.find_keys(c["subject"], projects)])
+                                "VALUES (?, ?, 'message')", [(c["id"], k) for k in fallback])
                 changed += 1
     return changed
 
@@ -246,11 +305,13 @@ def _collect_repo(con: sqlite3.Connection, settings: Settings, source: int, path
             # hold the branch they were made on. Collection order can't matter, because store.load()
             # treats a SHA as a copy if any clone's row says so.
             known = _all_mine(con) | {c.sha for c in mine}
-            merged = squash_commits(con)        # what GitHub made when it squash-merged your pull requests
-            copies = {c.sha for c in mine if c.is_github_squash or (c.squashed and set(c.squashed) <= known)
-                      or (c.sha in merged and c.subject not in merged[c.sha])}
+            copies = {c.sha for c in mine if c.is_github_squash or (c.squashed and set(c.squashed) <= known)}
             fingerprints = gitread.patch_ids(path, [c.sha for c in mine if c.sha not in copies
                                                     and not stored.get(c.sha)])
+            # What GitHub made when it merged your pull requests: a squash is a copy (see is_squash_copy).
+            merges = pr_merges(con)
+            copies |= {c.sha for c in mine if c.sha in merges and c.sha not in copies
+                       and is_squash_copy(merges[c.sha], fingerprints.get(c.sha) or stored.get(c.sha))}
             reflogs = []
             made_on: Dict[str, str] = {}
             for n, (folder, now_on) in enumerate(gitread.worktrees(path)):
@@ -281,6 +342,10 @@ def _collect_repo(con: sqlite3.Connection, settings: Settings, source: int, path
                     res.commits_new += int(new)
                     found, method = keys.choose(settings.project_keys, made_on.get(c.sha), members.get(c.sha, ()),
                                                 (), f"{c.subject}\n{c.body}")
+                    in_message = keys.message_keys(f"{c.subject}\n{c.body}")
+                    con.execute("UPDATE commits SET message_keys = ? WHERE id = ? AND message_keys IS NOT ?",
+                                (json.dumps(in_message), commit_id, json.dumps(in_message)))
+                    res.message_keys[commit_id] = keys.find_keys(f"{c.subject}\n{c.body}", settings.project_keys)
                     if _store_keys(con, commit_id, found, method, settings.project_keys):
                         res.keyed += 1
                 for c in shared:

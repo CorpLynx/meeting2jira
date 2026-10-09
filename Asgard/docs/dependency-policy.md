@@ -13,6 +13,7 @@ Python packages are allowed in Asgard and Odin when they are **declared, pinned 
 5. **Optional where it can be.** Import a package only in the module that needs it, and say what to install when it's missing (Heimdall imports Playwright only in `fill`). An app's other commands keep working without it.
 6. **Shipped, not fetched.** Updates carry reviewed wheels in the payload ([updates.md](updates.md)); nothing runs `pip` against a network index on the user's machine.
 7. **Never weakens TLS.** Packages that bring certifi (requests, httpx) must be paired with `truststore` so the agency CA in the Windows store is trusted; verification is never turned off.
+8. **Documented with alternatives.** Every pinned package has a section in its product's `MODULES.md` ([Asgard](../MODULES.md), [Odin](../../Odin/MODULES.md)): where it's imported, what happens without it, and a standard-library alternative and other-package alternatives in case it isn't available on-prem. The guardrail tests fail when a package has no section, a section is missing one of those rows, or an importing file isn't listed.
 
 ## What stays standard-library by design
 
@@ -23,6 +24,8 @@ Not because packages are forbidden, but because these are imported by everything
 - **Odin's `meeting2jira` package** keeps working with nothing installed; a package may add an optional path (as `graph-app` does), not become a requirement for the daily run.
 
 ## Candidates worth considering
+
+What's actually in use, and the alternatives to each, is in `MODULES.md`; this table is what might be added.
 
 | Package | Pure Python | Would replace | Note |
 | --- | --- | --- | --- |

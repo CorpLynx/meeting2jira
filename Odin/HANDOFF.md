@@ -247,9 +247,9 @@ it risks the credibility of the whole tool.
 | GCC High | `graph.microsoft.us` | `login.microsoftonline.us` |
 | DoD | `dod-graph.microsoft.us` | `login.microsoftonline.us` |
 
-**Approach:** lives in `graph-app/`, a sibling of `playwright-app/`, because it needs pip and `app/` must stay stdlib-only. It writes schema-v1 JSON and shells out to the unmodified `python -m meeting2jira push --input`. Nothing under `app/src/meeting2jira/` changes.
+**Approach:** lives in `graph-app/`, a sibling of `playwright-app/`, so the daily run never depends on msal (packages are allowed when pinned and listed in `MODULES.md`, but a scheduled task shouldn't need one). It writes schema-v1 JSON and shells out to the unmodified `python -m meeting2jira push --input`. Nothing under `app/src/meeting2jira/` changes.
 
-- **Use `msal`.** This supersedes the earlier "no MSAL, hand-roll PKCE" plan, which existed only because of the stdlib-only rule the user has now relaxed for this path. It removes the PKCE dance, the loopback listener, token refresh bookkeeping, and state/nonce validation — the parts of OAuth where hand-written code goes subtly wrong.
+- **Use `msal`.** This supersedes the earlier "no MSAL, hand-roll PKCE" plan, which existed only because of the stdlib-only rule, since dropped (Oct 2026). It removes the PKCE dance, the loopback listener, token refresh bookkeeping, and state/nonce validation — the parts of OAuth where hand-written code goes subtly wrong.
 - **Auth mode is an open decision.** `enable_broker_on_windows=True` uses the Windows account broker (WAM), so the token comes from the device's existing primary refresh token: silent, no prompt, and the device itself satisfies MFA and device-compliance Conditional Access. That matters a great deal for an unattended scheduled task. But the `msal[broker]` extra pulls `pymsalruntime`, a **native binary** — a bigger approval surface than plain `msal`, which is pure Python. Plain `msal` also works: interactive browser sign-in on first run, then a cached refresh token. Decide deliberately with IT; do not let it default.
 - **Token cache via DPAPI.** Serialize MSAL's `SerializableTokenCache` and protect it with the existing `credstore.py` ctypes DPAPI code. Keep it in a separate file; a refresh token can be too large for Credential Manager.
 - Call `/me/calendarView` (it expands recurrences), follow `@odata.nextLink` for paging, send `Prefer: outlook.timezone="UTC"`.
@@ -267,7 +267,6 @@ it risks the credibility of the whole tool.
 
 ### Won't do (unless the user explicitly asks and the security implications are discussed)
 - EWS; published ICS feeds.
-- **Third-party Python packages anywhere in `app/`** — still absolute, still enforced by `test_guardrails.py`. The separate `playwright-app/` and (planned) `graph-app/` folders may use pip precisely so that this rule never has to bend; that is the whole reason they are separate deliverables.
 - Disabling TLS verification; bypassing execution policy.
 - Reading meeting bodies or attendee lists; syncing other people's calendars.
 - Deleting Jira issues; two-way sync.
@@ -279,7 +278,7 @@ it risks the credibility of the whole tool.
 | Decision | Why |
 |---|---|
 | Outlook COM first, CSV fallback, Graph later | COM reuses the signed-in session with no approvals. CSV works under Constrained Language Mode. Graph needs an IT app registration. |
-| Stdlib-only Python using `urllib` | No package approvals, and it trusts the Windows cert store, so TLS inspection works. `requests`/certifi usually fails there. |
+| Python using `urllib`, not `requests` | It trusts the Windows cert store, so TLS inspection works; `requests`/certifi usually fails there. Packages are allowed since Oct 2026 when pinned and listed with alternatives in `MODULES.md`; the daily run needs none. |
 | PowerShell makes no decisions | One place for logic (Python) that is testable offline. The PowerShell only needs to be correct about data extraction. |
 | Dedupe on key OR content_hash | Stable per occurrence on COM, and it prevents duplicates between the COM and CSV sources. |
 | Record state immediately after create | A worklog or transition failure can't cause a duplicate sub-task. |

@@ -2,6 +2,7 @@
 
 Each test is one confirmed finding, named by its id in the review, and fails without its fix.
 """
+import datetime as dt
 import os
 import sqlite3
 import sys
@@ -16,7 +17,7 @@ for folder in (ROOT, ROOT / "tests"):
 
 from asgard import muninn  # noqa: E402
 from asgard.muninn import baldur, db, integrity, keys, odin  # noqa: E402
-from test_muninn import Base, WorklogBase  # noqa: E402
+from test_muninn import Base, WorklogBase, jira_issue, local_date  # noqa: E402
 
 NOW = "2026-10-02T14:05:00Z"
 
@@ -258,6 +259,16 @@ class PostingReview(WorklogBase):
             self.con.execute("UPDATE day_proposals SET status = 'approved', minutes_final = 1000, decided_at = ? "
                              "WHERE local_date = ?", (NOW, self.day))
 
+    def test_l7_a_post_counts_for_its_approved_day_whatever_the_time_zone(self):
+        pid = self.approved_day(120)
+        post = odin.begin_post(self.con, pid)
+        odin.finish_post(self.con, post.worklog_id, "940")
+        # As seen from another time zone, the post's start falls on the day before.
+        self.con.execute("UPDATE worklogs SET started_at = ? WHERE id = ?",
+                         (muninn.to_ts(muninn.from_ts(self.started) - dt.timedelta(days=1)), post.worklog_id))
+        new = baldur.change_approval(self.con, pid, 150)
+        self.assertEqual([(d["proposal_id"], d["minutes_to_post"]) for d in odin.posts_due(self.con)], [(new, 30)])
+
     def test_l8_one_post_in_jira_twice_is_flagged(self):
         post = odin.begin_post(self.con, self.approved_day(120))
         odin.finish_post(self.con, post.worklog_id, "910")
@@ -275,14 +286,130 @@ class PostingReview(WorklogBase):
                                "minutes_proposed, minutes_final, first_started_at, basis, basis_hash, status, "
                                "decided_at) VALUES (?, ?, 'abc-123', 61, 60, 60, ?, 'b', 'h', 'approved', ?) "
                                "RETURNING id", (run_id, self.day, self.started, NOW)).fetchone()[0]
+        self.assertEqual(len(integrity.check(self.con).of("keys")), 1, "the live lower-case approval is reported")
         new = baldur.change_approval(self.con, pid, 45)
         self.assertEqual(self.con.execute("SELECT work_item_key FROM day_proposals WHERE id = ?", (new,)).fetchone()[0],
                          "ABC-123")
+        self.assertEqual(integrity.check(self.con).of("keys"), [], "the superseded row is final; the warning clears")
+
+    def test_l13b_a_url_password_with_a_slash_is_masked_but_ports_and_paths_arent(self):
+        from asgard.muninn import redact
+        self.assertEqual(redact.scrub("https://bob:abc/s3cr3t@jira.example.gov/rest"),
+                         "https://bob:***@jira.example.gov/rest")
+        self.assertEqual(redact.redact_url("https://bob:abc/s3cr3t@jira.example.gov"), "https://bob@jira.example.gov")
+        for plain in ("https://github.agency.gov:8443/org/repo@a1b2c3", "git+https://github.com/org/repo@a1b2c3d4"):
+            self.assertEqual(redact.scrub(plain), plain)
 
     def test_l12_a_key_with_a_trailing_newline_isnt_a_key(self):
         self.assertFalse(keys.is_key("ABC-1\n"))
         with self.assertRaises(ValueError):
             keys.normalize_key("ABC-1\nX")
+
+
+class Rereview(WorklogBase):
+    """The second, independent review of the fixes above (R1-R9 in docs/review-2026-10-06.md)."""
+
+    def app(self, name):
+        con = muninn.open_app(name, supported=(1, muninn.SCHEMA_VERSION), path=self.path)
+        self.addCleanup(con.close)
+        return con
+
+    def test_r1_an_app_cant_run_or_move_the_cursor_of_another_apps_source(self):
+        loki = self.app("loki")
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "another app reads that source"):
+            muninn.Run(loki, "loki", self.sid, "worklogs").__enter__()
+        own = muninn.ensure_source(loki, "manual", "paste")
+        with muninn.Run(loki, "loki", own, "recaps") as run:
+            run.advance_cursor("2026-10-01T00:00:00Z")
+        lrun = run.id
+        for sql in ("INSERT INTO sync_cursors (source_id, stream, cursor, updated_at, run_id) "
+                    f"VALUES ({self.sid}, 'worklogs', '9999', '{NOW}', {lrun})",
+                    f"REPLACE INTO sync_cursors (source_id, stream, cursor, updated_at, run_id) "
+                    f"VALUES ({self.sid}, 'issues', '9999', '{NOW}', {lrun})",
+                    f"UPDATE sync_cursors SET source_id = {self.sid}, stream = 'issues' WHERE run_id = {lrun}"):
+            with self.subTest(sql=sql[:30]), self.assertRaises(sqlite3.DatabaseError):
+                loki.execute(sql)
+
+    def test_r2_a_source_is_never_replaced_and_only_its_reader_moves_its_address(self):
+        loki = self.app("loki")
+        for sql in (f"REPLACE INTO sources (id, kind, name) VALUES ({self.sid}, 'manual', 'paste2')",
+                    f"UPDATE sources SET base_url = 'https://evil.example' WHERE id = {self.sid}"):
+            with self.subTest(sql=sql[:20]), self.assertRaises(sqlite3.IntegrityError):
+                loki.execute(sql)
+        muninn.ensure_source(self.app("odin"), "jira", "jira-dc", "https://jira2.example.gov")   # its reader may
+        self.assertEqual(self.con.execute("SELECT kind, base_url FROM sources WHERE id = ?", (self.sid,)).fetchone()[:],
+                         ("jira", "https://jira2.example.gov"))
+
+    def test_r3_a_baldur_worklog_moved_to_another_day_in_jira_still_counts_there(self):
+        pid = self.approved_day(120)
+        post = odin.begin_post(self.con, pid)
+        odin.finish_post(self.con, post.worklog_id, "950")
+        next_day = muninn.to_ts(muninn.from_ts(self.started) + dt.timedelta(days=1))
+        self.con.execute("UPDATE worklogs SET started_at = ? WHERE id = ?", (next_day, post.worklog_id))
+        run_id = self.con.execute("INSERT INTO estimate_runs (date_from, date_to, model_version, params, params_hash) "
+                                  "VALUES (?, ?, 'baldur-1', '{}', 'h2') RETURNING id",
+                                  (local_date(next_day), local_date(next_day))).fetchone()[0]
+        p2 = self.con.execute("INSERT INTO day_proposals (estimate_run_id, local_date, work_item_key, minutes_raw, "
+                              "minutes_proposed, first_started_at, basis, basis_hash) VALUES (?, ?, 'ABC-123', 121, "
+                              "120, ?, 'b', 'h2') RETURNING id", (run_id, local_date(next_day), next_day)).fetchone()[0]
+        baldur.approve(self.con, p2)
+        self.assertEqual(odin.posts_due(self.con), [], "120 min already start on that day")
+
+    def test_r5_a_meeting_sent_again_after_the_first_copy_was_swept_isnt_logged_twice(self):
+        first = self.meeting("m1")
+        odin.finish_post(self.con, odin.begin_meeting_post(self.con, first, "ABC-123").worklog_id, "800")
+        self.con.execute("UPDATE calendar_events SET deleted_at = ? WHERE id = ?", (NOW, first))
+        again = self.meeting("m1-resent")
+        self.assertIsNone(odin.begin_meeting_post(self.con, again, "ABC-123"))
+
+    def test_r6_r7_upgrades_tolerate_missing_objects_and_newer_files_arent_repaired(self):
+        folder = self.dir / "v2"
+        folder.mkdir()
+        for m in db.available_migrations()[:2]:
+            (folder / m.name).write_text(m.path.read_text(encoding="utf-8"), encoding="utf-8")
+        old = self.dir / "old.db"
+        muninn.prepare(old, folder=folder, backups=self.dir / "bk")
+        raw = sqlite3.connect(str(old))
+        raw.execute("DROP VIEW v_tile_badges")
+        raw.execute("DROP TRIGGER pull_requests_search_upd")
+        raw.commit()
+        raw.close()
+        self.assertEqual(muninn.prepare(old, backups=self.dir / "bk").version, muninn.SCHEMA_VERSION)
+        newer = muninn.connect(old)
+        self.addCleanup(newer.close)
+        newer.execute(f"PRAGMA user_version = {muninn.SCHEMA_VERSION + 1}")
+        newer.execute("CREATE TRIGGER future_rule BEFORE DELETE ON meta BEGIN SELECT 1; END")
+        self.assertEqual([f.level for f in integrity.check(newer).of("schema")], ["warning"])
+        with self.assertRaisesRegex(muninn.MuninnError, "Update Asgard"):
+            integrity.repair(newer)
+        self.assertIsNotNone(newer.execute("SELECT 1 FROM sqlite_schema WHERE name = 'future_rule'").fetchone())
+
+    def test_r8_approve_day_checks_the_days_total_as_it_ends(self):
+        run_id = self.con.execute("INSERT INTO estimate_runs (date_from, date_to, model_version, params, params_hash) "
+                                  "VALUES (?, ?, 'baldur-1', '{}', 'h') RETURNING id", (self.day, self.day)).fetchone()[0]
+
+        def prop(key, minutes, h):
+            return self.con.execute("INSERT INTO day_proposals (estimate_run_id, local_date, work_item_key, "
+                                    "minutes_raw, minutes_proposed, first_started_at, basis, basis_hash) "
+                                    "VALUES (?, ?, ?, ?, ?, ?, 'b', ?) RETURNING id",
+                                    (run_id, self.day, key, minutes, minutes, self.started, h)).fetchone()[0]
+        baldur.approve(self.con, prop("ABC-1", 300, "a"))
+        baldur.approve(self.con, prop("ABC-2", 900, "b"))
+        prop("ABC-1", 900, "c")
+        prop("ABC-2", 300, "d")                       # re-estimated: the time moved between tickets
+        self.assertEqual(len(baldur.approve_day(self.con, self.day)), 2)
+        self.assertEqual(self.con.execute("SELECT sum(minutes_final) FROM day_proposals WHERE status = 'approved'")
+                         .fetchone()[0], 1200)
+
+    def test_r9_scrub_catches_env_and_curl_forms_and_leaves_copied_titles_alone(self):
+        from asgard.muninn import redact
+        self.assertEqual(redact.scrub("JIRA_TOKEN abc123def456ghi failed"), "JIRA_TOKEN *** failed")
+        self.assertEqual(redact.scrub("curl -u bob:s3cr3tPAT https://x"), "curl -u bob:*** https://x")
+        with muninn.Run(self.con, "odin", self.sid, "issues") as run:
+            odin.upsert_issue(run, jira_issue(jira_id="77", key="ABC-77", summary="Password: 15-character minimum"),
+                              self.ctx)
+        payload = self.con.execute("SELECT payload FROM events WHERE ref = 'ABC-77'").fetchone()[0]
+        self.assertIn("15-character minimum", payload)
 
 
 if __name__ == "__main__":

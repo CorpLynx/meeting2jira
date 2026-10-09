@@ -446,52 +446,113 @@ def sync(con: sqlite3.Connection, settings: Settings, client: Client) -> SyncRes
     return res
 
 
+BACKFILL_PER_PASS = 20               # your PRs whose commits were never listed, read per repository per pass
+
+
 def _sync_repo(con: sqlite3.Connection, client: Client, source: int, repo_id: int, full: str, me: str,
                projects: Sequence[str], res: SyncResult) -> None:
     with muninn.Run(con, "baldur", source, f"github:pulls {full}") as run:
-        got = client.get(f"/repos/{full}/pulls", {"state": "all", "sort": "updated", "direction": "desc",
-                                                  "per_page": 50}, etag=run.cursor)
-        if got.unchanged:
-            res.unchanged += 1
-            return
+        # The cursor is the list's ETag, or "resume:<page>" when the last pass hit the page limit.
+        resume = int(run.cursor[7:]) if (run.cursor or "").startswith("resume:") and run.cursor[7:].isdigit() else None
+        params = {"state": "all", "sort": "updated", "direction": "desc", "per_page": 50}
+        got = client.get(f"/repos/{full}/pulls", params, etag=None if resume else run.cursor)
         stored = {r["number"]: (r["updated_at"], r["is_mine"], r["commits_listed"]) for r in con.execute(
             "SELECT number, updated_at, is_mine, commits_listed FROM pull_requests WHERE repo_id = ?", (repo_id,))}
-        newest = max((u for u, _, _ in stored.values()), default="")
-        raws = list(got.data or [])
-        # The list is newest first: read pages until they reach what's already stored. A pass that
-        # stops at the page limit before then keeps the old cursor, so the next one reads on.
-        url, pages = got.next_url, 1
-        while url and pages < MAX_PAGES and raws and str(_ts(raws[-1].get("updated_at")) or "") > newest:
-            more = client.get(url)
-            raws.extend(more.data or [])
-            url, pages = more.next_url, pages + 1
-        if url and raws and str(_ts(raws[-1].get("updated_at")) or "") > newest:
-            run.problem(f"{full}: more pull requests changed than {MAX_PAGES} pages; the rest come next time")
+        raws: List[Dict[str, Any]] = []
+        next_resume: Optional[int] = None
+        if got.unchanged:
+            res.unchanged += 1
+        else:
+            raws = list(got.data or [])
+            newest = max((u for u, _, _ in stored.values()), default="")
+
+            def news(page: Sequence[Dict[str, Any]]) -> bool:
+                if any(stored.get(int(r.get("number") or 0), (None,))[0] != _ts(r.get("updated_at"))
+                       for r in page):
+                    return True
+                # A page ending on the newest time already stored may have PRs with the same time
+                # after it (GitHub's order among equal times isn't fixed): read one more.
+                return bool(page) and str(_ts(page[-1].get("updated_at")) or "") >= newest
+
+            def page_of(url: str) -> Optional[int]:
+                found = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("page")
+                return int(found[0]) if found and found[0].isdigit() else None
+            # The list is newest first. Keep reading while a page holds a PR that is new or changed; one
+            # whose every row is already stored as it is means the rest is too.
+            url, pages, page = got.next_url, 1, raws
+            while url and pages < MAX_PAGES and news(page):
+                more = client.get(url)
+                page = list(more.data or [])
+                raws.extend(page)
+                url, pages = more.next_url, pages + 1
+            if url and news(page):
+                next_resume = page_of(url)
+            elif resume and pages < MAX_PAGES:
+                # The last pass stopped at the page limit: read on from where it stopped.
+                url = client.url(f"/repos/{full}/pulls", dict(params, page=resume))
+                while url and pages < MAX_PAGES:
+                    more = client.get(url)
+                    raws.extend(more.data or [])
+                    url, pages = more.next_url, pages + 1
+                next_resume = page_of(url) if url else None
+            elif resume:
+                next_resume = resume
+            if next_resume:
+                res.problems.append(f"{full}: more pull requests than {MAX_PAGES} pages of 50 changed; Baldur reads "
+                                    "the rest over the next passes")
         rows = [_pr_row(raw, me, projects) for raw in raws]
+        seen = {r["number"] for r in rows}
         fresh = [r for r in rows if stored.get(r["number"], (None,))[0] != r["updated_at"]
                  or (r["is_mine"] and not stored.get(r["number"], (None, 0, 0))[2])]
+        # Your PRs whose commits were never listed (a database from before schema v3, or a pass that
+        # stopped): read them directly, a few per pass, whatever the list said.
+        backfill = [int(r[0]) for r in con.execute(
+            "SELECT number FROM pull_requests WHERE repo_id = ? AND is_mine = 1 AND commits_listed = 0 "
+            "ORDER BY updated_at DESC LIMIT ?", (repo_id, BACKFILL_PER_PASS))]
+        backfill = [n for n in backfill if n not in seen]
         # Fetch everything first; write once at the end, so no lock is held across a request.
         extra: Dict[int, Tuple[List[Any], Optional[List[str]]]] = {}
         failed: Set[int] = set()
-        for r in fresh:
+
+        def read(number: int, mine: bool) -> None:
             try:
-                reviews = client.get_all(f"/repos/{full}/pulls/{r['number']}/reviews", {"per_page": 100})
+                reviews = client.get_all(f"/repos/{full}/pulls/{number}/reviews", {"per_page": 100})
                 shas: Optional[List[str]] = None
-                if r["is_mine"]:
-                    shas = [str(c.get("sha")) for c in client.get_all(f"/repos/{full}/pulls/{r['number']}/commits",
+                if mine:
+                    shas = [str(c.get("sha")) for c in client.get_all(f"/repos/{full}/pulls/{number}/commits",
                                                                       {"per_page": 100})]
-                extra[r["number"]] = (reviews, shas)
+                extra[number] = (reviews, shas)
             except GitHubError as exc:
                 if exc.status == 401:
                     raise
-                failed.add(r["number"])
-                message = f"{full}#{r['number']}: {exc}"
+                failed.add(number)
+                message = f"{full}#{number}: {exc}"
                 run.problem(message)               # the run keeps its old cursor, so this PR is read again
                 res.problems.append(message)
+
+        for r in fresh:
+            read(r["number"], bool(r["is_mine"]))
+        for number in backfill:
+            try:
+                raw = client.get(f"/repos/{full}/pulls/{number}").data or {}
+            except GitHubError as exc:
+                if exc.status == 401:
+                    raise
+                failed.add(number)
+                res.problems.append(f"{full}#{number}: {exc}")
+                continue
+            if raw.get("number"):
+                rows.append(_pr_row(raw, me, projects))
+                read(number, True)
         with run.batch():
             for r in rows:
                 if r["number"] in failed:
-                    continue                       # keep what was stored; it stays 'fresh' for next time
+                    if r["is_mine"]:
+                        # Stored with no commit list, so the next pass reads it directly (the backfill),
+                        # wherever it is in the list by then.
+                        pr_id, _ = _upsert_pr(con, repo_id, r, run)
+                        con.execute("UPDATE pull_requests SET commits_listed = 0 WHERE id = ?", (pr_id,))
+                    continue                       # someone else's: it stays 'fresh' for next time
                 pr_id, changed = _upsert_pr(con, repo_id, r, run)
                 run.items_seen += 1
                 if r["number"] in extra:
@@ -502,7 +563,10 @@ def _sync_repo(con: sqlite3.Connection, client: Client, source: int, repo_id: in
                 if changed:
                     res.pulls_changed += 1
                     run.items_changed += 1
-        run.set_cursor(got.etag or "")
+        if next_resume:
+            run.set_cursor(f"resume:{next_resume}")
+        elif not got.unchanged:
+            run.set_cursor(got.etag or "")
 
 
 def _sync_requests(con: sqlite3.Connection, client: Client, source: int, me: str, projects: Sequence[str],

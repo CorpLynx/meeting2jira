@@ -42,7 +42,8 @@
       "description": "SeCcHm submissions",
       "monogram": "Hd",
       "color": "#5B4B9A",
-      "status": "coming_soon"
+      "status": "available",
+      "launch": {"type": "python", "target": "{app}/apps/heimdall/heimdall.pyw"}
     },
     {
       "id": "bifrost",

@@ -8,3 +8,8 @@
 # bundles node.exe, which AppLocker may block in a user-profile path. Same pin as
 # Odin/playwright-app. approval: pending
 playwright==1.49.1
+# The shared desktop window (asgard/ui/shell.py, apps/*/ui/*.qml): Qt Quick via PySide6. Imported
+# only when a window opens; the launcher, Muninn and every CLI work without it. Not pure Python
+# (Qt DLLs and .pyd files): native, approved by Brandon Oct 2026 (in use on-prem). 6.10.3 is the
+# last release that supports Python 3.9. Essentials has QtQml, QtQuick and Quick Controls.
+PySide6-Essentials==6.10.3

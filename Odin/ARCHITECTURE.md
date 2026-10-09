@@ -202,7 +202,7 @@ safe, which is why there is no deferral queue anywhere in this project.
 |---|---|
 | `app/tools/Test-PowerShellSyntax.ps1` | Parses every `.ps1` and rejects PowerShell 7-only syntax. Real under 5.1. |
 | `app/tools/Invoke-WindowsChecks.ps1` | The Windows-only checks: 5.1 parsing, DPAPI, the PS→Python handoff, the CSV push, the entry point, `Test-Environment.ps1` at runtime, and the task start time. Safe on the real workstation. |
-| `app/tests/` | `unittest`, offline. `test_guardrails.py` enforces the non-negotiables: stdlib-only, TLS never disabled, no execution-policy bypass, no guarded Outlook properties, CLM-safe scripts. |
+| `app/tests/` | `unittest`, offline. `test_guardrails.py` enforces the non-negotiables: packages declared, pinned and listed in `MODULES.md`, TLS never disabled, no execution-policy bypass, no guarded Outlook properties, CLM-safe scripts. |
 | `infra/windows-test-vm/` | Terraform for a throwaway Windows Server host to run those checks on, over SSM with no inbound rules. Outside `app/`, never shipped; it uploads `app/` alone. |
 | `.kiro/steering/` | Project rules loaded automatically by Kiro: product scope, tech constraints, structure, workflow, PowerShell and test specifics. |
 | `.kiro/agents/`, `.kiro/hooks/`, `tools/` | Kiro dev tooling: cheaper-model subagents, hooks, and the compact test runner they call. Outside `app/`, never shipped. See `KIRO_SETUP.md`. |

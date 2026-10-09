@@ -165,7 +165,24 @@ def row_rules(app: str) -> List[str]:
                 f"BEGIN SELECT RAISE(ABORT, '{a}: {why}'); END")
 
     run_app = "(SELECT app FROM main.sync_runs WHERE id = {})"
+    # A source (jira-dc, local-git, outlook) is read by one app: the first that ran any stream on it.
+    # Another app may not run a stream on it, even a new one, nor move one of its cursors.
+    others_stream = ("EXISTS (SELECT 1 FROM main.sync_runs o WHERE o.source_id = {src} "
+                     f"AND o.app <> '{a}')")
+    my_run_for = ("NOT EXISTS (SELECT 1 FROM main.sync_runs r WHERE r.id = new.run_id AND r.app = '{a}' "
+                  "AND r.source_id = new.source_id AND r.stream = new.stream)").format(a=a)
     return [
+        rule("runs_stream", "new.source_id IS NOT NULL AND " + others_stream.format(src="new.source_id"),
+             "sync_runs", "INSERT", "another app reads that source"),
+        rule("cursor_del", "1", "sync_cursors", "DELETE", "sync cursors are never deleted"),
+        rule("cursor_own", my_run_for, "sync_cursors", "INSERT", "a sync cursor is saved by the run that read it"),
+        rule("cursor_own_upd", my_run_for + " OR " + others_stream.format(src="old.source_id"),
+             "sync_cursors", "UPDATE", "only the cursors of your own streams"),
+        rule("sources_del", "1", "sources", "DELETE", "sources are never deleted"),
+        rule("sources_url", f"new.base_url IS NOT old.base_url AND EXISTS (SELECT 1 FROM main.sync_runs o "
+             f"WHERE o.source_id = old.id AND o.app <> '{a}') AND NOT EXISTS (SELECT 1 FROM main.sync_runs m "
+             f"WHERE m.source_id = old.id AND m.app = '{a}')", "sources", "UPDATE",
+             "only an app that reads a source changes its address"),
         rule("events", f"new.app IS NOT '{a}'", "events", "INSERT", "events are added under your own app name"),
         rule("event_cursor_ins", f"new.app IS NOT '{a}'", "event_cursors", "INSERT", "only your own event cursor"),
         rule("event_cursor_upd", f"old.app IS NOT '{a}' OR new.app IS NOT '{a}'", "event_cursors", "UPDATE",
@@ -173,11 +190,8 @@ def row_rules(app: str) -> List[str]:
         rule("runs_ins", f"new.app IS NOT '{a}'", "sync_runs", "INSERT", "sync runs are recorded under your own name"),
         rule("runs_upd", f"old.app IS NOT '{a}' OR new.app IS NOT '{a}'", "sync_runs", "UPDATE",
              "only your own sync runs"),
-        rule("cursor_ins", f"{run_app.format('new.run_id')} IS NOT '{a}'", "sync_cursors", "INSERT",
-             "a sync cursor is saved by the run that read it"),
-        rule("cursor_upd", f"{run_app.format('new.run_id')} IS NOT '{a}' OR (old.run_id IS NOT NULL AND "
-             f"{run_app.format('old.run_id')} IS NOT '{a}')", "sync_cursors", "UPDATE",
-             "only the cursors of your own sync runs"),
+        rule("cursor_upd", f"old.run_id IS NOT NULL AND {run_app.format('old.run_id')} IS NOT '{a}'",
+             "sync_cursors", "UPDATE", "only the cursors of your own sync runs"),
         rule("sources", "new.kind IS NOT old.kind OR new.name IS NOT old.name", "sources", "UPDATE",
              "a source keeps its kind and name"),
         rule("identities_ins", f"new.kind NOT IN ({kinds})", "identities", "INSERT",

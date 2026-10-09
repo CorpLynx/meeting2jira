@@ -103,8 +103,23 @@ def approve_day(con: sqlite3.Connection, local_date: str, minutes: Optional[Dict
         missing = sorted(set(minutes) - {r["work_item_key"].upper() for r in rows})
         if missing:
             raise MuninnError(f"No open proposal for {', '.join(missing)} on {local_date}.")
+        # The day's total is checked as it will end, not after each ticket: re-estimating can move
+        # time between tickets, and the old approvals are superseded together first.
+        figures = {r["id"]: _minutes(r["minutes_proposed"] if minutes.get(r["work_item_key"].upper()) is None
+                                     else minutes[r["work_item_key"].upper()]) for r in rows}
+        keys = [r["work_item_key"] for r in rows]
+        if rows:
+            marks = ",".join("?" * len(keys))
+            kept = con.execute(f"SELECT coalesce(sum(minutes_final), 0) FROM day_proposals WHERE local_date = ? "
+                               f"AND status = 'approved' AND work_item_key NOT IN ({marks})",
+                               (local_date, *keys)).fetchone()[0]
+            if kept + sum(figures.values()) > 1440:
+                raise MuninnError(f"{local_date} would have {_hm(kept + sum(figures.values()))} approved, over 24 "
+                                  "hours. Lower one of the day's figures first.")
+            con.execute(f"UPDATE day_proposals SET status = 'superseded' WHERE local_date = ? AND status = 'approved' "
+                        f"AND work_item_key IN ({marks})", (local_date, *keys))
         for row in rows:
-            _approve(con, row, minutes.get(row["work_item_key"].upper()), at)
+            _approve(con, row, figures[row["id"]], at)
     return [int(r["id"]) for r in rows]
 
 
