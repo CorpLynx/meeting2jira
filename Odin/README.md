@@ -429,7 +429,7 @@ powershell.exe -NoProfile -File tools\Invoke-WindowsChecks.ps1   # Windows-only 
 `Invoke-WindowsChecks.ps1` covers what a macOS or Linux checkout cannot: real 5.1 parsing, the DPAPI round trip, the PowerShell-to-Python export handoff, the CSV push path, and the entry point. It does not touch Outlook or Jira, so it is safe to run on the real workstation. `infra/windows-test-vm/` exists to run it without one; see [its README](../infra/windows-test-vm/README.md).
 
 `tests/test_guardrails.py` enforces the project's non-negotiables:
-- stdlib-only imports
+- every import is the standard library or a package pinned in `requirements.txt`, and nothing imports Asgard
 - TLS verification never disabled
 - no execution-policy bypass
 - no guarded Outlook properties

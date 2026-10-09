@@ -64,4 +64,4 @@ Uninstall without purge removes the program and keeps the data. With purge it re
 
 ## Dependencies
 
-Third-party packages are allowed when declared, pinned exactly and justified, with pure-Python wheels preferred because App Control blocks unsigned DLLs ([dependency-policy.md](dependency-policy.md)). The requirements files are the bill of materials. `asgard.muninn` and the launcher's start-up path use only the standard library.
+Third-party packages are allowed when declared, pinned exactly and justified ([dependency-policy.md](dependency-policy.md)). Each is the best module for its job. Its comment names the alternatives if it isn't available on-premises, and says whether it's native: App Control blocks unsigned DLLs, so compiled wheels need IT approval. The requirements files and the payload's wheel list are the bill of materials. Ysildir (planned) would add the MCP SDK and about 30 wheels, five of them native. `asgard.muninn` and the launcher's start-up path use only the standard library.

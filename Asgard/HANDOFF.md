@@ -13,7 +13,7 @@ Baldur's estimation is finished, in two methods side by side (`docs/baldur-spec.
   - **Taking them.** `approve --date D --ai` takes the suggestions. Odin's worklog comment gets a `Reviewed:` line.
   - **`review_mode=content` is refused** (rule 6).
 - **Agent files.** `apps/baldur/prompts/agent-guide.md` is the guide (`ai guide`). `apps/baldur/agents/` holds the Kiro steering, a guard hook that blocks approvals and settings changes, and an after-commit reminder. `ai kiro --into REPO` installs them.
-- **The Ysildir spec.** `.kiro/specs/ysildir-mcp/` (requirements, design, tasks) is a Kiro spec for the MCP server that teaches agents Baldur and Muninn, takes their estimates and answers questions. It isn't built. Task 0 reconciles it with the on-premises code and steering.
+- **The Ysildir spec.** `.kiro/specs/ysildir-mcp/` (requirements, design, tasks) is a Kiro spec for the MCP server that teaches agents Baldur and Muninn, takes their estimates and answers questions. It is built on the official MCP SDK (`mcp` 2.3.0), with the alternatives listed in case the SDK isn't available on-premises. It isn't built yet. Task 0 reconciles it with the on-premises code and steering.
 - **Verified.** 360 Asgard tests (340 pass; 20 skip here for want of Tk, Playwright or Python 3.12). Also: the full suite on Python 3.9.23, the zone loop, the schema check (171 checks), vermin and ruff clean, and the smoke script (PROJ-42 1h30m, PROJ-51 30m).
 - **Owed before calling it done (AGENTS.md):**
   - an independent review of calibration and the AI-assisted method, since they change estimates and approvals;
@@ -52,7 +52,7 @@ The three specs are snapshots of live Claude Docs that Brandon can open and comm
 ## The environment and the person
 
 - **Workstation.** Windows 11, standard user, no admin rights. AppLocker or App Control enforcing; unsigned PowerShell runs in Constrained Language Mode; TLS inspection; PIV smart-card sign-in; software only from the agency catalog.
-- **Consequences.** Python standard library only (no pip installs, no compiled wheels), Python 3.9 or newer from the catalog, tkinter for UI, everything per-user under `%LOCALAPPDATA%\Asgard`. Code must run on 3.9, but Muninn also needs the SQLite bundled with Python to be 3.37+ with FTS5 and JSON; on Windows that in practice means Python 3.11 or newer, which is why Muninn's error messages and the preflight ask for 3.11. No new executables, no services, nothing that needs admin. `tools/asgard_preflight.ps1` checks the policies that matter.
+- **Consequences.** Python 3.9 or newer from the catalog, tkinter for UI, everything per-user under `%LOCALAPPDATA%\Asgard`. No pip on the workstation: packages ship as reviewed wheels in the payload. Since Oct 6 packages are allowed, and since Oct 9 the rule is the best module for each job (`docs/dependency-policy.md`). Each pin says whether it's native, because compiled wheels need IT approval, and what to use instead if it isn't available on-premises. Code must run on 3.9, but Muninn also needs the SQLite bundled with Python to be 3.37+ with FTS5 and JSON; on Windows that in practice means Python 3.11 or newer, which is why Muninn's error messages and the preflight ask for 3.11. No new executables, no services, nothing that needs admin. `tools/asgard_preflight.ps1` checks the policies that matter.
 - **Brandon** works in Jira (Data Center, personal access tokens), git and GitHub, Outlook and Teams. He already has an app called **Odin** (`../Odin/`, Python package `meeting2jira`) that syncs Jira and logs meeting time, with its own `state.db` (schema in `../Odin/app/src/meeting2jira/state.py`). He asked for "the best technical solution possible, even if it's not exactly as I said", so make well-reasoned decisions, record them in the specs, and tell him what you decided and why.
 - **His style.** Plain, concise writing; numbers with units; no filler. Messages the apps show say what happened and what to do next.
 
@@ -124,7 +124,7 @@ The worked example in the spec (meetings 09:00-12:00 and 12:30-16:30, eight comm
 ## Decisions already made (don't reopen without a reason)
 
 - Python 3.9+; tkinter; per-user install; no admin.
-- **Packages.** Since Oct 6, packages are allowed when declared, pinned and justified (`docs/dependency-policy.md`), which replaced "stdlib only". `asgard.muninn` and the launcher's start-up path stay standard library.
+- **Packages.** Since Oct 6, packages are allowed when declared, pinned and justified (`docs/dependency-policy.md`), which replaced "stdlib only". Since Oct 9 (Brandon): use the best module for each job. The comment above each pin says whether it's native, because compiled wheels need IT approval, and what to use instead if it isn't available on-premises. `asgard.muninn` and the launcher's start-up path stay standard library, because every app and Odin import them.
 - Muninn is one SQLite file in WAL mode; only Asgard migrates (`muninn.prepare()`); apps open it with `open_app()` and write only their own tables through the package.
 - Odin moves into Muninn (Brandon decided) in the eight steps in the Muninn doc. Odin is the only Jira writer; Baldur proposes, you approve in Baldur, Odin posts the shortfall with a crash-safe sending row and marker.
 - Baldur's principles: every number carries its basis; every cap, rounding and tie-break goes down; nothing reaches Jira without approval; say what can't be seen; metadata only (no diffs leave the machine unless AI review is switched to content mode).
@@ -138,7 +138,10 @@ The worked example in the spec (meetings 09:00-12:00 and 12:30-16:30, eight comm
   - **`review_mode=content` is refused** under rule 6.
   - **Calibration** fits only to real hours you noted, never to approvals, and accepting needs at least 10 days.
 - **Ysildir (spec, 2026-10-09).**
-  - Standard-library JSON-RPC over stdio: the MCP SDK needs the compiled `pydantic-core`.
+  - Built on the official MCP SDK (`mcp` 2.3.0, `MCPServer`), stdio transport only. It needs
+    Python 3.10+, and IT must approve five native wheels. If it isn't available on-premises, the
+    alternatives in order are: `mcp` 1.x, `fastmcp`, a standard-library server, the CLI and
+    clipboard tier (design, "Modules").
   - Writes only through Baldur's functions, under Baldur's identity.
   - Never a tool for a decision.
   - A switch per tool, with tools that send Muninn data off by default.
@@ -159,7 +162,7 @@ In priority order. Each step should end with tests, the specs updated, and a ver
 ## Waiting on Brandon
 
 - **Which Odin the Muninn plan means.** Its steps 3 to 6 assume an Odin with a Jira issue sync, an Assigned to Me view and a tracked-parent pull. The Odin in `../Odin/` has none of them: it reads a calendar export and creates one sub-task per meeting under a configured parent. `begin_meeting_post()` needs the issue in `work_items`, which only step 3 provides, so until that exists the only part of the plan this Odin can ship is the calendar mirror (step 4's first half), which is what moves Baldur off `independent`.
-- **Odin's guardrail.** Odin's `test_stdlib_only` rejects `import asgard`, and Odin's rules say `Odin/app/` needs nothing outside itself. Step 2 needs Brandon to allow an optional import (proposed: one Odin module may import `asgard.muninn` from the Asgard install; Odin works unchanged without it, and the guardrail checks that).
+- **Odin's guardrail.** Odin's `test_odin_never_imports_asgard` rejects `import asgard` (packages are allowed now, but not Asgard), and Odin's rules say `Odin/app/` needs nothing outside itself. Step 2 needs Brandon to allow an optional import (proposed: one Odin module may import `asgard.muninn` from the Asgard install; Odin works unchanged without it, and the guardrail checks that).
 - The spec's open decisions: post to Jira or report only; Odin's calendar fields; GitHub access (token allowed? fine-grained or classic? which server version?); alerts (notifications at logon, or the tile badge only?); whether AI review is approved and in which mode; whether PR reviews become loggable time; trial length (two or four weeks).
 - **Heimdall.** The stdlib question is settled: Playwright is pinned in `requirements.txt` with its approval pending (`docs/dependency-policy.md`). Still open: ISSO or system-owner approval for automated filling of SeCcHm.
 - **The AI-assisted method.**

@@ -48,9 +48,12 @@ These are the project's existing rules. **You are extending their coverage to th
 renegotiating them.** If the GUI already violates one, report it — do not "fix" it by loosening a
 test, and do not silently refactor the GUI either.
 
-1. **No third-party Python packages in the shipped app** (runtime and shipped tests). The target
-   machine has no pip access. Use `urllib`, `ssl`, `sqlite3`, `ctypes`, `json`, `csv` — and
-   `tkinter`, which is stdlib and therefore fine.
+1. **Packages are declared and pinned** (since Oct 2026; `Asgard/docs/dependency-policy.md`).
+   Use the best module for the job. Every non-stdlib import in the shipped app is pinned in
+   `Odin/app/requirements.txt`. The comment above it says why it's the best choice, whether it's
+   native (compiled wheels need IT approval), and what to use instead if it isn't available
+   on-premises. The target machine has no pip access, so packages ship as reviewed wheels. The
+   daily run must keep working with nothing installed. `tkinter` is stdlib.
 2. **Never disable TLS verification.** No `CERT_NONE`, no `check_hostname=False`, no unverified
    context, and no config flag that enables any of those. Extra CAs go through a configured CA
    bundle path.
@@ -121,7 +124,7 @@ exact failure this spec exists to prevent.
    Quote the lines. This is the highest-value part of the discovery; be exhaustive.
 8. Which values reaching those calls originate from **user input or GUI state** (day counts, file
    paths, issue keys, free text)? Trace each to its widget.
-9. Does the GUI import anything outside the standard library? List every non-stdlib import.
+9. Does the GUI import anything outside the standard library? List every non-stdlib import, and whether each is pinned in `Odin/app/requirements.txt`.
 10. Does the GUI read, display, hold in a widget, or write to disk any of: the Jira PAT, meeting
     bodies, attendee lists, or full meeting subjects for *private* meetings?
 11. Does the GUI write anything inside the program folder (logs, config, state, exports) rather than
@@ -238,7 +241,8 @@ every line should change a decision. No generic Tkinter tutorial content.
    to the handoff checklist unless it was actually run on this machine. State which parts of the GUI
    *can* be tested headlessly (pure functions: command construction, argument quoting, output
    parsing, state mapping) and require those to be unit-tested — see §3.3 item 11.
-7. **Python 3.8 and stdlib only**, same as the rest of the shipped code. `tkinter`/`ttk` are fine.
+7. **Python 3.8**, same as the rest of the shipped code. `tkinter`/`ttk` are fine; any package
+   follows non-negotiable 1.
 8. **Where runtime data goes** — the per-user directory, never the program folder, so the folder can
    be replaced wholesale on upgrade.
 
@@ -274,8 +278,9 @@ remove the injection.** A guardrail that has never failed has not been tested.
    been bitten by both.*
 4. **No elevation.** Detect `runas`, `-Verb RunAs`, `ShellExecute` with elevation, UAC manifests.
    *Why: non-negotiable 7 — the tool must work for a standard user, and needing admin fails review.*
-5. **No non-stdlib imports** in the shipped GUI. Reuse the existing stdlib-only check if there is
-   one; extend its scanned paths rather than writing a second one.
+5. **Every non-stdlib import in the shipped GUI is declared and pinned** (non-negotiable 1).
+   Extend the existing check (`test_every_import_is_stdlib_or_declared` in Odin's
+   `test_guardrails.py`) to the GUI's paths rather than writing a second one.
 6. **TLS verification never disabled** — extend the existing check's paths to the GUI.
 7. **HTTPS only** for Jira URLs — extend the existing check's paths to the GUI.
 8. **No guarded Outlook properties** read from the GUI or any new `.ps1`: `Body`,

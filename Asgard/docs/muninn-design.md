@@ -1,5 +1,8 @@
 <!-- Snapshot exported 2026-10-04 from the live Claude Doc: https://claude.ai/code/artifact/bc161cb2-9cfc-4f28-9e1e-8a1075972208
-     The live doc is the source of truth; diagrams appear here only as placeholders. -->
+     The live doc is the source of truth; diagrams appear here only as placeholders.
+     Edited here on 2026-10-09 (branch claude/baldur-estimation), not yet in the live doc: the schema
+     paragraph (v3, v4 and the counts), Baldur's tables in "Who owns what", "Agent estimates (v4)", the
+     two v4 indexes, the migrations list, and the encryption open decision. Carry these over to the live doc. -->
 
 # Muninn data layer design
 
@@ -755,5 +758,5 @@ Rows are short text, so a year of one engineer's work should stay in the tens of
 - [ ] **Posting mode.** Odin posts approved worklogs on its next run (proposed, since approving in Baldur is the consent), or waits for a Post button in Odin?
 - [ ] **Which resolutions count as wins.** Proposed: all except Won't Do, Duplicate and Cannot Reproduce, editable in Freya's settings.
 - [ ] **Time zone travel.** A day is local to wherever the laptop is when Baldur estimates it and Odin posts it. Proposed: accept the rare shift rather than pin a zone in `meta`.
-- [ ] **Encryption beyond BitLocker.** SQLCipher needs a compiled extension, which breaks the pure-Python rule.
+- [ ] **Encryption beyond BitLocker.** SQLCipher replaces `sqlite3` with a compiled module. That would make Muninn's package depend on a package, which every app and Odin import; the dependency policy keeps it standard library. It would also need IT approval.
 - [ ] **Retention.** Confirm the defaults above against your records schedule.

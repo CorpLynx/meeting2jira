@@ -1,10 +1,15 @@
-# Asgard's optional runtime packages. Pin each exactly, say what it's for, and record its approval
-# (docs/dependency-policy.md). tests/test_dependencies.py fails on an undeclared import, and on
-# any package imported by asgard/muninn or the launcher's start-up path.
+# Asgard's optional runtime packages: the best module for each job (docs/dependency-policy.md).
+# Pin each exactly. The comment above each pin says what it's for, whether it's native (compiled
+# wheels need IT approval, because App Control checks DLLs), its approval status, and what to use
+# instead if it isn't available on-prem. tests/test_dependencies.py fails on an undeclared import,
+# on a pinned package nothing imports, and on any package imported by asgard/muninn or the
+# launcher's start-up path.
 #
 # Nothing here is needed to install Asgard, open the launcher, or run Baldur.
 
-# Heimdall `fill` only: drives the installed Edge (playwright install msedge). Not pure Python: it
-# bundles node.exe, which AppLocker may block in a user-profile path. Same pin as
-# Odin/playwright-app. approval: pending
+# Heimdall `fill` only: drives the installed Edge (playwright install msedge). Native: it bundles
+# node.exe, which AppLocker may block in a user-profile path. Same pin as Odin/playwright-app.
+# approval: pending
+# If it isn't on-prem: selenium with Edge's msedgedriver (also an executable, so the same AppLocker
+# question); else no `fill`. Heimdall's other commands work without it, and you type the values in.
 playwright==1.49.1

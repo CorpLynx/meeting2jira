@@ -1,8 +1,11 @@
-# Odin's runtime packages. Pin each exactly (name==1.2.3), say what it's for and why the standard
-# library isn't enough, and record its approval (Asgard/docs/dependency-policy.md):
+# Odin's runtime packages: the best module for each job (Asgard/docs/dependency-policy.md). Pin each
+# exactly (name==1.2.3). Above each pin, say what it's for, whether it's native (compiled wheels need
+# IT approval), its approval status, and what to use instead if it isn't available on-prem:
 #
-#   # what it's for; pure Python; approved: <ticket/date> (or: approval pending)
+#   # what it's for; pure Python (or: native, needs IT approval); approved: <ticket/date> (or: approval pending)
+#   # if it isn't on-prem: <another package, the stdlib way, or the path Odin falls back to>
 #   example==1.2.3
 #
 # tests/test_guardrails.py fails on any import that isn't the standard library, meeting2jira, or
-# listed here. Odin's daily run needs nothing listed today.
+# listed here. Odin's daily run needs nothing listed today, and must keep working with nothing
+# installed.

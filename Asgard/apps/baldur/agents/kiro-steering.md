@@ -15,8 +15,8 @@ your own running time, and not how long it "would take" without you):
 {baldur} ai record --agent kiro --guide baldur-agent-1 --minutes 1h --low 45m --confidence medium --commit <full SHA from git rev-parse HEAD> --key PROJ-42 --summary "One plain sentence on what changed." --json
 ```
 
-If your tools include `baldur_record_estimate` (Ysildir, Asgard's MCP server), call it with the
-same fields instead of running the command; it stores the same report.
+If your tools include `baldur_record_estimate` (Ysildir, Asgard's MCP server), call it instead of
+running the command, with the same fields as its `report` argument; it stores the same report.
 
 - One report per change per day; recording the same commits again replaces your earlier one.
 - Give a range when unsure (`--minutes` high, `--low` low end); Baldur uses the low end.

@@ -48,7 +48,8 @@ $report = @{ schema = "baldur.agent_estimate/1"; agent = "kiro"; guide = "baldur
 $report | ConvertTo-Json -Compress | & "$env:LOCALAPPDATA\Asgard\app\apps\baldur\baldur.cmd" ai record --json
 ```
 
-Through Ysildir (MCP), call the tool `baldur_record_estimate` with the same fields.
+Through Ysildir (MCP), call the tool `baldur_record_estimate` with the same object as its
+`report` argument.
 
 | Field | Required | Meaning |
 | --- | --- | --- |

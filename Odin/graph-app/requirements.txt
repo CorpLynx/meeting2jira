@@ -2,6 +2,9 @@
 #
 # msal is pure Python. This is the plain form, so it stays installable wherever pip reaches and
 # needs no native build.
+# If it isn't on-prem: Odin's default calendar export (Outlook, no packages), or playwright-app's
+# OWA export. Hand-rolled OAuth over urllib is possible but not recommended: token caching and
+# refresh are what msal is for.
 msal==1.31.1
 
 # ---------------------------------------------------------------------------------------------

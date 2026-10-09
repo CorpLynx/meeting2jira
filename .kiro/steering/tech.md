@@ -13,7 +13,7 @@ inclusion: always
   on Windows means Python 3.11+.
 
 ## Non-negotiables (enforced by tests/test_guardrails.py; don't weaken the tests)
-1. **Packages are declared and pinned** (since Oct 2026; standard-library-only is no longer a rule, see `Asgard/docs/dependency-policy.md`). Every non-stdlib import in `Odin/app/` must be listed in `Odin/app/requirements.txt` as `name==x.y.z` with a comment saying why; prefer pure-Python wheels (App Control blocks unsigned DLLs); never fetch packages at run time. Odin's daily run needs none today, and it still must not import `asgard` (it runs with no Asgard installed).
+1. **Packages are declared and pinned** (since Oct 2026; standard-library-only is no longer a rule, see `Asgard/docs/dependency-policy.md`). Use the best module for the job. Every non-stdlib import in `Odin/app/` must be listed in `Odin/app/requirements.txt` as `name==x.y.z`. The comment above it says why it's the best choice, whether it's native (compiled, so it needs IT approval, because App Control blocks unsigned DLLs), and what to use instead if it isn't available on-premises. Never fetch packages at run time. Odin's daily run needs none today, and it still must not import `asgard` (it runs with no Asgard installed).
 2. **Never disable TLS verification.** No `CERT_NONE`, `check_hostname=False`, or unverified contexts, and no config flag for it. Extra CAs go through `jira.ca_bundle`. Python on Windows already trusts the Windows cert store (this is why it's urllib and not requests).
 3. **HTTPS only** for Jira (http is allowed only for localhost in tests).
 4. **No execution-policy bypass** anywhere: no `-ExecutionPolicy Bypass`, no `Set-ExecutionPolicy`.

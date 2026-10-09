@@ -12,10 +12,18 @@ change them only with the person.
 Read `Asgard/AGENTS.md` before anything else; its rules win over this spec. The ones that matter
 most here:
 
-- Python 3.9 or newer, per-user and no admin.
-- A package must be declared, pinned and justified, and pure Python where possible
-  (`docs/dependency-policy.md`).
-- `asgard/muninn/` stays standard library.
+- Per-user and no admin. Asgard's floor is Python 3.9, but Ysildir needs 3.10+ because the MCP
+  SDK does. On Windows, Muninn already needs 3.11.
+- **Use the best module for each job** (Brandon, 2026-10-09: standard-library-only is gone).
+  Declare and pin it in `Asgard/requirements.txt`. The comment above each pin says:
+  - what it's for;
+  - whether it's compiled ("native: needs IT approval", since App Control checks DLLs);
+  - its approval status;
+  - the alternatives if it isn't available on-premises.
+
+  See `docs/dependency-policy.md`.
+- `asgard/muninn/` and the launcher's start-up path stay standard library, because every app and
+  Odin import them. Ysildir's own code has no such limit.
 - Only Asgard migrates Muninn, and each app writes only its own tables.
 - Metadata only.
 - The person makes every decision.
@@ -55,7 +63,8 @@ Baldur and Odin.
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Implementation | JSON-RPC 2.0 over stdio, on Python's standard library; no MCP SDK | The MCP SDK needs Pydantic v2, and its `pydantic-core` is a compiled wheel. The dependency policy says that needs IT approval and a fallback, and App Control may block its DLLs. MCP over stdio is plain JSON-RPC, so the standard library is enough and there's nothing new to approve. Tools, prompts and resources are plain data here, so moving to the SDK later would change only the transport |
+| Implementation | The official MCP Python SDK, `mcp` 2.x (`MCPServer`), stdio transport only | It's the reference implementation. It handles every protocol version (2024-11-05 to 2026-07-28 in 2.3.0) and builds input and output schemas from type hints. It also handles validation, structured results, annotations, prompts and resources, and ships a real client for tests. Ysildir then holds only Asgard's logic. The cost: Python 3.10+ and five compiled wheels for IT to approve. The design's "Modules" table lists the alternatives if it isn't available on-premises |
+| Modules | The best module for each job, each pin commented with its alternatives | Brandon's rule (2026-10-09). An on-premises gap then has a known answer rather than a redesign |
 | Location | `Asgard/apps/ysildir/`, shipped in the Asgard zip | Setup copies `apps/` **(repo: `install.PAYLOAD`)**. Ysildir and Baldur always ship together, so Ysildir can import Baldur's modules without the two drifting apart |
 | Identity | Reads use `open_app("ysildir", readonly=True)`. Each write calls one Baldur function on a connection opened as `baldur` for that call | `docs/integration/ysildir.md` says a write runs under the owning app's identity; the guard then enforces Baldur's ownership as it always does |
 | Phase 1 scope | Teaching; Baldur's agent intake; Baldur's day view and the MCP-tier review; Muninn reads | The request: teach agents to use Baldur and Muninn |
@@ -80,46 +89,45 @@ Baldur and Odin.
 
 ## Requirements
 
-### Requirement 1: A stdio MCP server on the standard library
+### Requirement 1: A stdio MCP server built on the MCP SDK
 
-**User Story:** As the person, I want Ysildir to run as a local MCP server that needs nothing
-installed, so that it works on the locked-down workstation.
+**User Story:** As the person, I want Ysildir built on the official MCP SDK and running only over
+stdio, so that it speaks the protocol correctly with any client and opens nothing to the
+network.
 
 #### Acceptance Criteria
 
-1. THE server SHALL use stdio only. Messages are newline-delimited JSON-RPC 2.0 in UTF-8, read
-   from stdin and written to stdout. It SHALL NOT open a network listener or make a network call.
-2. THE server SHALL write nothing to stdout except protocol messages. Diagnostics SHALL go to
-   stderr and to `%LOCALAPPDATA%\Asgard\logs\ysildir.log` **(repo: `paths.log_dir()`)**.
-3. THE server SHALL implement:
-   - `initialize`, `notifications/initialized` and `ping`;
-   - `tools/list` and `tools/call`;
-   - `resources/list`, `resources/templates/list` and `resources/read`;
-   - `prompts/list` and `prompts/get`.
-
-   Any other request SHALL get error -32601 (method not found). Notifications it doesn't know
-   SHALL be ignored.
-4. WHEN a client asks for a protocol version the server supports THEN the server SHALL answer
-   with that version, and otherwise with the newest version it supports (MCP's lifecycle rule).
-   The supported versions SHALL be one constant, covered by a test.
-5. THE server SHALL return these errors:
-
-   | Problem | Error |
-   | --- | --- |
-   | Malformed JSON | -32700 |
-   | A message that isn't a valid request | -32600 |
-   | A batch (a JSON array) | -32600 |
-   | Bad parameters, or an unknown tool or prompt | -32602 |
-   | A resource that doesn't exist | -32002 |
-6. WHEN a tool fails THEN the server SHALL return a result with `isError: true` and a message,
-   not a protocol error, so that the agent can read it. The server SHALL keep running.
-7. WHEN a tool raises an unexpected exception THEN the server SHALL return a generic message that
-   names the log file, and log the traceback without any argument values.
-8. THE server SHALL run on Python 3.9 or newer with the standard library only. It SHALL find
-   Python the way Baldur does: `py -3`, then `py`, then `python` **(repo: `baldur.cmd`,
-   `agents.launcher()`)**. It SHALL exit cleanly when stdin closes.
-9. THE server SHALL handle one request at a time. A `notifications/cancelled` for a request that
-   has already finished SHALL be ignored.
+1. THE server SHALL be built on the official MCP Python SDK (`mcp`, pinned in
+   `Asgard/requirements.txt`) and SHALL run only its stdio transport (`MCPServer.run("stdio")`).
+   It SHALL NOT start the SDK's HTTP transports (Streamable HTTP, SSE), open a network listener,
+   or make a network call.
+2. THE protocol SHALL be the SDK's, and Ysildir SHALL NOT patch or reimplement any of it. That
+   covers the lifecycle and version negotiation, capabilities, `ping`, cancellation, and JSON-RPC
+   errors.
+3. THE server SHALL write nothing to stdout itself: the SDK writes the protocol messages there.
+   Diagnostics SHALL go to stderr and to `%LOCALAPPDATA%\Asgard\logs\ysildir.log` **(repo:
+   `paths.log_dir()`)**.
+4. EVERY tool, prompt and resource SHALL be registered through the SDK (`add_tool`, `@prompt`,
+   `@resource`). Each uses type hints and pydantic `Field` descriptions, so the SDK builds the
+   input and output schemas and validates every call.
+5. A tool that takes a report or a reply SHALL take it as one pydantic model with
+   `extra="forbid"`, so an unknown field is refused. The SDK drops unknown top-level arguments
+   silently, so a nested model is the only way to refuse one.
+6. WHEN Baldur or Muninn refuses THEN the tool SHALL raise the SDK's `ToolError` with Baldur's
+   message. The agent receives it as an `isError` result, after the SDK's prefix "Error
+   executing tool NAME: ".
+7. WHEN a tool raises any other exception THEN the agent SHALL get the SDK's generic error, and
+   Ysildir SHALL log the traceback without any argument values.
+8. A call to a tool that isn't registered SHALL get the SDK's "Unknown tool" error. That covers a
+   tool that is switched off, and one that never existed.
+9. THE server SHALL need Python 3.10 or newer, the SDK's floor. Ysildir's code SHALL still use
+   only Python 3.9 syntax, so vermin stays clean across Asgard. It SHALL find Python the way
+   Baldur does: `py -3`, then `py`, then `python` **(repo: `baldur.cmd`, `agents.launcher()`)**.
+10. WHEN the SDK isn't installed, or Python is older than 3.10, THEN `ysildir.cmd` SHALL say what
+    is missing and what still works, and exit 2. What still works is Baldur's `ai ... --json`
+    commands and the clipboard tier.
+11. THE SDK and everything it pulls in SHALL ship as reviewed wheels in the payload's `vendor/`
+    folder **(repo: `docs/updates.md`)**. Nothing runs pip on the workstation.
 
 ### Requirement 2: The server teaches the agent
 
@@ -181,19 +189,21 @@ straight into Baldur, so that Baldur can check its own numbers against it.
 
 #### Acceptance Criteria
 
-1. `baldur_record_estimate` SHALL take the report's fields **(repo: `REPORT_SCHEMA`, `_FIELDS`)**:
+1. `baldur_record_estimate(report)` SHALL take the report as one object: the same object
+   `baldur.cmd ai record --json` takes **(repo: `REPORT_SCHEMA`, `_FIELDS`)**. Its fields are
    `agent`, `model`, `guide`, `date`, `key`, `commits`, `minutes`, `minutes_low`, `confidence`,
-   `summary`, `started_at` and `ended_at`. Its input schema SHALL refuse any other field. It SHALL
-   call `asgard.muninn.baldur.record_agent_estimate(con, report, via="mcp")` on a connection
-   opened as `baldur` **(repo)**.
+   `summary`, `started_at` and `ended_at`. Its pydantic model SHALL refuse any other field
+   (`extra="forbid"`). It SHALL call
+   `asgard.muninn.baldur.record_agent_estimate(con, report, via="mcp")` on a connection opened as
+   `baldur` **(repo)**.
 2. THE tool SHALL return:
    - the report's id, like `r12`;
    - its status: `recorded` or `duplicate`;
    - the ids of any reports it replaced;
    - one sentence for the person: nothing changes until they approve.
-3. WHEN Baldur refuses the report THEN the tool SHALL return Baldur's message, unchanged, as an
-   error. Baldur refuses, for example, a bad SHA, code in the summary, minutes out of range, or a
-   future date.
+3. WHEN Baldur refuses the report THEN the tool SHALL raise `ToolError` with Baldur's message,
+   unchanged. Baldur refuses, for example, a bad SHA, code in the summary, minutes out of range,
+   or a future date.
 4. `baldur_withdraw_estimate(id)` SHALL call `withdraw_agent_estimate` **(repo)**. A withdrawn
    report stays in Muninn, marked withdrawn.
 5. `baldur_estimates(from, to, include_withdrawn)` SHALL list reports the way
@@ -277,8 +287,9 @@ tool.
      `baldur_withdraw_estimate` and `baldur_estimates`.
    - **Off by default:** all other tools.
 
-   A tool that is off SHALL NOT appear in `tools/list`, and a call to it SHALL return an error
-   that names its switch.
+   A tool that is off SHALL NOT be registered with the SDK. So it doesn't appear in `tools/list`,
+   and a call to it gets "Unknown tool". `asgard_guide` with topic `tools` SHALL list it as off,
+   with the command that turns it on.
 2. THE code's tool table SHALL be the allow-list. With every switch on, a test SHALL check that
    `tools/list` matches the documented list exactly, so that adding a tool needs a spec change.
 3. Metadata only **(repo: AGENTS.md rule 6)**. No tool SHALL return any of these:
@@ -318,23 +329,24 @@ don't hand-edit JSON on a locked-down machine.
 
 #### Acceptance Criteria
 
-1. `ysildir.cmd setup` SHALL add a `ysildir` server to a client's configuration (**check Kiro's
-   format in task 0**):
+1. `ysildir.cmd setup` SHALL add a `ysildir` server to a client's configuration. It SHALL use the
+   client's own command where one exists, since the client then edits its own file, and fall back
+   to the file (**check each client's version in task 0**):
 
-   | Option | File |
-   | --- | --- |
-   | `--kiro DIR` | `DIR\.kiro\settings\mcp.json` |
-   | `--kiro-user` | `%USERPROFILE%\.kiro\settings\mcp.json` |
-   | `--vscode DIR` | `DIR\.vscode\mcp.json` |
-   | `--claude DIR` | `DIR\.mcp.json` |
+   | Option | Client's own command (preferred) | Otherwise, the file |
+   | --- | --- | --- |
+   | `--kiro DIR` | none known | `DIR\.kiro\settings\mcp.json` |
+   | `--kiro-user` | none known | `%USERPROFILE%\.kiro\settings\mcp.json` |
+   | `--vscode DIR` | `code --add-mcp` (adds the server to your VS Code profile) | `DIR\.vscode\mcp.json` |
+   | `--claude DIR` | `claude mcp add ysildir --scope project -- ...`, run in `DIR` | `DIR\.mcp.json` |
 
-   `--print` SHALL print the snippets instead of writing anything.
-2. Setup SHALL:
+   `--print` SHALL print the commands and snippets instead of running or writing anything.
+2. WHEN setup edits a file itself THEN it SHALL:
    - fill in this computer's Python launcher and Ysildir's installed path;
    - keep every other server and setting in the file;
    - not replace an existing `ysildir` entry unless given `--force`;
    - refuse to edit a file it can't parse, and print the snippet to paste instead. VS Code's file
-     allows comments, which a plain JSON parser can't read.
+     allows comments, which a JSON parser drops when it writes the file back.
 3. Kiro's `autoApprove` SHALL list only the read-only tools that are on. The person may add
    `baldur_record_estimate` themselves, and the README says what that means.
 4. `ysildir.cmd check` SHALL start the server, run `initialize` and `tools/list`, and print:
@@ -353,25 +365,30 @@ what only the workstation can show.
 
 #### Acceptance Criteria
 
-1. Tests SHALL be standard-library `unittest` in `Asgard/tests/test_ysildir.py`, and pytest SHALL
-   be able to run them too. They SHALL run against a seeded Muninn in a temporary `ASGARD_HOME`
-   **(repo: the test pattern)**.
-2. THE tests SHALL drive the server both in-process and as a subprocess over real stdio. They
-   SHALL cover:
-   - the lifecycle and version negotiation;
-   - every error code;
-   - stdout carrying only protocol messages;
-   - each tool, including its refusals;
-   - the switches, the caps, `untrusted_fields` and the annotations;
+1. Tests SHALL be in `Asgard/tests/test_ysildir.py`, written with `unittest`
+   (`IsolatedAsyncioTestCase`) so plain `python -m unittest` and pytest both run them. They SHALL
+   drive the server with the SDK's own `Client`, against a seeded Muninn in a temporary
+   `ASGARD_HOME` **(repo: the test pattern)**. They SHALL skip, saying why, when the SDK isn't
+   installed or Python is older than 3.10, the way Heimdall's Playwright tests skip **(repo)**.
+2. THE tests SHALL drive the server both in memory (`Client(server)`) and as a subprocess over
+   real stdio (`Client(StdioServerParameters(...))`). They SHALL cover:
+   - the instructions reaching the client (`Client.instructions`), and the server's name and
+     version;
+   - stdout carrying only protocol messages, and a clean exit when stdin closes;
+   - each tool, including its refusals and their `ToolError` text;
+   - an unknown field in a report or reply being refused;
+   - the switches, the caps, `untrusted_fields`, the annotations and the output schemas;
    - the read-only connection refusing writes;
    - a recorded report having `via='mcp'`;
    - no tool being able to approve, reject, change or post. The tool table's list proves that,
-     and a forged `tools/call` for `approve` SHALL get -32602.
+     and a forged call to `approve` SHALL get the SDK's "Unknown tool" error.
 3. A scripted client SHALL replay each worked example from the guides from start to finish. It
    SHALL then approve through the CLI and check the comment line Odin would post **(repo:
    `review_line`)**.
 4. THE definition of done in AGENTS.md SHALL apply:
-   - tests pass on Python 3.9 and on current Python;
+   - the suite passes on Python 3.9 (where Ysildir's tests skip) and on current Python with the
+     SDK installed;
+   - `tests/test_dependencies.py` passes, with every new import pinned in `requirements.txt`;
    - vermin and ruff are clean;
    - `check_muninn_schema` passes;
    - the smoke script still ends with PROJ-42 1h30m and PROJ-51 30m;
@@ -381,4 +398,6 @@ what only the workstation can show.
    - which MCP features the on-premises Kiro supports (instructions, resources, prompts);
    - the org's Copilot MCP policy and VS Code's `ChatMCP` policy;
    - whether App Control lets the client start `py.exe` with Ysildir's script;
+   - whether IT approves the SDK's compiled wheels, and which `mcp` version the agency mirror
+     has;
    - how the agent behaves in the acceptance walkthrough (task 10).

@@ -16,6 +16,23 @@ Copilot" policy (off by default) and VS Code's `ChatMCP` policy.
 The full spec, for the agent that builds it, is the Kiro spec in the repository at
 `.kiro/specs/ysildir-mcp/` (requirements, design, tasks).
 
+## Built on
+
+The official MCP Python SDK (`mcp` 2.3.0, `MCPServer`), running only its stdio transport.
+
+- **Why the SDK.** It handles the protocol, every protocol version, schemas from type hints,
+  validation, prompts and resources, and ships a real client for tests. Ysildir holds only
+  Asgard's logic.
+- **What it needs.** Python 3.10+, and IT approval for five compiled wheels: `pydantic-core`,
+  `cryptography`, `cffi`, `rpds-py`, and `pywin32` on Windows.
+- **If it isn't available on-premises**, in order:
+  1. `mcp` 1.x (`FastMCP`, with the same decorators);
+  2. `fastmcp`;
+  3. a standard-library JSON-RPC server over the same handlers;
+  4. no MCP: Baldur's `ai ... --json` commands and the clipboard tier.
+
+The design's "Modules" table has the details.
+
 ## Connections
 
 - **Reads:** `muninn.open_app("ysildir", supported=(4, 4), readonly=True)`, one connection per

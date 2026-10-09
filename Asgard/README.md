@@ -261,8 +261,11 @@ Three rules keep the data right:
 ## For maintainers
 
 - **Layout.** `setup-Asgard.cmd` finds Python and runs `asgard/install.py`. `Asgard.pyw` starts `asgard/launcher.py`. Default tiles are in `asgard/apps.json`. Put bundled apps in `apps/<id>/` and point their tile at `{app}\apps\<id>\<entry>.pyw`.
-- **Rules.** Use the Python standard library only, so Asgard runs anywhere the catalog Python runs. Keep `setup-Asgard.cmd` ASCII with CRLF line endings; `.gitattributes` enforces CRLF.
-- **Heimdall's one exception.** `apps/heimdall/heimdall/browser.py` uses Playwright and imports it only when `fill` runs; nothing else in Asgard imports it. Whether that exception stands is an open decision (see `HANDOFF.md`).
+- **Rules.** Keep `setup-Asgard.cmd` ASCII with CRLF line endings; `.gitattributes` enforces CRLF.
+- **Packages.** Use the best module for each job (`docs/dependency-policy.md`).
+  - Pin it in `requirements.txt`. The comment above the pin says what it's for, whether it's native (compiled wheels need IT approval), its approval status, and what to use instead if it isn't available on-premises.
+  - `asgard/muninn/` and the launcher's start-up modules stay standard library, because every app and Odin import them; `tests/test_dependencies.py` checks this.
+  - Import a package only where it's needed. For example, `apps/heimdall/heimdall/browser.py` imports Playwright only when `fill` runs.
 - **Tests.** Run `py -3 -m unittest discover -s tests`. Heimdall's browser tests (`tests/test_heimdall_browser.py`, against `tests/fake_servicenow.py`) skip unless Playwright and a browser are installed; set `HEIMDALL_TEST_CHANNEL=msedge` to use Edge. The schema's own checks (`tools/check_muninn_schema.py`) switch time zones, so they run on Linux, macOS or WSL and are skipped on Windows.
 - **Schema changes.** Add `asgard/muninn/migrations/000N_<name>.sql`, numbered one past the last. The runner wraps each file in a transaction and sets `user_version`. A migration that rebuilds a table starts with `-- muninn: foreign_keys=off`. Never edit a migration that has shipped.
 - **Releases.** Bump `VERSION`, tag (`git tag v0.2.0`), push the tag, and publish a release from it. GitHub attaches the zip automatically. `.gitattributes` keeps `tests/` and other maintainer files out of downloaded zips.
