@@ -22,15 +22,22 @@ import json
 import re
 import shlex
 import sys
-from typing import Any, Iterator, List, Optional
+from typing import Any, Iterator, List, Optional, Set
 
 COMMAND_KEYS = {"command", "cmd", "script", "commandLine", "command_line"}
 # Baldur and Ysildir are started as baldur.cmd (or baldur on PATH), or as their cli.py from the
-# install or the repo.
-CLI_PY = re.compile(r"baldur[\\/]+cli\.py", re.I)
+# install or the repo. A cli.py with no other app's folder in its path is taken as Baldur's: an agent
+# can cd into Baldur's folder and run .\cli.py.
+OTHER_APPS = ("heimdall", "ysildir", "odin", "bifrost", "freya", "loki")
 MUNINN_FILE = re.compile(r"muninn\.db", re.I)
+ASGARD_DB = re.compile(r"asgard[\\/][^\s\"']*\.db\b", re.I)          # any database file in Asgard's folder
+SETTINGS_FILE = re.compile(r"baldur\.json", re.I)
 SWITCHES_FILE = re.compile(r"ysildir\.json", re.I)
-MUNINN_MAINTENANCE = re.compile(r"--muninn\s+(?:restore|repair|retention)", re.I)
+MUNINN_MAINTENANCE = {"restore", "repair", "retention"}
+# Free text follows these options (a commit message, a report's summary, a note). It's words, not a
+# command or a file, so the guard doesn't read it: a summary may well mention muninn.db.
+TEXT_OPTIONS = {"-m", "--message", "--summary", "--note"}
+MAX_DEPTH = 4                         # quoted commands inside quoted commands
 
 DECISIONS = {"approve", "reject", "change", "actual", "schedule"}
 MESSAGE = ("Blocked by Baldur's agent guard: {what} is the person's decision, not an agent's. "
@@ -59,6 +66,8 @@ def commands(event: Any) -> Iterator[str]:
         for key, value in event.items():
             if key in COMMAND_KEYS and isinstance(value, str):
                 yield value
+            elif key in COMMAND_KEYS and isinstance(value, list) and value and all(isinstance(v, str) for v in value):
+                yield " ".join(f'"{v}"' if (" " in v and not _quoted(v)) else v for v in value)   # an argv list
             else:
                 yield from commands(value)
     elif isinstance(event, list):
@@ -66,24 +75,64 @@ def commands(event: Any) -> Iterator[str]:
             yield from commands(item)
 
 
-def _words(text: str) -> List[str]:
+def _tokens(text: str) -> List[str]:
+    """Words and the shell's separators (; & | && ||), quoted strings kept whole with their quotes."""
+    lexer = shlex.shlex(text, posix=False, punctuation_chars=";&|")
+    lexer.whitespace_split = True
+    lexer.commenters = ""
     try:
-        return shlex.split(text, posix=False)
-    except ValueError:
-        return text.split()
+        return list(lexer)
+    except ValueError:                    # an unbalanced quote: plain words will do
+        return re.findall(r"[;&|]+|[^\s;&|]+", text)
+
+
+def _unquote(word: str) -> str:
+    return word[1:-1] if len(word) >= 2 and word[0] == word[-1] and word[0] in "\"'" else word
+
+
+def _quoted(word: str) -> bool:
+    return len(word) >= 2 and word[0] == word[-1] and word[0] in "\"'"
+
+
+def _segments(command: str) -> List[List[str]]:
+    """The command's simple commands, each a list of words."""
+    out: List[List[str]] = [[]]
+    for token in _tokens(command):
+        if token and set(token) <= set(";&|"):
+            out.append([])
+        else:
+            out[-1].append(token)
+    return [s for s in out if s]
+
+
+def _expanded(words: List[str]) -> List[str]:
+    """Arguments with quoted lists opened up: -ArgumentList "approve --date 1" or 'approve','--date'."""
+    out: List[str] = []
+    for word in words:
+        out.extend(piece.strip("\"'") for piece in re.split(r"[,\s]+", _unquote(word)) if piece.strip("\"'"))
+    return out
+
+
+def _program(word: str, app: str) -> bool:
+    path = _unquote(word).replace("\\", "/")
+    name = path.rsplit("/", 1)[-1].lower()
+    if name in (app, f"{app}.cmd", f"{app}.bat", f"{app}.exe"):
+        return True
+    if name != "cli.py":
+        return False
+    folders = path.lower().split("/")[:-1]
+    if app == "baldur":
+        return "baldur" in folders or not any(other in folders for other in OTHER_APPS)
+    return app in folders
 
 
 def app_args(command: str, app: str = "baldur") -> List[List[str]]:
     """The arguments of each invocation of an Asgard app's command line (baldur, ysildir) in a shell command."""
-    cli_py = re.compile(app + r"[\\/]+cli\.py", re.I)
     out = []
-    for part in re.split(r"&&|\|\||[;&|\n]", command):
-        words = [w.strip("\"'") for w in _words(part)]
+    for words in _segments(command):
         for n, word in enumerate(words):
-            name = word.replace("\\", "/").rsplit("/", 1)[-1].lower()
-            if name in (app, f"{app}.cmd", f"{app}.bat", f"{app}.exe") or \
-                    (name == "cli.py" and cli_py.search(word.replace("\\", "/"))):
-                out.append(words[n + 1:])
+            if _program(word, app):
+                out.append(_expanded(words[n + 1:]))
                 break
     return out
 
@@ -93,38 +142,88 @@ def baldur_args(command: str) -> List[List[str]]:
     return app_args(command, "baldur")
 
 
-def verdict(command: str) -> Optional[str]:
-    """Why this command is blocked, or None when it may run."""
-    if MUNINN_FILE.search(command):
-        return MESSAGE.format(what="Reading or writing Muninn's file directly") + \
-            " Muninn changes only through Baldur's commands or Ysildir."
-    if MUNINN_MAINTENANCE.search(command):
-        return MESSAGE.format(what="Muninn maintenance (restore, repair, retention)")
-    if SWITCHES_FILE.search(command):
-        return YSILDIR_MESSAGE.format(what="Ysildir's switches file (ysildir.json)")
+def _flag(flags: Set[str], *names: str) -> bool:
+    """Whether an option is given, also as an abbreviation argparse would once have taken (--acc, --of)."""
+    return any(f == n or (len(f) >= 4 and n.startswith(f)) for f in flags for n in names)
+
+
+def _not_text(words: List[str]) -> List[str]:
+    """The words of a simple command, without the free text that follows -m, --summary and the like."""
+    out, skip = [], False
+    for word in words:
+        if skip:
+            skip = False
+            continue
+        low = word.lower()
+        if low in TEXT_OPTIONS:
+            skip = True
+            continue
+        if any(low.startswith(o + "=") for o in TEXT_OPTIONS if o.startswith("--")):
+            continue
+        out.append(word)
+    return out
+
+
+def _app_verdict(command: str) -> Optional[str]:
     for args in app_args(command, "ysildir"):
         words = [a.lower() for a in args if not a.startswith("-")]
         flags = {a.split("=", 1)[0].lower() for a in args if a.startswith("-")}
         if words[:1] == ["setup"]:
             return YSILDIR_MESSAGE.format(what="Connecting AI clients to Ysildir (setup)")
-        if words[:1] == ["tools"] and flags & {"--on", "--off"}:
+        if words[:1] == ["tools"] and _flag(flags, "--on", "--off"):
             return YSILDIR_MESSAGE.format(what="Switching Ysildir's tools on or off")
     for args in baldur_args(command):
         words = [a for a in args if not a.startswith("-")]
-        flags = {a.split("=", 1)[0] for a in args if a.startswith("-")}
+        flags = {a.split("=", 1)[0].lower() for a in args if a.startswith("-")}
         sub = words[0].lower() if words else ""
         if sub in DECISIONS:
             return MESSAGE.format(what=f"`{sub}`")
-        if sub == "calibrate" and "--accept" in flags:
+        if sub == "calibrate" and _flag(flags, "--accept"):
             return MESSAGE.format(what="Accepting a calibration")
         if sub == "setup" and args[1:]:
             return MESSAGE.format(what="Changing Baldur's setup")
-        if sub == "repos" and flags & {"--on", "--off"}:
+        if sub == "repos" and _flag(flags, "--on", "--off"):
             return MESSAGE.format(what="Switching a repository on or off")
         if sub == "keys" and len(words) > 2:
             return MESSAGE.format(what="Setting a commit's Jira keys")
         if sub == "github" and len(words) > 1 and words[1].lower() == "token":
             return MESSAGE.format(what="The GitHub token")
+    return None
+
+
+def verdict(command: str, depth: int = 0) -> Optional[str]:
+    """Why this command is blocked, or None when it may run.
+
+    It reads every simple command in the line, and the inside of every quoted string as a command of
+    its own (cmd /c "...", powershell -Command "...", bash -lc "...", Invoke-Expression "..."), but
+    not the free text after -m, --summary and the like.
+    """
+    if depth > MAX_DEPTH:
+        return None
+    why = _app_verdict(command)
+    if why:
+        return why
+    for words in _segments(command):
+        words = _not_text(words)
+        plain = [_unquote(w) for w in words]
+        for text in plain:
+            if MUNINN_FILE.search(text) or ASGARD_DB.search(text):
+                return MESSAGE.format(what="Reading or writing Muninn's file directly") + \
+                    " Muninn changes only through Baldur's commands or Ysildir."
+            if SETTINGS_FILE.search(text):
+                return MESSAGE.format(what="Baldur's settings file (baldur.json)") + \
+                    " The person changes settings in Baldur."
+            if SWITCHES_FILE.search(text):
+                return YSILDIR_MESSAGE.format(what="Ysildir's switches file (ysildir.json)")
+        lowered = [w.lower() for w in plain]
+        for n, word in enumerate(lowered[:-1]):
+            if word == "--muninn" and lowered[n + 1] in MUNINN_MAINTENANCE:
+                return MESSAGE.format(what="Muninn maintenance (restore, repair, retention)")
+        for word in words:
+            if _quoted(word):
+                why = verdict(_unquote(word), depth + 1)
+                if why:
+                    return why
     return None
 
 

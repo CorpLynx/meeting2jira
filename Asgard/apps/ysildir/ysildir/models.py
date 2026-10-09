@@ -193,9 +193,13 @@ class DayTicket(BaseModel):
     reason: Optional[str] = None
     confidence: Optional[str] = None
     evidence: List[str] = Field(default_factory=list, description="Report ids, session ids and commit SHAs.")
+    worklog_line: Optional[str] = Field(None, description=(
+        "What Odin's worklog comment will say if the person takes this ticket's AI-assisted figure, word for word."))
 
 
 class DayAI(BaseModel):
+    id: str = Field(description="The id of exactly these figures. The take command carries it, so the person "
+                                "approves only what they were shown.")
     method: Literal["agent", "review"] = Field(description="agent: from agent estimates, worked out by Baldur's "
                                                            "code. review: from a checked AI review.")
     source: str
@@ -233,6 +237,8 @@ class ReviewChecked(Result):
     flags: List[str]
     take: Optional[str] = Field(None, description="The command that takes the figures. Give it to the person; "
                                                   "never run it.")
+    worklog_lines: Dict[str, str] = Field(default_factory=dict, description=(
+        "For each ticket the review changes: what Odin's worklog comment will say if the person takes it."))
     message: str = Field(description="Tell the person this.")
 
     def log_ids(self) -> str:

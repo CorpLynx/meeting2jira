@@ -44,16 +44,19 @@ def missing() -> Optional[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ysildir", description="Ysildir, Asgard's MCP server for AI clients.")
+    # No abbreviations: --of would otherwise mean --off, which Kiro's guard matches in full.
+    parser = argparse.ArgumentParser(prog="ysildir", description="Ysildir, Asgard's MCP server for AI clients.",
+                                     allow_abbrev=False)
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("serve", help="what an AI client starts (stdio); not for running by hand")
-    check = sub.add_parser("check", help="start the server in memory and list what an agent would see")
+    sub.add_parser("serve", help="what an AI client starts (stdio); not for running by hand", allow_abbrev=False)
+    check = sub.add_parser("check", help="start the server in memory and list what an agent would see",
+                           allow_abbrev=False)
     check.add_argument("--all", action="store_true", help="as if every tool were switched on")
-    tools = sub.add_parser("tools", help="list the tools, or switch them on or off")
+    tools = sub.add_parser("tools", help="list the tools, or switch them on or off", allow_abbrev=False)
     tools.add_argument("--list", action="store_true", help="list them (the default)")
     tools.add_argument("--on", nargs="+", metavar="NAME", default=[], help="switch these on")
     tools.add_argument("--off", nargs="+", metavar="NAME", default=[], help="switch these off")
-    setup = sub.add_parser("setup", help="connect an AI client to Ysildir")
+    setup = sub.add_parser("setup", help="connect an AI client to Ysildir", allow_abbrev=False)
     setup.add_argument("--kiro", metavar="DIR", help="this Kiro workspace (.kiro/settings/mcp.json)")
     setup.add_argument("--kiro-user", action="store_true", help="every Kiro workspace (~/.kiro/settings/mcp.json)")
     setup.add_argument("--vscode", metavar="DIR", help="this VS Code workspace (.vscode/mcp.json)")

@@ -3,7 +3,8 @@
      Edited here on 2026-10-09 (branch claude/baldur-estimation), not yet in the live doc: "Two ways to
      estimate", principle 5, the gitwork table's agent row, the Muninn section, Calibration (built),
      "AI-assisted estimates" (replaces "Optional AI review"), the basis example, build order, tests and
-     open decisions. Carry these over to the live doc. -->
+     open decisions; and the fixes from the independent review of 2026-10-09 (docs/review-2026-10-09.md)
+     in Calibration and AI-assisted estimates. Carry these over to the live doc. -->
 
 # Baldur spec: work estimates from git, and pull request alerts
 
@@ -268,9 +269,9 @@ From agent estimates the line reads, for example, `Reviewed: agent estimates (ki
 The 0.5 weights and 120-minute gap are guesses until measured. Calibration measures them (built, `calibrate.py`):
 
 1. **Note your real hours.** During a trial of 2–4 weeks, note your real development hours each day: `baldur.cmd actual 2026-10-01 6h15m`, or per ticket with `--key PROJ-42`. They go into `time_actuals`. A day's ticket figures can't add up to more than its total. Only these notes count as real hours, never Baldur's numbers or your approvals: an approval usually starts from the estimate, so fitting to it would only confirm the settings.
-2. **Choose the days.** A day counts only when you noted its total and Baldur has commits of yours on it. Work Baldur can't see (a day of design talk) is the same error under every setting, so it can't teach the dials anything. It would also let a setting that estimates high pass as one that runs low.
+2. **Choose the days.** A day counts only when you noted its total and its estimate depends on the dials. Work Baldur can't see (a day of design talk), or a day the grid estimates the same under every setting (a lone commit at 00:05 rounds to 0 whatever the dials), is the same error under every setting, so it can't teach the dials anything. It would also let a setting that estimates high pass as one that runs low. Such days are listed, not counted. Real hours for a ticket are noted only for your projects' keys.
 3. **Search the grid.** `baldur.cmd calibrate` searches gap 60–180m (15m steps), lead-in 0–60m (15m steps) and ambient weight 0.3–0.8 (0.1 steps), plus your current values. It looks for the lowest mean absolute daily error **among settings whose mean error is zero or less**, which keeps the bias downward. Ties go to the lower estimate, then to the value you already have, then to the smaller value, so a dial the trial days can't tell apart doesn't move on no evidence.
-4. **Accept, or don't.** It shows the old and new error side by side. `calibrate --accept`, with at least 10 noted days, writes the dials into `baldur.json`, then records an active `calibration_runs` row and its `calibration.accepted` event in one transaction. If Muninn refuses, the settings file is put back as it was. Nothing changes automatically, and past runs keep their settings.
+4. **Accept, or don't.** It shows the old and new error side by side. `calibrate --accept`, with at least 10 noted days, takes Muninn's write lock first, then writes the dials into `baldur.json` and records an active `calibration_runs` row and its `calibration.accepted` event in that one transaction. If anything fails, the settings file is put back as it was, so two accepts can't leave the file and the active row disagreeing. A settings folder that can't be written is a message, not a traceback. Nothing changes automatically, and past runs keep their settings.
 
 In a scripted demo trial (25 generated days of commits, meetings and real hours, run through the CLI), calibration cut the mean daily error from 1h03m to 19m while staying low on average (−3m). A second run reported that the settings already fit best.
 
@@ -282,7 +283,7 @@ Commit counts can't tell five typo fixes from one hard debugging session. An AI 
 
 Best first:
 
-1. **A checked AI review** stored on the day's open proposals, while the evidence it saw is still the day's evidence (its `pack_hash` matches).
+1. **A checked AI review** stored on the day's open proposals, while the evidence it saw is still the day's evidence (its `pack_hash` matches). It is checked again before it counts, against the day as it is now, and its stored figures must be what its adjustments give, so a review written onto the rows any other way is never taken.
 2. **Otherwise, the day's agent estimates**, turned into adjustments in code with no AI call.
 
 Both go through the same check (below), so the same rules hold whatever the source.
@@ -297,7 +298,7 @@ Your on-premises steering already asks coding agents to estimate how long their 
   - a confidence;
   - a one-sentence summary.
 
-  It records through `baldur.cmd ai record` (options or JSON), or Ysildir's `baldur_record_estimate` tool. `asgard.muninn.baldur.record_agent_estimate()` validates every field and refuses code-like summaries. The same report twice is stored once, and a newer report from the same agent on the same commits withdraws the older one. Reports are facts (Muninn v4).
+  It records through `baldur.cmd ai record` (options or JSON), or Ysildir's `baldur_record_estimate` tool. `asgard.muninn.baldur.record_agent_estimate()` validates every field. It refuses a summary that holds code, a diff line, an assignment or an operator, or a control character (terminal escapes, zero-width and direction marks); summaries print cleaned everywhere. The agent's name is one word. The same report twice is stored once while it counts; sent again after it was withdrawn, it's recorded again. A newer report from the same agent on the same commits withdraws the older one. Reports are facts (Muninn v4): each is stored under a digest of what it says and the commits it cites, and one whose commits change later isn't counted, and `--muninn check` reports it until it's withdrawn.
 - **Teaching the agent.** `apps/baldur/prompts/agent-guide.md` (`baldur-agent-2`, printed by `baldur.cmd ai guide`) is the full guide. `baldur.cmd ai kiro --into REPO` installs a Kiro steering file (the short version) and two hooks:
   - One blocks the agent from approving, rejecting or changing time, noting real hours, accepting a calibration, changing Baldur's settings, keys or repositories, and touching `muninn.db`.
   - The other reminds it to record after each `git commit`.
@@ -305,10 +306,11 @@ Your on-premises steering already asks coding agents to estimate how long their 
   Ysildir teaches the same through MCP: instructions, `asgard_guide`, and the guide's worked examples (`docs/integration/ysildir.md`).
 - **Turning reports into a suggestion** (`assist.agent_draft`):
   - A report counts its low end when it gave a range (of two readings, the smaller wins).
-  - Its figure is shared across the commits it cites, so a report covering two tickets splits like Baldur's own attribution. Where two reports cite one commit, the smaller share counts.
+  - Its figure is shared evenly across every commit it cites, on whatever day, so a report covering two days or two tickets splits like Baldur's own attribution and each day counts only its share. Where two reports cite one commit, the smaller share counts.
   - For each ticket the reports cover, the target is the agents' figure for the covered commits plus the engine's share of any commits they don't cover.
   - Targets are scaled down, never up, to fit the minutes the engine proposed for those tickets. So the day can't rise, and a ticket gains only what another gives up.
-  - A report with no commits, or citing commits Baldur hasn't collected, is flagged, not counted.
+  - A report with no commits, or citing a commit Baldur hasn't collected (or a prefix matching two), is flagged, not counted.
+  - Time Jira already holds for a ticket that day never moves: no ticket goes below it (rounded up to a step), since Odin never takes time back out of Jira and the minutes would count twice.
   - When the agents put a change above what git shows, the day says so, and the number stays.
 
 On the worked example day, two reports put the PROJ-42 change at 45m and the PROJ-51 change at 75–90m. They turn the engine's PROJ-42 1h30m and PROJ-51 30m into 45m and 1h15m: the same 2h day, with 45m moved to the ticket that commit counts under-weighted.
@@ -322,12 +324,12 @@ The review uses whichever of Asgard's AI tiers you have:
 - **API** (not built): Mímir sends the pack to an approved endpoint and uses its smallest model.
 
 The pack (`baldur.review_pack/1`) holds:
-- the baseline per ticket;
+- the baseline per ticket, with `in_jira`, the minutes Jira already holds for it that day, when it holds any (rule 5 below);
 - the sessions: id, start, end, minutes, meeting minutes and commits;
 - each commit's subject (one line, at most 120 characters), keys, time, repository and line counts;
 - the day's agent reports.
 
-Its `pack_hash` names exactly this evidence, and the reply must carry it back. If the day changed since (new commits, a new report, a re-estimate), the reply is refused and a new pack is needed.
+Its `pack_hash` names exactly this evidence, and the reply must carry it back. If the day's evidence changed since (new commits, a new report, a re-estimate that changes a session), the reply is refused and a new pack is needed. With `review_mode` off, a reply is refused for that before anything else.
 
 ### Privacy gate
 
@@ -347,25 +349,27 @@ Every suggestion, from a review or from agent reports, goes through `asgard.muni
 2. Every adjustment names a ticket already in the baseline (a review can't add one), and none goes below zero.
 3. Every adjustment cites at least one commit SHA (or a unique prefix of one), session id or agent report id from the evidence sent.
 4. At most 10 adjustments; the result is rounded down again.
+5. No ticket is lowered below the minutes Jira already holds for it that day (`held_minutes`): Odin never takes time back out of Jira, so moving them would raise the day in Jira.
 
 `store_review` runs the check inside the transaction that stores the result, against the open proposals as Muninn holds them then. So a reply checked against a stale day can't be stored. Reasons and flags are cleaned to one capped line each.
 
 ### Taking the figures
 
-- **Seeing them.** `baldur.cmd ai show DATE` and the day report show the suggestions beside the engine's numbers, with reasons, confidence and evidence.
-- **Taking them.** `baldur.cmd approve --date DATE --ai` takes them, and `--set PROJ-42=1h` gives your own figure for a ticket.
-- **The record.** Approving records which suggestion you took in `day_proposals.review`, and Odin's worklog comment adds a `Reviewed:` line (The basis). A figure you change by hand afterwards is yours alone, and the line goes.
+- **Seeing them.** `baldur.cmd ai show DATE` and the day report show the suggestions beside the engine's numbers, with reasons, confidence and evidence, and each ticket's `Reviewed:` line exactly as Odin will post it.
+- **Taking them.** `baldur.cmd approve --date DATE --ai ID` takes them. The ID (from `ai show`, the day report or Ysildir) names exactly the figures and words you saw; if a report or review changed them since, nothing is approved and the new ones are shown. `--set PROJ-42=1h` gives your own figure for a ticket. The AI figures move time, so they're taken together: keeping a lowered ticket's time with your own figure while taking the ticket it was moved to is refused.
+- **The record.** Approving records which suggestion you took in `day_proposals.review`; a stale review on the row from another source is kept apart under `earlier`, never mixed in. Odin's worklog comment adds the `Reviewed:` line you were shown (The basis). A figure you change by hand afterwards is yours alone, whatever you change it to, and the line goes.
 
 ### The prompt
 
 It ships as `apps/baldur/prompts/review.md`, and its version is recorded with each review.
 
 ```markdown
-<!-- baldur-review-2 -->
+<!-- baldur-review-3 -->
 You adjust a development-time estimate that was calculated from git history.
 You don't estimate from scratch and you can't post anything.
 
-Input: for one day, the baseline minutes per Jira ticket, the sessions (id s1, s2...,
+Input: for one day, the baseline minutes per Jira ticket (with in_jira, the minutes
+Jira already holds for that ticket, when it holds any), the sessions (id s1, s2...,
 start, end, commit SHAs, minutes that overlapped meetings), each commit's subject and
 line counts, and any agent reports (id r1, r2...): what an AI coding agent that worked
 a change with the person estimated their working time on it was. An agent report is a
@@ -378,7 +382,8 @@ Return only this JSON, with "pack" copied from the input's pack_hash:
  "flags": ["<anything the person should check before approving>"]}
 
 Rules, in priority order:
-1. Never raise the day's total. Move minutes between tickets, or lower them.
+1. Never raise the day's total. Move minutes between tickets, or lower them, but never
+   lower a ticket below its in_jira minutes: that time is already in Jira and stays there.
 2. Cite evidence for every adjustment: a commit SHA, session id or report id from the input.
 3. Prefer moving time to removing it. Commit counts are a crude weight: five trivial
    commits on one ticket and one hard commit on another is the usual error.

@@ -27,6 +27,7 @@ for folder in (ROOT, ROOT / "apps" / "baldur", ROOT / "tests"):
 from asgard import muninn  # noqa: E402
 from asgard.muninn import baldur as rules  # noqa: E402
 from baldur import assist, cli  # noqa: E402
+from baldur import report as day_report  # noqa: E402
 from baldur import estimate as E  # noqa: E402
 from baldur import settings as config  # noqa: E402
 from test_baldur import DAY, NOW, DeltaBase, MuninnCase, c, t  # noqa: E402
@@ -293,11 +294,18 @@ class AgentSuggestionTests(AssistCase):
         self.assertEqual(found.tickets["PROJ-51"].figure, 30)
 
     def test_short_and_unknown_shas(self):
+        """A short SHA counts; a report citing a commit Baldur hasn't collected isn't counted until it has (the
+        spec: "flagged, not counted"), since its split over that commit would be a guess (review R8)."""
         p42, _ = self.worked()
-        self.record(commits=[p42[0][:10], "abcdef0123456"], minutes=15)
+        short = self.record(commits=[p42[0][:10]], minutes=15)
         found = self.suggest()
         self.assertEqual(found.tickets["PROJ-42"].figure, E.round_down(15 + 102.5 * 5 / 6, 15))
-        self.assertTrue(any("abcdef012345, which Baldur hasn't collected" in f for f in found.flags), found.flags)
+        rules.withdraw_agent_estimate(self.con, short.id)
+        self.record(commits=[p42[0][:10], "abcdef0123456"], minutes=15)
+        found = self.suggest()
+        self.assertFalse(found.changed(), "not counted while one of its commits is missing")
+        self.assertTrue(any("abcdef012345, which Baldur hasn't collected" in f and "isn't counted until" in f
+                            for f in found.flags), found.flags)
 
     def test_withdrawn_reports_stop_counting(self):
         p42, _ = self.worked()
@@ -401,7 +409,7 @@ class ReviewTests(AssistCase):
         self.assertEqual(done.figures, {"PROJ-42": 75, "PROJ-51": 45})
         found = self.suggest()
         self.assertEqual((found.method, found.source), ("review", "AI review (clipboard, gpt-4o)"))
-        ids = assist.approve_day(self.con, self.settings, DAY, now=NOW)
+        ids = assist.approve_day(self.con, self.settings, DAY, now=NOW, shown=self.suggest().digest())
         rows = {r["work_item_key"]: r for r in self.rows("approved")}
         self.assertEqual({k: r["minutes_final"] for k, r in rows.items()}, {"PROJ-42": 75, "PROJ-51": 45})
         self.assertEqual(sorted(ids), sorted(r["id"] for r in rows.values()))
@@ -444,7 +452,7 @@ class ApprovalTests(AssistCase):
         p42, p51 = self.worked()
         self.record(commits=p42, minutes=45)
         self.record(commits=p51, minutes=75, summary="The form.")
-        assist.approve_day(self.con, self.settings, DAY, {"proj-51": 60}, now=NOW)
+        assist.approve_day(self.con, self.settings, DAY, {"proj-51": 60}, now=NOW, shown=self.suggest().digest())
         rows = {r["work_item_key"]: r for r in self.rows("approved")}
         self.assertEqual({k: r["minutes_final"] for k, r in rows.items()}, {"PROJ-42": 45, "PROJ-51": 60})
         self.assertTrue(rules.review_of(rows["PROJ-42"])["taken"])
@@ -453,12 +461,12 @@ class ApprovalTests(AssistCase):
     def test_nothing_to_take(self):
         self.worked()
         with self.assertRaisesRegex(assist.AssistError, "No AI-assisted figures"):
-            assist.approve_day(self.con, self.settings, DAY, now=NOW)
+            assist.approve_day(self.con, self.settings, DAY, now=NOW, shown="")
 
     def test_a_figure_changed_by_hand_isnt_called_the_ais(self):
         p42, _ = self.worked()
         self.record(commits=p42, minutes=45)
-        assist.approve_day(self.con, self.settings, DAY, now=NOW)
+        assist.approve_day(self.con, self.settings, DAY, now=NOW, shown=self.suggest().digest())
         row = [r for r in self.rows("approved") if r["work_item_key"] == "PROJ-42"][0]
         self.assertEqual(rules.review_line(row["review"], row["minutes_final"]),
                          "Reviewed: agent estimates (kiro, 1 report) lowered this from 1h30m to 45m")
@@ -509,17 +517,26 @@ class AssistCliTests(AssistCase):
         self.assertEqual(shown["method"], "agent")
         self.assertEqual({x["key"]: (x["estimate"], x["ai_assisted"]) for x in shown["tickets"]},
                          {"PROJ-42": (90, 45), "PROJ-51": (30, 75)})
+        self.assertEqual(shown["take"], f"cli.py approve --date 2026-10-01 --ai {shown['id']}")
         code, out, _ = self.cli("ai", "show", "2026-10-01")
-        self.assertIn("Take them: cli.py approve --date 2026-10-01 --ai", out)
+        self.assertIn(f"Take them: cli.py approve --date 2026-10-01 --ai {shown['id']}", out)
+        self.assertIn("PROJ-42: Reviewed: agent estimates (copilot, kiro, 3 reports) lowered this from 1h30m to 45m",
+                      out)
         code, out, _ = self.cli("report", "2026-10-01")
         self.assertIn("AI-assisted figures, from agent estimates (copilot, kiro, 3 reports)", out)
         code, out, err = self.cli("approve", "--date", "2026-10-01", "--ai")
+        self.assertEqual(code, 1)
+        self.assertIn("Say which AI-assisted figures you're taking", err)
+        self.assertIn(f"--ai {shown['id']}", err)
+        code, out, err = self.cli("approve", "--date", "2026-10-01", "--ai", shown["id"])
         self.assertEqual(code, 0, err)
         self.assertIn("Approved PROJ-51 ", out)
         code, out, _ = self.cli("ai", "withdraw", "r3")
         self.assertIn("Withdrew r3", out)
         code, out, _ = self.cli("ai", "guide")
         self.assertIn("baldur-agent-2", out)
+        code, out, _ = self.cli("ai", "list", "--from", "2026-10-01", "--to", "2026-10-01", "--all")
+        self.assertIn("WITHDRAWN", out)
 
     def test_refusals_are_messages(self):
         self.worked()
@@ -556,6 +573,9 @@ class AssistCliTests(AssistCase):
         code, out, err = self.cli("ai", "review", "2026-10-01", "--model", "copilot", stdin=answer)
         self.assertEqual(code, 0, err)
         self.assertIn("PROJ-42 1h30m -> 1h15m", out)
+        self.assertIn("PROJ-42: Odin's worklog comment will say: Reviewed: AI review (clipboard, copilot) "
+                      'lowered this from 1h30m to 1h15m ("more")', out)
+        self.assertRegex(out, r"Take them with: cli.py approve --date 2026-10-01 --ai [0-9a-f]{8}")
 
 
 # --------------------------------------------------------------------------
@@ -609,6 +629,43 @@ class AgentGuardTests(unittest.TestCase):
             with self.subTest(command):
                 self.assertIsNone(self.guard.verdict(command))
 
+    def test_r6_commands_inside_quotes_bare_cli_py_and_files_are_blocked(self):
+        """Review R6 (2026-10-09): each of these got past the guard, and one approved a day."""
+        b = r'py -3 "C:\Users\me\AppData\Local\Asgard\app\apps\baldur\cli.py"'
+        cfg = r"$env:LOCALAPPDATA\Asgard\settings\baldur.json"
+        for command in ('cmd /c "baldur.cmd approve --date 2026-10-01 --ai"',
+                        'powershell -NoProfile -Command "baldur.cmd approve --date 2026-10-01"',
+                        'bash -lc "python3 Asgard/apps/baldur/cli.py approve --date 2026-10-01"',
+                        'Start-Process baldur.cmd -ArgumentList "approve --date 2026-10-01" -Wait',
+                        "Start-Process -FilePath baldur.cmd -ArgumentList 'approve','--date','2026-10-01'",
+                        'Invoke-Expression "baldur.cmd reject --date 2026-10-01"',
+                        r"cd C:\Asgard\app\apps\baldur; py -3 .\cli.py approve --date 2026-10-01",
+                        "cd Asgard/apps/baldur && python cli.py actual 2026-10-01 6h",
+                        f"{b} calibrate --acc", f"{b} repos --of vendor",
+                        f"(Get-Content {cfg}) -replace 'off','metadata' | Set-Content {cfg}",
+                        r'sqlite3 $env:LOCALAPPDATA\Asgard\*.db "UPDATE time_actuals SET minutes = 480"'):
+            with self.subTest(command):
+                self.assertIsNotNone(self.guard.verdict(command))
+        event = {"tool": "shell", "tool_input": {"command": ["baldur.cmd", "approve", "--date", "2026-10-01"]}}
+        self.assertTrue(any(self.guard.verdict(c) for c in self.guard.commands(event)), "an argv list")
+
+    def test_r6_free_text_and_other_apps_are_not_read_as_commands(self):
+        b = r'py -3 "C:\Asgard\app\apps\baldur\cli.py"'
+        for command in (f'{b} ai record --agent kiro --minutes 45m --commit 9f3c1a2b4d --confidence low '
+                        f'--summary "Moved the muninn.db path check"',
+                        'git commit -m "Document where muninn.db lives"',
+                        f'{b} ai record --agent kiro --minutes 1h --commit abc1234 --confidence low '
+                        f'--summary "a; b & c"',
+                        "py -3 Asgard/apps/heimdall/cli.py fill --dry-run", "python Asgard/apps/ysildir/cli.py check"):
+            with self.subTest(command):
+                self.assertIsNone(self.guard.verdict(command))
+
+    def test_r6_baldur_takes_no_abbreviated_option(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.build_parser().parse_args(["calibrate", "--acc"])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.build_parser().parse_args(["repos", "--of", "vendor"])
+
     def test_the_hook_blocks_with_exit_code_2_and_says_why(self):
         done = run_hook("guard_baldur", "baldur.cmd approve --date today")
         self.assertEqual(done.returncode, 2)
@@ -660,3 +717,205 @@ class AgentInstallTests(AssistCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --------------------------------------------------------------------------
+# The independent review of 2026-10-09 (docs/review-2026-10-09.md): one test per finding
+# --------------------------------------------------------------------------
+
+class ReviewFindingsTests(AssistCase):
+    def taken(self):
+        return {r["work_item_key"]: r["minutes_final"] for r in self.rows("approved")}
+
+    def two_reports(self):
+        p42, p51 = self.worked()
+        self.record(commits=p42, minutes=45)
+        self.record(commits=p51, minutes=75, summary="The form validation.")
+        return p42, p51
+
+    def test_r1_your_figure_cant_keep_time_the_ai_moved_away(self):
+        self.two_reports()
+        shown = self.suggest().digest()                # PROJ-42 1h30m -> 45m, PROJ-51 30m -> 1h15m
+        with self.assertRaisesRegex(assist.AssistError, "moves time from PROJ-42, but your figure keeps it there"):
+            assist.approve_day(self.con, self.settings, DAY, {"PROJ-42": 90}, now=NOW, shown=shown)
+        self.assertEqual(self.taken(), {})
+        assist.approve_day(self.con, self.settings, DAY, {"PROJ-42": 90, "PROJ-51": 30}, now=NOW, shown=shown)
+        self.assertEqual(self.taken(), {"PROJ-42": 90, "PROJ-51": 30}, "your own figures for both are yours")
+        self.assertFalse(any(rules.review_of(r).get("taken") for r in self.rows("approved")))
+
+    def test_r2_time_jira_already_holds_never_moves(self):
+        p42, p51 = self.worked()
+        sid, ctx = self.jira("PROJ-42", "PROJ-51")
+        self.by_hand(sid, ctx, 0, 90)                  # PROJ-42's 1h30m is already in Jira
+        self.run_store()
+        self.record(commits=p42, minutes=45)
+        self.record(commits=p51, minutes=75, summary="The form validation.")
+        found = self.suggest()
+        self.assertFalse(found.changed(), "no time can leave PROJ-42, so none can move to PROJ-51")
+        self.assertTrue(any("Jira already holds 1h30m for PROJ-42" in f for f in found.flags), found.flags)
+        self.by_hand(sid, ctx, 0, 60, wid="w1")        # Jira holds 1h00m instead: only 30m can move
+        found = self.suggest()
+        self.assertEqual({k: s.figure for k, s in found.tickets.items()}, {"PROJ-42": 60, "PROJ-51": 60})
+        assist.approve_day(self.con, self.settings, DAY, now=NOW, shown=found.digest())
+        self.post_all()
+        held = rules.held_minutes(self.con, DAY.isoformat(), ["PROJ-42", "PROJ-51"])
+        self.assertEqual(sum(held.values()), 120, "Jira holds the engine's 2h00m day, not more")
+        with self.assertRaisesRegex(rules.ReviewRejected, "below the 1h00m Jira already holds"):
+            rules.check_review(DAY.isoformat(), {"PROJ-42": 90, "PROJ-51": 30}, {"s1"},
+                               {"day": DAY.isoformat(), "adjustments": [
+                                   {"ticket": "PROJ-42", "minutes": -45, "evidence": ["s1"], "confidence": "low"}]},
+                               step=15, floors={"PROJ-42": 60})
+
+    def test_r2_the_pack_tells_the_ai_what_jira_holds(self):
+        settings = config.update({"review_mode": "metadata"})
+        self.worked()
+        sid, ctx = self.jira("PROJ-42", "PROJ-51")
+        self.by_hand(sid, ctx, 0, 60)                  # Jira holds 1h00m of PROJ-42
+        pack = assist.day_pack(self.con, settings, DAY, now=NOW)
+        self.assertEqual(pack["baseline"], [{"ticket": "PROJ-42", "minutes": 90, "in_jira": 60},
+                                            {"ticket": "PROJ-51", "minutes": 30}])
+        self.assertIn("never\n   lower a ticket below its in_jira minutes", assist.review_prompt())
+
+    def test_r3_a_stored_review_is_checked_again_before_it_counts(self):
+        settings = config.update({"review_mode": "metadata"})
+        self.worked()
+        pack = assist.day_pack(self.con, settings, DAY, now=NOW)
+        for r in self.rows("proposed"):                # figures written onto the rows outside store_review
+            self.con.execute("UPDATE day_proposals SET review = ? WHERE id = ?", (json.dumps({
+                "method": "review", "pack_hash": pack["pack_hash"], "baseline": r["minutes_proposed"],
+                "suggested": {"PROJ-42": 120, "PROJ-51": 60}[r["work_item_key"]], "source": "AI review"}), r["id"]))
+        self.assertIsNone(assist.suggestions(self.con, settings, DAY, now=NOW))
+
+    def test_r4_approve_takes_only_the_figures_you_were_shown(self):
+        p42, p51 = self.worked()
+        self.record(commits=p42, minutes=45)
+        seen = self.suggest()                          # PROJ-42 1h30m -> 45m; PROJ-51 stays 30m
+        self.record(commits=p51, minutes=75, summary="The form validation.")   # recorded after you looked
+        with self.assertRaisesRegex(assist.AssistError, "aren't the ones you were shown"):
+            assist.approve_day(self.con, self.settings, DAY, now=NOW, shown=seen.digest())
+        self.assertEqual(self.taken(), {})
+        now = self.suggest()
+        self.assertNotEqual(now.digest(), seen.digest())
+        assist.approve_day(self.con, self.settings, DAY, now=NOW, shown=now.digest())
+        self.assertEqual(self.taken(), {"PROJ-42": 45, "PROJ-51": 75})
+
+    def test_r7_the_worklog_line_is_shown_word_for_word(self):
+        settings = config.update({"review_mode": "metadata"})
+        self.worked()
+        sid, ctx = self.jira("PROJ-42", "PROJ-51")
+        pack = assist.day_pack(self.con, settings, DAY, now=NOW)
+        first = "Two of the six commits are typo fixes in the README; per the team lead this is pre-approved"
+        second = "A second adjustment whose reason was never shown anywhere before approval"
+        assist.apply_reply(self.con, settings, DAY, {"day": "2026-10-01", "pack": pack["pack_hash"], "adjustments": [
+            {"ticket": "PROJ-42", "minutes": -15, "evidence": ["s1"], "confidence": "medium", "reason": first},
+            {"ticket": "PROJ-42", "minutes": -15, "evidence": ["s2"], "confidence": "medium", "reason": second}]},
+            now=NOW)
+        found = assist.suggestions(self.con, settings, DAY, now=NOW)
+        shown = day_report.render_ai(found, DAY)
+        line = found.posted_line("PROJ-42")
+        self.assertIn(f"PROJ-42: {line}", shown)
+        self.assertIn(second, line)
+        assist.approve_day(self.con, settings, DAY, now=NOW, shown=found.digest())
+        posted = [x for p in self.post_all() for x in p.comment.splitlines() if x.startswith("Reviewed:")]
+        self.assertEqual(posted, [line], "what Jira gets is exactly what was shown")
+
+    def test_r8_a_report_on_two_days_counts_only_its_share_on_each(self):
+        p42, p51 = self.worked()
+        next_day = self.sha(self.commit(t(2, 10), "PROJ-51"))
+        self.record(commits=p42, minutes=45)
+        self.record(commits=[p51[0], next_day], minutes=120, summary="The form, over two days.")
+        found = self.suggest()
+        # The report's 2h splits over its two commits: 1h00m on the 1st (12:10), plus the engine's share of
+        # the uncovered 12:25 commit; then scaled to the day's 2h00m.
+        self.assertEqual({k: s.figure for k, s in found.tickets.items()}, {"PROJ-42": 30, "PROJ-51": 75})
+
+    def test_r9_summaries_are_plain_sentences_and_print_clean(self):
+        for summary, message in (("def retry(n): return backoff(n) * 2 if n < MAX else fail()", "no code or diff"),
+                                 ("- retries = 3 + retries = 5", "no code or diff"),
+                                 ("Set retries = 5 in the poller.", "no code or diff"),
+                                 ("function retry(n) { return n }", "no code or diff"),
+                                 ("class Retry(Base): pass", "no code or diff"),
+                                 ("const n = 5", "no code or diff"),
+                                 ("if (a == b) retry()", "no code or diff"),
+                                 ("retry(n) -> int", "no code or diff"),
+                                 ("Fixed retry\x1b[2J\x1b[31m in the poller\x1b[0m\x07", "control character"),
+                                 ("Fixed retry\u202e in the poller.", "control character"),
+                                 ("Fixed\x00 retry.", "control character")):
+            with self.subTest(summary):
+                with self.assertRaisesRegex(muninn.MuninnError, message):
+                    self.record(summary=summary)
+        for fine in ("Return the retry count to 3 (from 5).", "Moved retry() into the poller.",
+                     "Fixed PROJ-42: the poller now retries with jitter.", "Updated README - usage section.",
+                     # Prose that names code words stays prose.
+                     "Mapped the fn key (F12) to refresh.", "Fixed the retry function (it looped).",
+                     "Added the CSS class warning (red) to the banner.", "Fixed typos in the doc(s): README, guide."):
+            self.record(summary=fine)
+        # A summary stored before this check prints as one clean line.
+        self.con.execute("INSERT INTO agent_estimates (agent, local_date, minutes, confidence, summary, report_hash) "
+                         "VALUES ('kiro', '2026-10-01', 30, 'low', ?, 'x')", ("Old\x1b[2J summary",))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.cmd_ai_list(self.con, self.settings, cli.build_parser().parse_args(
+                ["ai", "list", "--from", "2026-10-01", "--to", "2026-10-01"]))
+        self.assertNotIn("\x1b", out.getvalue())
+
+    def test_r10_sending_a_withdrawn_report_again_records_it_again(self):
+        sha = self.sha(self.commit(t(1, 10), "PROJ-42"))
+        first = self.record(commits=[sha], minutes=45)
+        second = self.record(commits=[sha], minutes=30)
+        third = self.record(commits=[sha], minutes=45)
+        self.assertEqual((third.status, third.replaced), ("recorded", [second.id]))
+        self.assertNotEqual(third.id, first.id)
+        live = [tuple(r) for r in self.con.execute("SELECT id, minutes FROM agent_estimates WHERE status = 'recorded'")]
+        self.assertEqual(live, [(third.id, 45)])
+        self.assertEqual(self.record(commits=[sha], minutes=45).status, "duplicate", "while it counts, once")
+        rules.withdraw_agent_estimate(self.con, third.id)
+        self.assertEqual(self.record(commits=[sha], minutes=45).status, "recorded")
+        self.assertTrue(muninn.integrity.check(self.con).ok)
+
+    def test_r11_taking_agent_figures_over_a_stale_review_keeps_them_apart(self):
+        settings = config.update({"review_mode": "metadata"})
+        p42, _ = self.worked()
+        pack = assist.day_pack(self.con, settings, DAY, now=NOW)
+        assist.apply_reply(self.con, settings, DAY, {"day": "2026-10-01", "pack": pack["pack_hash"], "adjustments": [
+            {"ticket": "PROJ-42", "minutes": -45, "evidence": ["s2"], "confidence": "low", "reason": "typo fixes"}]},
+            model="gpt-4o", now=NOW)
+        self.record(commits=p42, minutes=60)           # new evidence: the review is stale; the agent's figure applies
+        found = assist.suggestions(self.con, settings, DAY, now=NOW)
+        self.assertEqual(found.method, "agent")
+        assist.approve_day(self.con, settings, DAY, now=NOW, shown=found.digest())
+        note = rules.review_of([r for r in self.rows("approved") if r["work_item_key"] == "PROJ-42"][0])
+        self.assertEqual(note["method"], "agent")
+        self.assertFalse({"adjustments", "model", "tier", "prompt_version"} & set(note))
+        self.assertEqual(note["earlier"]["model"], "gpt-4o", "the stale review is kept apart, not mixed in")
+
+    def test_r14_a_report_whose_commits_changed_isnt_counted(self):
+        p42, p51 = self.worked()
+        done = self.record(commits=p42, minutes=45)
+        self.assertTrue(self.suggest().changed())
+        self.con.execute("INSERT INTO agent_estimate_commits (estimate_id, sha) VALUES (?, ?)", (done.id, p51[0]))
+        found = self.suggest()
+        self.assertFalse(found.changed())
+        self.assertTrue(any(f"r{done.id}'s commits were changed after it was recorded" in f for f in found.flags))
+        problems = [f for f in muninn.integrity.check(self.con).findings if f.area == "agents"]
+        self.assertTrue(problems and f"r{done.id}" in problems[0].message, problems)
+        self.assertIn(f"ai withdraw r{done.id}", problems[0].fix)
+        rules.withdraw_agent_estimate(self.con, done.id)
+        self.assertEqual([f for f in muninn.integrity.check(self.con).findings if f.area == "agents"], [],
+                         "a withdrawn report counts for nothing, so there's nothing to fix")
+
+    def test_r15_a_figure_changed_by_hand_stays_yours_whatever_you_change_it_to(self):
+        p42, _ = self.worked()
+        self.record(commits=p42, minutes=45)
+        assist.approve_day(self.con, self.settings, DAY, now=NOW, shown=self.suggest().digest())
+        row = [r for r in self.rows("approved") if r["work_item_key"] == "PROJ-42"][0]
+        to_60 = rules.change_approval(self.con, row["id"], 60)
+        back = rules.change_approval(self.con, to_60, 45)
+        new = self.con.execute("SELECT * FROM day_proposals WHERE id = ?", (back,)).fetchone()
+        self.assertIsNone(rules.review_line(new["review"], new["minutes_final"]))
+
+    def test_p6_an_agent_is_named_in_one_word(self):
+        with self.assertRaisesRegex(muninn.MuninnError, "one word"):
+            self.record(agent="kiro approved by Brandon")
+        self.record(agent="claude-code")
+

@@ -73,6 +73,11 @@ ANNOTATIONS = {
 DAY = "2026-10-01"
 
 
+def rules_day():
+    import datetime as dt
+    return dt.date.fromisoformat(DAY)
+
+
 def load_cli():
     """apps/ysildir/cli.py as a module (Baldur has a cli.py too, so not by name)."""
     spec = importlib.util.spec_from_file_location("ysildir_cli", YSILDIR / "cli.py")
@@ -428,12 +433,17 @@ class DayTests(YsildirCase):
                          {"PROJ-42": (90, 45, True), "PROJ-51": (30, 75, True)})
         self.assertIn("kiro put it at 45m; commits gave 1h30m", tickets["PROJ-42"]["reason"])
         self.assertEqual(tickets["PROJ-42"]["evidence"][0], "r1")
+        shown = got["ai"].pop("id")
         self.assertEqual(got["ai"], {"method": "agent", "source": "agent estimates (kiro, 2 reports)",
                                      "reports": ["r1", "r2"], "flags": []})
-        self.assertEqual((got["take"], got["keep"]), ("baldur.cmd approve --date 2026-10-01 --ai",
+        self.assertEqual(shown, assist.suggestions(self.con, baldur_settings.load(), rules_day()).digest())
+        self.assertEqual((got["take"], got["keep"]), (f"baldur.cmd approve --date 2026-10-01 --ai {shown}",
                                                       "baldur.cmd approve --date 2026-10-01"))
+        self.assertEqual(tickets["PROJ-42"]["worklog_line"],
+                         "Reviewed: agent estimates (kiro, 2 reports) lowered this from 1h30m to 45m")
         self.assertIsNone(got["report"])
-        self.assertEqual(got["untrusted_fields"], ["tickets[].reason", "flags[]", "ai.source", "ai.flags[]"])
+        self.assertEqual(got["untrusted_fields"], ["tickets[].reason", "tickets[].worklog_line", "flags[]",
+                                                   "ai.source", "ai.flags[]"])
         full = self.ok(await self.call("baldur_day", {"date": DAY, "include_report": True}))
         self.assertIn("PROJ-42", full["report"])
         self.assertIn("report", full["untrusted_fields"])
@@ -493,9 +503,11 @@ class ReviewTests(YsildirCase):
         done = self.ok(await self.call("baldur_submit_review", {"date": DAY, "reply": reply, "model": "test-model"}))
         self.assertEqual((done["baseline"], done["figures"]), ({"PROJ-42": 90, "PROJ-51": 30},
                                                                {"PROJ-42": 45, "PROJ-51": 75}))
-        self.assertEqual(done["take"], "baldur.cmd approve --date 2026-10-01 --ai")
+        self.assertRegex(done["take"], r"^baldur\.cmd approve --date 2026-10-01 --ai [0-9a-f]{8}$")
+        self.assertIn("Reviewed: AI review (mcp, test-model) lowered this from 1h30m to 45m",
+                      done["worklog_lines"]["PROJ-42"])
         self.assertEqual(self.rows("approved"), [], "a review approves nothing")
-        code, out, err = baldur("approve", "--date", DAY, "--ai")              # the person's decision
+        code, out, err = baldur("approve", "--date", DAY, "--ai", done["take"].split()[-1])   # the person's decision
         self.assertEqual(code, 0, err)
         rows = {r["work_item_key"]: r for r in self.rows("approved")}
         self.assertEqual({k: r["minutes_final"] for k, r in rows.items()}, {"PROJ-42": 45, "PROJ-51": 75})
@@ -793,7 +805,7 @@ class WalkthroughTests(YsildirCase):
             self.assertEqual({x["key"]: (x["estimate"], x["ai_assisted"]) for x in c["tickets"]},
                              {"PROJ-42": (90, 45), "PROJ-51": (30, 75)})
             self.assertEqual((c["ai"]["source"], c["ai"]["reports"]), ("agent estimates (kiro, 2 reports)", [r12, r13]))
-            self.assertEqual(c["take"], "baldur.cmd approve --date 2026-10-01 --ai")
+            self.assertEqual(c["take"], f"baldur.cmd approve --date 2026-10-01 --ai {c['ai']['id']}")
             # D. Reviewing the day at the MCP tier
             d = (await client.call_tool("baldur_review_pack", {"date": DAY})).structured_content
             reply = {"day": DAY, "pack": d["pack"]["pack_hash"], "flags": [], "adjustments": [
@@ -804,9 +816,10 @@ class WalkthroughTests(YsildirCase):
             done = (await client.call_tool("baldur_submit_review", {"date": DAY, "reply": reply,
                                                                     "model": "test-model"})).structured_content
             self.assertEqual(done["figures"], {"PROJ-42": 45, "PROJ-51": 75})
+            take = done["take"]
             # E. Being asked to approve: there is no tool for it
             self.assertIn("Unknown tool: approve", text(await client.call_tool("approve", {"date": DAY})))
-        code, out, err = baldur("approve", "--date", DAY, "--ai")              # the person runs the command
+        code, out, err = baldur(*take.split()[1:])                             # the person runs the command
         self.assertEqual(code, 0, err)
         posted = {p.key: p for p in self.post_all()}
         self.assertIn('Reviewed: AI review (mcp, test-model) moved 45m to this from the day\'s other tickets ("The '
@@ -957,6 +970,11 @@ class MissingSdkTests(unittest.TestCase):
         self.assertRegex(err, r"needs Python 3\.10|isn't installed")
         self.assertIn("baldur.cmd ai record", err)
         self.assertIn("baldur.cmd ai pack", err)
+
+    def test_no_abbreviated_options(self):
+        cli = load_cli()
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.build_parser().parse_args(["tools", "--of", "baldur_day"])
 
     def test_an_old_python_is_named(self):
         cli = load_cli()

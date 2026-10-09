@@ -727,3 +727,4 @@ Where the build settled a detail differently from the text above:
 | Review packs | A pack over 60 KB is refused with the clipboard command, not cut | A cut pack would be reviewed on part of the evidence |
 | Baldur | `assist.apply_reply` checks `review_mode` first; `assist.review_prompt()`; `muninn.baldur.list_agent_estimates` shared by `ai list` | Found while building: a reply on a day with review off said "make a new pack" |
 | The Baldur guide | `baldur-agent-2`, with worked examples A to E | Task 4 |
+| Taking AI figures | `take` is `baldur.cmd approve --date D --ai ID`; `baldur_day` returns the id (`ai.id`) and each ticket's `worklog_line`, and `baldur_submit_review` returns `worklog_lines` | Baldur's review of 2026-10-09 (R4, R7): the person approves only the figures and words they were shown |

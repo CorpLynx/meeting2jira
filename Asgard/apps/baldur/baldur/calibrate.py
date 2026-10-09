@@ -13,9 +13,11 @@ The rules (Baldur spec, "Calibration"):
   or less); among them the lowest mean absolute daily error wins. Ties go to the lower estimate,
   then to the value you already have, then to the smaller value. A dial the trial days can't tell
   apart therefore isn't moved on no evidence.
-- A day counts only when you noted its total and Baldur has commits of yours on it. Work Baldur
-  can't see (a day of design talk) is the same error under every setting, so it can't teach the
-  dials anything, and it would let a setting that estimates high pass as one that runs low.
+- A day counts only when you noted its total and its estimate depends on the dials. Work Baldur
+  can't see (a day of design talk), or a day the grid estimates the same under every setting (a
+  lone commit at 00:05 rounds to 0 whatever the dials), is the same error under every setting, so
+  it can't teach the dials anything, and it would let a setting that estimates high pass as one
+  that runs low. Such days are listed, not counted.
 - Nothing changes until you accept, and accepting needs MIN_DAYS days. Past estimate runs keep
   the settings they recorded.
 """
@@ -53,10 +55,13 @@ class CalibrationError(ValueError):
 # --------------------------------------------------------------------------
 
 def note(con: sqlite3.Connection, day: dt.date, minutes: int, key: Optional[str] = None,
-         text: Optional[str] = None, today: Optional[dt.date] = None) -> str:
+         text: Optional[str] = None, today: Optional[dt.date] = None,
+         projects: Sequence[str] = ()) -> str:
     """Record real development minutes for a day (key None: the day's total) or one ticket.
 
     Returns 'added' or 'changed'. A day's ticket figures may not add up to more than its total.
+    With projects (your project_keys), a ticket outside them is refused, the way Baldur never
+    counts such a key on a commit (UTF-8 and SHA-256 look like keys).
     """
     today = today or dt.date.today()
     if day > today:
@@ -68,6 +73,9 @@ def note(con: sqlite3.Connection, day: dt.date, minutes: int, key: Optional[str]
             key = muninn.normalize_key(key)
         except ValueError as exc:
             raise CalibrationError(str(exc)) from None
+        if projects and key.split("-")[0] not in {p.upper() for p in projects}:
+            raise CalibrationError(f"{key} isn't in your projects ({', '.join(projects)}), so Baldur never counts "
+                                   "time for it. Note the day's total instead, or add the project in setup.")
     text = muninn.scrub((text or "").strip()) or None
     if text and len(text) > 200:
         raise CalibrationError("Keep the note under 200 characters.")
@@ -151,6 +159,7 @@ class Fit:
     best: Optional[Score]              # None: no setting estimates low on average
     tried: int
     unmeasured: List[str] = field(default_factory=list)   # dials these days can't tell apart
+    flat: List[dt.date] = field(default_factory=list)     # days estimated the same under every setting
 
     @property
     def days(self) -> List[dt.date]:
@@ -211,12 +220,26 @@ def fit(con: sqlite3.Connection, settings: Settings, first: Optional[dt.date] = 
                      for k, m in figures.items() if k is not None}
     days = sorted(actual)
 
-    def score(d: Dials) -> Score:
+    def totals(d: Dials) -> Tuple[Dict[dt.date, int], Dict[Tuple[dt.date, str], int]]:
         est = E.estimate(inputs.commits, inputs.checkouts, inputs.meetings, days, _params(base, d),
                          calendar=inputs.calendar, calendar_synced=inputs.calendar_synced,
                          reflog_since=inputs.reflog_since, prior_patches=inputs.prior_patches, now=now,
                          copies=inputs.copies)
-        per_day, per_ticket = _day_totals(est)
+        return _day_totals(est)
+
+    raw = {d: totals(d) for d in grid}
+    # A day estimated the same under every setting is the same error under every setting: it can't
+    # rank them, and its error would shift every setting's average alike (review R5).
+    flat = [day for day in days if len({raw[d][0].get(day, 0) for d in grid}) == 1]
+    days = [day for day in days if day not in flat]
+    actual = {day: actual[day] for day in days}
+    if not days:
+        raise CalibrationError("Every day you noted comes out the same under every setting, so they can't tell the "
+                               "settings apart. Note days with ordinary commits: cli.py actual DATE TIME")
+    noted_tickets = {k: m for k, m in noted_tickets.items() if k[0] in actual}
+
+    def score(d: Dials) -> Score:
+        per_day, per_ticket = raw[d]
         errors = [per_day.get(day, 0) - actual[day] for day in days]
         tickets = [abs(per_ticket.get(k, 0) - m) for k, m in noted_tickets.items()]
         return Score(d, sum(abs(e) for e in errors) / len(errors), sum(errors) / len(errors),
@@ -240,14 +263,15 @@ def fit(con: sqlite3.Connection, settings: Settings, first: Optional[dt.date] = 
                 for v in _values(values, getattr(current, name))}
         if len(seen) == 1:
             unmeasured.append(name)
-    return Fit(actual, left_out, by_dials[current], best, len(grid), unmeasured)
+    return Fit(actual, left_out, by_dials[current], best, len(grid), unmeasured, flat)
 
 
 def accept(con: sqlite3.Connection, settings: Settings, result: Fit) -> int:
     """Make the best fit your settings, with an active calibration_runs row. Returns its id.
 
-    baldur.json is written first, then Muninn in one transaction; if Muninn refuses, the file is
-    put back, so the settings and the active calibration never disagree.
+    Muninn's write lock is taken first, then baldur.json is written and the row stored in that one
+    transaction; if anything fails, the file is put back. So two accepts can't interleave, and the
+    settings and the active calibration never disagree.
     """
     if not result.enough:
         raise CalibrationError(f"Calibration needs real hours for at least {MIN_DAYS} days with commits; you have "
@@ -261,10 +285,21 @@ def accept(con: sqlite3.Connection, settings: Settings, result: Fit) -> int:
         raise CalibrationError("baldur.json has a mistake in it; fix it before accepting a calibration.")
     best = result.best
     path = config.settings_path()
-    before = path.read_bytes() if path.exists() else None
-    config.update({name: getattr(best.dials, name) for name in DIALS})
+    before: Optional[bytes] = None
+    wrote = False
     try:
+        # Muninn's write lock first (BEGIN IMMEDIATE), then the file, then the row: two accepts can't
+        # interleave, and baldur.json never holds dials Muninn hasn't recorded (review R12). The file
+        # is read under the lock too, so putting it back can't undo another accept.
         with muninn.transaction(con):
+            before = path.read_bytes() if path.exists() else None
+            try:
+                config.update({name: getattr(best.dials, name) for name in DIALS})
+            except OSError as exc:
+                raise CalibrationError(f"Couldn't write {path.name} ({exc.strerror or type(exc).__name__}), so "
+                                       "nothing was changed. Check that the settings folder can be written to, then "
+                                       "accept again.") from None
+            wrote = True
             previous = con.execute("SELECT id FROM calibration_runs WHERE is_active = 1").fetchone()
             con.execute("UPDATE calibration_runs SET is_active = 0 WHERE is_active = 1")
             cid = int(con.execute(
@@ -277,7 +312,8 @@ def accept(con: sqlite3.Connection, settings: Settings, result: Fit) -> int:
                 "error_before": round(result.current.mae, 1), "error_after": round(best.mae, 1),
                 "replaced": int(previous[0]) if previous else None})
     except BaseException:
-        _put_back(path, before)
+        if wrote:
+            _put_back(path, before)
         raise
     return cid
 

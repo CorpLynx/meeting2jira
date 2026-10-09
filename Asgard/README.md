@@ -116,17 +116,21 @@ counts and keys to the chat, never code.
 
 ```
 baldur.cmd ai show 2026-10-01
-baldur.cmd approve --date 2026-10-01 --ai
+baldur.cmd approve --date 2026-10-01 --ai 3f2a9c1d
 ```
 
-- `ai show` lists the suggestions, and `report` shows them under the day.
-- `approve --date ... --ai` takes them. Add `--set PROJ-42=1h` to give your own figure for a
-  ticket.
+- `ai show` lists the suggestions, what Odin's worklog comment will say for each, and the command
+  that takes them. `report` shows them under the day.
+- `approve --date ... --ai ID` takes them. The ID names exactly the figures you saw: if a new agent
+  report or review changes them first, nothing is approved and Baldur shows the new ones. Add
+  `--set PROJ-42=1h` to give your own figure for a ticket; for a ticket the AI raised, give your own
+  figure for the ticket it took the time from too, or approve without `--ai`.
 
 Every suggestion is checked in code. A suggestion never raises a day, adds a ticket, or goes
 without cited evidence. An agent's estimate can move time between tickets or lower it, never add
-time git doesn't show. Nothing changes until you approve. When you take a figure, Odin's worklog
-comment says so.
+time git doesn't show, and time Jira already holds for a ticket never moves (Odin never takes time
+back out of Jira). Nothing changes until you approve. When you take a figure, Odin's worklog
+comment says so, in exactly the words `ai show` showed you.
 
 `baldur.cmd` tries `py -3`, then `py`, then `python`. If your computer blocks `.cmd` files, run `py -3 cli.py` (or `python cli.py`) from the same folder instead. Settings are in `%LOCALAPPDATA%\Asgard\settings\baldur.json`; the Baldur spec explains each one.
 

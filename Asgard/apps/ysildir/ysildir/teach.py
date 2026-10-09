@@ -77,7 +77,9 @@ def tools_guide(config: Config) -> str:
             "`baldur.cmd setup --set review_mode=metadata` once their ISSO agrees.", "",
             "Never a tool, whatever is switched on: approving, rejecting or changing time, real hours, calibration, "
             "Baldur's settings, keys or repositories, collecting, and posting to Jira. Give the person the command "
-            "instead, such as `baldur.cmd approve --date 2026-10-01 --ai`.", "",
+            "instead, such as `baldur.cmd approve --date 2026-10-01 --ai 3f2a9c1d` (the id names the figures "
+            "they saw).",
+            "",
             "When MCP isn't available at all, the command-line column still works, and AI review works through "
             "the clipboard: `baldur.cmd ai pack DATE`, then `baldur.cmd ai review DATE ANSWER.json`."]
     return "\n".join(out) + "\n"

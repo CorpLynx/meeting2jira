@@ -85,8 +85,10 @@ the same object, and the same rules (see "Through Ysildir", below).
 - `baldur.cmd report 2026-10-01`: the day report the person reviews.
 - `baldur.cmd ai guide`: this guide.
 
-When the person asks how their day looks, show them `ai show` and `report`, and tell them that
-`baldur.cmd approve --date DATE --ai` takes the AI-assisted figures, if they agree with them.
+When the person asks how their day looks, show them `ai show` and `report`, and give them the
+command `ai show` ends with, `baldur.cmd approve --date DATE --ai ID`, which takes the AI-assisted
+figures if they agree with them. The ID names exactly the figures they saw: if a report or review
+changes them first, Baldur refuses and shows the new ones.
 
 ## Through Ysildir (MCP)
 
@@ -137,16 +139,20 @@ agent  → baldur_day {"date": "2026-10-01"}
        ← {"tickets": [{"key": "PROJ-42", "estimate": 90, "ai_assisted": 45, "reason": "kiro put it at 45m;
                        commits gave 1h30m", ...},
                       {"key": "PROJ-51", "estimate": 30, "ai_assisted": 75, ...}],
-          "ai": {"method": "agent", "source": "agent estimates (kiro, 2 reports)", "reports": ["r12", "r13"]},
-          "take": "baldur.cmd approve --date 2026-10-01 --ai", "keep": "baldur.cmd approve --date 2026-10-01", ...}
+          "ai": {"id": "3f2a9c1d", "method": "agent", "source": "agent estimates (kiro, 2 reports)",
+                 "reports": ["r12", "r13"]},
+          "take": "baldur.cmd approve --date 2026-10-01 --ai 3f2a9c1d",
+          "keep": "baldur.cmd approve --date 2026-10-01", ...}
 agent  → person: "From git, Baldur estimates PROJ-42 at 1h30m and PROJ-51 at 30m. With my two
           reports (r12, r13) it suggests 45m and 1h15m: the same 2h day, with 45m moved to PROJ-51.
-          To take those: baldur.cmd approve --date 2026-10-01 --ai. To keep Baldur's:
+          To take those: baldur.cmd approve --date 2026-10-01 --ai 3f2a9c1d. To keep Baldur's:
           baldur.cmd approve --date 2026-10-01."
 ```
 
 Say where each number comes from: Baldur's estimate from git, an AI-assisted figure, or what the
-person approved. Baldur used the low end of r13's range, 75m.
+person approved. Baldur used the low end of r13's range, 75m. Each ticket's `worklog_line` is what
+Odin's worklog comment will say if the person takes the figure; show it to them as it is. Time Jira
+already holds for a ticket never moves: Odin never takes time back out of Jira.
 
 ### D. Reviewing a day, when the person asks
 
@@ -163,7 +169,7 @@ agent  → baldur_submit_review {"date": "2026-10-01", "model": "<your model>", 
                            {"ticket": "PROJ-51", "minutes": 45, "confidence": "medium", "evidence": ["r13"],
                             "reason": "The form validation was the real work."}]}}
        ← {"figures": {"PROJ-42": 45, "PROJ-51": 75}, "flags": [],
-          "take": "baldur.cmd approve --date 2026-10-01 --ai", ...}
+          "take": "baldur.cmd approve --date 2026-10-01 --ai 7e08671d", ...}
 ```
 
 The review needs Baldur's `review_mode` set to `metadata`, which only the person can do. If the
@@ -174,7 +180,7 @@ day changes before you submit, Baldur refuses the reply: ask for a new pack.
 ```
 person → "Just approve it for me."
 agent  → person: "Approving is yours to do, so there's no tool for it. Run:
-          baldur.cmd approve --date 2026-10-01 --ai"
+          baldur.cmd approve --date 2026-10-01 --ai 7e08671d"
 ```
 
 In Kiro, a guard hook blocks the command if you run it in the terminal anyway.

@@ -324,14 +324,14 @@ def cmd_approve(con: sqlite3.Connection, s: config.Settings, args: argparse.Name
                 raise CliError(f"--set takes KEY=MINUTES, like PROJ-42=1h15m; got {item!r}")
             overrides[key.strip().upper()] = parse_day_minutes(value)
         day = parse_day(args.date)
-        if args.ai:
-            ids = assist.approve_day(con, s, day, overrides)
+        if args.ai is not None:
+            ids = assist.approve_day(con, s, day, overrides, shown=args.ai)
         else:
             ids = approvals.approve_day(con, day.isoformat(), overrides)
         if not ids:
             raise CliError(f"Nothing to approve on {day.isoformat()}. See cli.py report {day.isoformat()}")
     else:
-        if args.ai:
+        if args.ai is not None:
             raise CliError("--ai goes with --date: it takes a whole day's AI-assisted figures.")
         if args.set:
             raise CliError("--set goes with --date; for one proposal use --minutes")
@@ -417,7 +417,7 @@ def cmd_actual(con: sqlite3.Connection, s: config.Settings, args: argparse.Names
     if not args.time:
         raise CliError("Give the real time too, like: cli.py actual 2026-10-01 6h15m")
     minutes = parse_day_minutes(args.time)
-    done = calibrate.note(con, day, minutes, args.key, args.note)
+    done = calibrate.note(con, day, minutes, args.key, args.note, projects=s.project_keys)
     print(f"Noted {E.fmt(minutes)} of {what} on {report.day_name(day)} ({done}).")
     days = sum(1 for figures in calibrate.actuals(con).values() if None in figures)
     if days < calibrate.MIN_DAYS:
@@ -481,6 +481,10 @@ def cmd_calibrate(con: sqlite3.Connection, s: config.Settings, args: argparse.Na
         print(f"\n  Left out {store.plural(len(result.left_out), 'day')} with real hours but no commits of yours "
               f"({', '.join(d.isoformat() for d in result.left_out[:4])}{', ...' if len(result.left_out) > 4 else ''}): "
               "work Baldur can't see can't calibrate it.")
+    if result.flat:
+        print(f"  Left out {store.plural(len(result.flat), 'day')} Baldur estimates the same under every setting "
+              f"({', '.join(d.isoformat() for d in result.flat[:4])}{', ...' if len(result.flat) > 4 else ''}): "
+              "they can't tell the settings apart.")
     if result.unmeasured:
         print(f"  These days can't tell settings apart for: "
               f"{', '.join(calibrate.DIAL_NAMES[n] for n in result.unmeasured)}; those stay as they are.")
@@ -584,7 +588,7 @@ def cmd_ai_list(con: sqlite3.Connection, s: config.Settings, args: argparse.Name
         gone = "  WITHDRAWN" if r["status"] != "recorded" else ""
         print(f"  {r['id']:<6} {r['date']}  {r['agent'][:12]:<12} {E.fmt(r['minutes']):>6}{low:<12} "
               f"{r['confidence']:<7} {r['key'] or '-':<11} {store.plural(r['commits'], 'commit'):<10} "
-              f"{r['summary'][:60]}{gone}")
+              f"{approvals.clean_line(r['summary'], 60)}{gone}")
     return 0
 
 
@@ -598,10 +602,12 @@ def cmd_ai_withdraw(con: sqlite3.Connection, s: config.Settings, args: argparse.
 def _suggestion_json(found: Optional[assist.DaySuggestions], day: dt.date) -> Dict[str, object]:
     if found is None:
         return {"day": day.isoformat(), "method": None, "tickets": [], "flags": []}
+    take = f"cli.py approve --date {day.isoformat()} --ai {found.digest()}" if found.changed() else None
     return {"day": day.isoformat(), "method": found.method, "source": found.source, "pack": found.pack_hash,
-            "reports": [f"r{x}" for x in found.reports], "flags": found.flags,
+            "reports": [f"r{x}" for x in found.reports], "flags": found.flags, "id": found.digest(), "take": take,
             "tickets": [{"key": t.key, "estimate": t.baseline, "ai_assisted": t.figure, "reason": t.reason,
-                         "confidence": t.confidence} for t in found.tickets.values()]}
+                         "confidence": t.confidence, "worklog_line": found.posted_line(t.key) if t.changed else None}
+                        for t in found.tickets.values()]}
 
 
 def cmd_ai_show(con: sqlite3.Connection, s: config.Settings, args: argparse.Namespace) -> int:
@@ -640,8 +646,11 @@ def cmd_ai_review(con: sqlite3.Connection, s: config.Settings, args: argparse.Na
            if changed else "no changes") + ".")
     for flag in checked.flags:
         print(f"  ! {flag}")
-    if changed:
-        print(f"Take them with: cli.py approve --date {day.isoformat()} --ai")
+    found = assist.suggestions(con, s, day)
+    if changed and found is not None and found.method == "review":
+        for t in found.changed():
+            print(f"  {t.key}: Odin's worklog comment will say: {found.posted_line(t.key)}")
+        print(f"Take them with: cli.py approve --date {day.isoformat()} --ai {found.digest()}")
     return 0
 
 
@@ -769,11 +778,14 @@ def _log(text: str) -> None:
 # --------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="cli.py", description="Baldur: work estimates from git, for you to review.")
+    # allow_abbrev=False: argparse would otherwise take --acc for --accept and --of for --off, which the agent
+    # guard (agents/hooks/guard_baldur.py) matches only in full.
+    parser = argparse.ArgumentParser(prog="cli.py", description="Baldur: work estimates from git, for you to review.",
+                                     allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", metavar="command")
 
     def add(name: str, func, help_text: str) -> argparse.ArgumentParser:
-        p = sub.add_parser(name, help=help_text, description=help_text)
+        p = sub.add_parser(name, help=help_text, description=help_text, allow_abbrev=False)
         p.set_defaults(func=func)
         return p
 
@@ -818,7 +830,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--date", metavar="DATE", help="approve every open ticket that day")
     p.add_argument("--minutes", metavar="TIME", help="approve one proposal at another figure, like 1h15m")
     p.add_argument("--set", action="append", default=[], metavar="KEY=TIME", help="with --date: another figure")
-    p.add_argument("--ai", action="store_true", help="with --date: take the day's AI-assisted figures (cli.py ai show)")
+    p.add_argument("--ai", nargs="?", const="", metavar="ID",
+                   help="with --date: take the day's AI-assisted figures, by the id cli.py ai show gave them")
 
     p = add("reject", cmd_reject, "Reject proposals, by id or a whole day")
     p.add_argument("ids", nargs="*", type=int, metavar="ID")
@@ -851,7 +864,7 @@ def build_parser() -> argparse.ArgumentParser:
     ai = p.add_subparsers(dest="ai_action", metavar="action")
 
     def ai_add(name: str, func, help_text: str) -> argparse.ArgumentParser:
-        q = ai.add_parser(name, help=help_text, description=help_text)
+        q = ai.add_parser(name, help=help_text, description=help_text, allow_abbrev=False)
         q.set_defaults(ai_func=func)
         return q
 

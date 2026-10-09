@@ -299,7 +299,10 @@ def render_ai(ai: "assist.DaySuggestions", day: dt.date) -> str:
     if changed:
         total = sum(t.figure for t in ai.tickets.values()) - sum(t.baseline for t in ai.tickets.values())
         out.append(f"  Day: {'unchanged' if total == 0 else E.fmt(-total) + ' lower'}; an AI figure never raises a day.")
-        out.append(f"  Take them: cli.py approve --date {day.isoformat()} --ai    "
+        out.append("  If you take them, Odin's worklog comments will say:")
+        for t in changed:
+            out.append(f"    {t.key}: {ai.posted_line(t.key)}")
+        out.append(f"  Take them: cli.py approve --date {day.isoformat()} --ai {ai.digest()}    "
                    "or set your own: --set KEY=TIME")
     elif ai.tickets:
         out.append("  The estimate stands: nothing here changes a figure.")

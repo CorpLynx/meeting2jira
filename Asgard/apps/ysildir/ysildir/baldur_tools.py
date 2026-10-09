@@ -117,9 +117,10 @@ def baldur_day(date: OptionalDay = None, include_report: IncludeReport = False) 
             key=t.key, estimate=t.estimate, open=t.open_id is not None, approved=t.approved, jira_holds=t.held,
             problem=t.problem, ai_assisted=s.figure if s else None,
             reason=rules.clean_line(s.reason, 200) if said and s.reason else None,
-            confidence=s.confidence if said else None, evidence=list(s.evidence) if s else []))
+            confidence=s.confidence if said else None, evidence=list(s.evidence) if s else [],
+            worklog_line=ai.posted_line(t.key) if ai and s is not None and s.changed else None))
     changed = bool(ai and ai.changed())
-    untrusted = ["tickets[].reason", "flags[]", "ai.source", "ai.flags[]"]
+    untrusted = ["tickets[].reason", "tickets[].worklog_line", "flags[]", "ai.source", "ai.flags[]"]
     report = None
     if include_report:
         report = view.report if len(view.report) <= REPORT_CHARS else view.report[:REPORT_CHARS] + "\n[cut]"
@@ -127,9 +128,10 @@ def baldur_day(date: OptionalDay = None, include_report: IncludeReport = False) 
     return DayView(
         day=day.isoformat(), tickets=tickets, untracked=view.untracked,
         flags=[rules.clean_line(f, 300) for f in view.flags],
-        ai=DayAI(method=ai.method, source=rules.clean_line(ai.source, 120), reports=[f"r{n}" for n in ai.reports],
-                 flags=[rules.clean_line(f, 300) for f in ai.flags]) if ai else None,
-        take=f"{BALDUR} approve --date {day.isoformat()} --ai" if changed else None,
+        ai=DayAI(id=ai.digest(), method=ai.method, source=rules.clean_line(ai.source, 120),
+                 reports=[f"r{n}" for n in ai.reports], flags=[rules.clean_line(f, 300) for f in ai.flags])
+        if ai else None,
+        take=f"{BALDUR} approve --date {day.isoformat()} --ai {ai.digest()}" if changed and ai else None,
         keep=f"{BALDUR} approve --date {day.isoformat()}" if changed else None,
         report=report, untrusted_fields=untrusted)
 
@@ -159,12 +161,17 @@ def baldur_submit_review(date: Day, reply: ReviewReply, model: ModelName = None)
         except (assist.AssistError, rules.ReviewRejected) as exc:
             raise Refused(f"The reply wasn't used: {exc} Baldur's estimate stands as it is. Show the person this "
                           "message.") from None
+        latest = assist.suggestions(con, found, day)    # the figures as the person will see and take them
     changed = [k for k in checked.figures if checked.figures[k] != checked.baseline[k]]
-    take = f"{BALDUR} approve --date {day.isoformat()} --ai" if changed else None
+    taking = latest if latest is not None and latest.method == "review" and latest.changed() else None
+    take = f"{BALDUR} approve --date {day.isoformat()} --ai {taking.digest()}" if changed and taking else None
+    lines = {t.key: taking.posted_line(t.key) or "" for t in taking.changed()} if taking else {}
     if changed:
         moves = ", ".join(f"{k} {E.fmt(checked.baseline[k])} to {E.fmt(checked.figures[k])}" for k in changed)
-        message = f"Checked and stored the review: {moves}. Nothing changes until you approve; to take it: {take}"
+        message = (f"Checked and stored the review: {moves}. Nothing changes until you approve"
+                   + (f"; to take it: {take}" if take else "."))
     else:
         message = "Checked and stored the review: it changes nothing, so Baldur's estimate stands."
     return ReviewChecked(day=day.isoformat(), baseline=dict(checked.baseline), figures=dict(checked.figures),
-                         flags=list(checked.flags), take=take, message=message, untrusted_fields=["flags[]"])
+                         flags=list(checked.flags), take=take, worklog_lines=lines, message=message,
+                         untrusted_fields=["flags[]", "worklog_lines"])

@@ -108,7 +108,8 @@ work without MCP.
 Date ranges cover at most 31 days. There is never a tool to approve, reject or change time, note
 real hours, accept a calibration, change settings, keys or repositories, collect, post, or reach
 Jira or the network; a test checks the tool list, and that no Ysildir module calls a decision. An
-agent gives you the command instead, for example `baldur.cmd approve --date 2026-10-01 --ai`.
+agent gives you the command instead, for example `baldur.cmd approve --date 2026-10-01 --ai 3f2a9c1d`:
+the id names exactly the figures `baldur_day` showed, so a later report can't change what you approve.
 
 Freya's `v_review_evidence`, and Loki's and Freya's prompts, come later, once those apps collect
 data.
@@ -156,7 +157,7 @@ the missing-SDK message, static checks on the source (no `print`, no decision ca
 `MODULES.md` says) and Kiro's guard. The SDK tests skip, saying why, without the SDK or on Python
 older than 3.10. Breaking a guarantee on purpose (the switch check, a `readOnlyHint`, a cap, the
 report's `extra="forbid"`, the read-only connection, the payload allow-list, cleaning, the
-instructions' filtering) fails a test each time.
+instructions' filtering, the figures' id in `take`, a ticket's `worklog_line`) fails a test each time.
 
 ## Needs the workstation
 

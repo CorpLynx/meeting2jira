@@ -236,7 +236,8 @@ day's estimate the way the clipboard tier does, so that I can decide faster.
    - the AI-assisted figures, with reason, confidence and evidence;
    - the day report text.
 2. WHEN the day has AI-assisted figures that change it THEN `baldur_day` SHALL include the
-   command the person runs to take them (`baldur.cmd approve --date DATE --ai`). It SHALL NOT
+   command the person runs to take them (`baldur.cmd approve --date DATE --ai ID`, where the id
+   names exactly the figures shown), and each ticket's worklog line as Odin will post it. It SHALL NOT
    offer to run it.
 3. `baldur_review_pack(date)` SHALL return the day's pack and the review prompt **(repo:
    `assist.day_pack`, `clipboard_text`)**. Like `baldur.cmd ai pack`, it stores the day's

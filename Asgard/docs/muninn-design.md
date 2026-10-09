@@ -2,7 +2,8 @@
      The live doc is the source of truth; diagrams appear here only as placeholders.
      Edited here on 2026-10-09 (branch claude/baldur-estimation), not yet in the live doc: the v4
      sentences and check count in the schema paragraph, Baldur's tables in "Who owns what", "Agent estimates (v4)", the
-     two v4 indexes, the migrations list, and the encryption open decision. Carry these over to the live doc. -->
+     two v4 indexes, the migrations list, and the encryption open decision; and the 2026-10-09 review's fixes in
+     "Agent estimates (v4)". Carry these over to the live doc. -->
 
 # Muninn data layer design
 
@@ -387,13 +388,13 @@ An AI coding agent that worked a change with you can record what it thinks your 
 | `minutes` | INTEGER | 1–1440 | The agent's estimate of your working time on the change |
 | `minutes_low` | INTEGER | 1 to `minutes` | The low end of a range; Baldur counts it, since of two readings the smaller wins |
 | `confidence` | TEXT | high, medium, low |  |
-| `summary` | TEXT | 1–300 characters | One sentence. Baldur refuses code-like text before it gets here |
-| `report_hash` | TEXT | unique | The same report twice is stored once |
+| `summary` | TEXT | 1–300 characters | One sentence. Baldur refuses code, diff lines and control characters before it gets here |
+| `report_hash` | TEXT | unique | A digest of what the report says and the commits it cites. The same report is stored once while it counts; sent again after it was withdrawn, it's stored again with a suffix |
 | `status`, `withdrawn_at` | TEXT, ts | recorded, withdrawn; a withdrawal has its time | A newer report from the same agent on the same commits withdraws the older one |
 
 **`agent_estimate_commits`**: the commits a report is about: `estimate_id` and `sha` (7–64 lower-case hex characters). A SHA may be short, because an agent can record before Baldur has collected the commit; Baldur matches it by prefix when it reads the report. A report without commits is shown to you and never counted.
 
-Reports are facts. The trigger `agent_estimates_are_facts` allows one change, recorded → withdrawn with its time. `agent_estimates_are_kept` and the two triggers on `agent_estimate_commits` refuse every other edit or delete. `ix_agent_estimates_day` serves "the day's recorded reports", and `ix_agent_estimate_commits_sha` serves "reports citing these commits".
+Reports are facts. The trigger `agent_estimates_are_facts` allows one change, recorded → withdrawn with its time. `agent_estimates_are_kept` and the two triggers on `agent_estimate_commits` refuse every other edit or delete. A commit added to a report afterwards (an insert, which no v4 trigger stops) changes its digest: Baldur then doesn't count the report, and `--muninn check` reports it until it's withdrawn (`muninn.baldur.report_digest`; review R14). `ix_agent_estimates_day` serves "the day's recorded reports", and `ix_agent_estimate_commits_sha` serves "reports citing these commits".
 
 ## Meeting and BLUF tables (Loki)
 

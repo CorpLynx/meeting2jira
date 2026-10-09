@@ -98,9 +98,17 @@ def _approve(con: sqlite3.Connection, row: sqlite3.Row, minutes_final: Optional[
     _fits_in_day(con, row["local_date"], minutes, except_key=row["work_item_key"])
     con.execute("UPDATE day_proposals SET status = 'superseded' WHERE local_date = ? AND work_item_key = ? "
                 "AND status = 'approved'", (row["local_date"], row["work_item_key"]))
+    record = None
+    if note:
+        # The note says which suggestion you took. A review already on the row from the same source
+        # (same method and pack) is the same suggestion's detail, so it's kept with it; one from
+        # another source is a different suggestion, kept apart under "earlier" so the two never mix.
+        old = review_of(row)
+        same = bool(old) and old.get("method") == note.get("method") and old.get("pack_hash") == note.get("pack_hash")
+        record = dict(old, **note) if same else (dict(note, earlier=old) if old else dict(note))
     con.execute("UPDATE day_proposals SET status = 'approved', minutes_final = ?, decided_at = ?, "
-                "review = json_patch(review, ?) WHERE id = ?",
-                (minutes, at or utcnow(), json.dumps(note or {}), row["id"]))
+                "review = coalesce(?, review) WHERE id = ?",
+                (minutes, at or utcnow(), json.dumps(record, sort_keys=True) if record else None, row["id"]))
     _emit_approved(con, int(row["id"]), row, minutes)
 
 
@@ -184,7 +192,11 @@ def reject_day(con: sqlite3.Connection, local_date: str, at: Optional[str] = Non
 
 def change_approval(con: sqlite3.Connection, proposal_id: int, minutes_final: int,
                     at: Optional[str] = None) -> int:
-    """Approve a different number for an approved day. Returns the new proposal's id."""
+    """Approve a different number for an approved day. Returns the new proposal's id.
+
+    The new row keeps the old one's review record without its "taken" mark: a figure you changed
+    by hand is yours alone, whatever number you change it to, so Odin's comment has no Reviewed: line.
+    """
     with transaction(con):
         row = _proposal(con, proposal_id)
         if row["status"] != "approved":
@@ -197,7 +209,8 @@ def change_approval(con: sqlite3.Connection, proposal_id: int, minutes_final: in
             "INSERT INTO day_proposals (estimate_run_id, local_date, work_item_key, minutes_raw, minutes_proposed, "
             "minutes_final, first_started_at, basis, basis_hash, review, status, decided_at) "
             "SELECT estimate_run_id, local_date, upper(trim(work_item_key)), minutes_raw, minutes_proposed, ?, "
-            "first_started_at, basis, basis_hash, review, 'approved', ? FROM day_proposals WHERE id = ? RETURNING id",
+            "first_started_at, basis, basis_hash, json_remove(review, '$.taken'), 'approved', ? FROM day_proposals "
+            "WHERE id = ? RETURNING id",
             (int(minutes_final), at or utcnow(), proposal_id)).fetchone()[0]
         _emit_approved(con, int(new_id), row, int(minutes_final))
     return int(new_id)
@@ -207,13 +220,21 @@ def change_approval(con: sqlite3.Connection, proposal_id: int, minutes_final: in
 # Agent estimates: what a coding agent says your time on a change was
 # --------------------------------------------------------------------------
 
-_AGENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._\-]{0,39}$")
+_AGENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,39}$")     # one word: it names the source in Jira
 _GUIDE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,39}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{7,64}$")
 _FIELDS = {"schema", "agent", "model", "guide", "date", "key", "commits", "minutes", "minutes_low", "confidence",
            "summary", "started_at", "ended_at"}
-# What makes a summary something other than one plain sentence: a code block, a diff, a patch hunk.
+# What makes a summary something other than one plain sentence: a code block, a diff, a patch hunk,
+# a diff line, a statement or an operator. Prose about code ("Return the retry count to 3") passes.
 _CODE_RE = re.compile(r"```|^\s*(diff --git|@@ |\+\+\+ |--- )", re.MULTILINE)
+_CODE_LINE_RE = re.compile(
+    r"^\s*[-+]\s"                                                     # a diff line: "- retries = 3"
+    r"|\b(def|func|fn)\s+\w+\(|\bclass\s+\w+\s*(\([^()]*\))?\s*[:{]"  # a definition: "def retry(", "class Retry:"
+    r"|\bfunction\s*\w*\s*\([^()]*\)\s*\{"                            # "function retry(n) {"
+    r"|\b(const|let|var)\s+\w+\s*="                                   # a declaration
+    r"|\w\s+=\s+\S|==|!=|&&|\|\||\+=|-=|::|;\s*$"                     # an assignment, an operator
+    r"|\w\([^()]*\)\s*(\{|=>|->)")                                    # a call with a body, a signature
 FUTURE_SLACK = dt.timedelta(minutes=5)
 
 
@@ -261,7 +282,10 @@ def _whole_minutes(value: Any, name: str) -> int:
 def _summary(value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
         raise MuninnError("summary is required: one sentence on what the change was.")
-    if _CODE_RE.search(value) or value.count("\n") > 2:
+    if any(not ch.isprintable() and not ch.isspace() for ch in value):
+        raise MuninnError("summary must be plain text: it has a control character (a terminal escape, a zero-width "
+                          "or direction mark). One sentence on what the change was.")
+    if _CODE_RE.search(value) or value.count("\n") > 2 or _CODE_LINE_RE.search(" ".join(value.split())):
         raise MuninnError("summary must be one plain sentence, with no code or diff: Muninn keeps metadata only.")
     text = " ".join(scrub(value).split())
     if len(text) > 300:
@@ -287,6 +311,23 @@ def _commits(value: Any) -> List[str]:
     return out
 
 
+def _digest(canonical: Dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode("utf-8")).hexdigest()[:32]
+
+
+def report_digest(row: sqlite3.Row, shas: Iterable[str]) -> str:
+    """The digest a stored report was recorded under, from its row and its cited commits.
+
+    It is the first 32 characters of report_hash. A report whose digest no longer matches has had
+    its commits changed after it was recorded: assist.load_reports doesn't count it, and
+    integrity.check reports it.
+    """
+    return _digest({"agent": row["agent"].lower(), "date": row["local_date"], "key": row["work_item_key"],
+                    "minutes": row["minutes"], "low": row["minutes_low"], "confidence": row["confidence"],
+                    "summary": row["summary"], "commits": sorted(shas), "started": row["started_at"],
+                    "ended": row["ended_at"]})
+
+
 def record_agent_estimate(con: sqlite3.Connection, report: Dict[str, Any], *, via: str = "cli",
                           now: Optional[dt.datetime] = None) -> Recorded:
     """Store one agent's estimate of your working time on a change (REPORT_SCHEMA).
@@ -307,7 +348,8 @@ def record_agent_estimate(con: sqlite3.Connection, report: Dict[str, Any], *, vi
     now = (now or dt.datetime.now(dt.timezone.utc)).astimezone(dt.timezone.utc)
     agent = _text(report, "agent")
     if not agent or not _AGENT_RE.match(agent):
-        raise MuninnError("agent must name the tool, like \"kiro\" or \"copilot\" (letters, digits, . _ -).")
+        raise MuninnError("agent must name the tool in one word, like \"kiro\", \"copilot\" or \"claude-code\" "
+                          "(letters, digits, . _ -).")
     model = _text(report, "model")
     if model and (len(model) > 80 or not model.isprintable()):
         raise MuninnError("model must be the model's name, under 80 characters.")
@@ -353,11 +395,17 @@ def record_agent_estimate(con: sqlite3.Connection, report: Dict[str, Any], *, vi
     canonical = {"agent": agent.lower(), "date": day.isoformat(), "key": key, "minutes": minutes, "low": low,
                  "confidence": confidence, "summary": summary, "commits": sorted(commits),
                  "started": to_ts(started) if started else None, "ended": to_ts(ended) if ended else None}
-    digest = hashlib.sha256(json.dumps(canonical, sort_keys=True).encode("utf-8")).hexdigest()[:32]
+    digest = _digest(canonical)
     with transaction(con):
-        same = con.execute("SELECT id FROM agent_estimates WHERE report_hash = ?", (digest,)).fetchone()
-        if same:
-            return Recorded(int(same[0]), "duplicate")
+        # The same report while it still counts is stored once. Once withdrawn (by hand, or replaced by a
+        # newer one), sending it again records it again: 45m, then 30m, then 45m leaves 45m counting.
+        # report_hash is unique, so a re-recording carries a suffix after the digest.
+        same = con.execute("SELECT id, status FROM agent_estimates WHERE substr(report_hash, 1, 32) = ? "
+                           "ORDER BY id DESC", (digest,)).fetchall()
+        live = [r for r in same if r["status"] == "recorded"]
+        if live:
+            return Recorded(int(live[0]["id"]), "duplicate")
+        stored_hash = f"{digest}.{len(same)}" if same else digest
         # A newer report from the same agent on exactly the same commits replaces the older one.
         replaced: List[int] = []
         if commits:
@@ -375,7 +423,7 @@ def record_agent_estimate(con: sqlite3.Connection, report: Dict[str, Any], *, vi
             "ended_at, minutes, minutes_low, confidence, summary, report_hash) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
             (via, agent, model, guide, key, day.isoformat(), to_ts(started) if started else None,
-             to_ts(ended) if ended else None, minutes, low, confidence, summary, digest)).fetchone()[0])
+             to_ts(ended) if ended else None, minutes, low, confidence, summary, stored_hash)).fetchone()[0])
         con.executemany("INSERT INTO agent_estimate_commits (estimate_id, sha) VALUES (?, ?)",
                         [(new_id, s) for s in commits])
         emit(con, "baldur", "agent_estimate.recorded", "agent_estimates", new_id, key,
@@ -493,8 +541,31 @@ def _cited(item: Any, evidence: Set[str]) -> bool:
     return text in evidence
 
 
+def held_minutes(con: sqlite3.Connection, local_date: str, keys: Iterable[str]) -> Dict[str, int]:
+    """Minutes Jira already holds for each ticket on a local day, as Odin last saw them.
+
+    Development worklogs only (meetings are logged apart), counted the way v_day_status counts them:
+    started that day, or posted for one of that day's approvals. Keys resolve through
+    work_item_aliases; a key Odin hasn't looked up holds nothing yet. Odin never takes time back out
+    of Jira, so an AI figure may not move these minutes to another ticket: they'd count twice.
+    """
+    lo, hi = con.execute("SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ?, 'utc'), "
+                         "strftime('%Y-%m-%dT%H:%M:%SZ', ?, '+1 day', 'utc')", (local_date, local_date)).fetchone()
+    out: Dict[str, int] = {}
+    for key in keys:
+        seconds = con.execute(
+            "SELECT coalesce(sum(w.seconds), 0) FROM work_item_aliases a "
+            "JOIN worklogs w ON w.work_item_id = a.work_item_id LEFT JOIN day_proposals p ON p.id = w.proposal_id "
+            "WHERE a.key = ? AND a.status <> 'not_found' AND w.state IN ('sending', 'posted') "
+            "AND w.origin <> 'meeting' AND ((w.started_at >= ? AND w.started_at < ?) OR p.local_date = ?)",
+            (key, lo, hi, local_date)).fetchone()[0]
+        if seconds:
+            out[key] = (int(seconds) + 59) // 60
+    return out
+
+
 def check_review(day: str, baseline: Dict[str, int], evidence: Iterable[str], reply: Any, *,
-                 step: int) -> CheckedReview:
+                 step: int, floors: Optional[Dict[str, int]] = None) -> CheckedReview:
     """Check a reply that adjusts one day; the whole reply is refused if any rule fails.
 
     baseline is each ticket's proposed minutes that day; evidence the commit SHAs, session ids
@@ -503,6 +574,8 @@ def check_review(day: str, baseline: Dict[str, int], evidence: Iterable[str], re
     2. Every adjustment names a ticket already in the baseline, and none goes below zero.
     3. Every adjustment cites at least one commit SHA, session id or report id from the evidence.
     4. At most 10 adjustments; the result is rounded down again.
+    5. No ticket is lowered below the minutes Jira already holds for it that day (floors,
+       held_minutes()): Odin never takes time back out of Jira, so those minutes would count twice.
     """
     data = parse_reply(reply)
     evidence = {str(e) for e in evidence}
@@ -550,6 +623,13 @@ def check_review(day: str, baseline: Dict[str, int], evidence: Iterable[str], re
     if below:
         raise ReviewRejected(f"The adjustments take {', '.join(below)} below zero.")
     figures = {k: _round_down(m, step) for k, m in figures.items()}
+    for key in sorted(figures):
+        held = (floors or {}).get(key, 0)
+        if figures[key] < baseline[key] and figures[key] < held:
+            lowest = min(baseline[key], -(-held // step) * step)
+            raise ReviewRejected(f"The adjustments lower {key} to {_hm(figures[key])}, below the {_hm(held)} Jira "
+                                 f"already holds for it that day. Odin never takes time back out of Jira, so the day "
+                                 f"would rise; {key} can go no lower than {_hm(lowest)}.")
     if sum(figures.values()) > sum(baseline.values()):         # can't happen after the checks; kept as the rule
         raise ReviewRejected("The adjusted day would be more than the estimate.")
     return CheckedReview(day, dict(baseline), figures, adjustments,
@@ -569,7 +649,8 @@ def store_review(con: sqlite3.Connection, local_date: str, reply: Any, *, eviden
         if not rows:
             raise ReviewRejected(f"{local_date} has no open proposals to review. Run cli.py estimate first.")
         baseline = {r["work_item_key"]: int(r["minutes_proposed"]) for r in rows}
-        checked = check_review(local_date, baseline, evidence, reply, step=step)
+        checked = check_review(local_date, baseline, evidence, reply, step=step,
+                               floors=held_minutes(con, local_date, baseline))
         at = utcnow()
         for r in rows:
             key = r["work_item_key"]

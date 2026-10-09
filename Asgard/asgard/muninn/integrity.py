@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from . import keys
+from . import baldur, keys
 from .db import (BusyError, MuninnError, _migration_statements, ago, available_migrations, latest_version, retry_busy,
                  transaction, user_version, utcnow)
 
@@ -450,6 +450,21 @@ def check(con: sqlite3.Connection, *, full: bool = True) -> CheckReport:
     if abandoned:
         report.add("info", "runs", f"{abandoned} sync runs stopped without finishing.",
                    "Nothing to do; Asgard marks them failed when it next starts.")
+
+    if "agent_estimates" in present:
+        # A report is stored under a digest of what it said and the commits it cites; commits added to it
+        # since (only a raw write can) change what it says. Baldur doesn't count such a report.
+        cited: Dict[int, List[str]] = {}
+        for eid, sha in con.execute("SELECT estimate_id, sha FROM agent_estimate_commits"):
+            cited.setdefault(int(eid), []).append(sha)
+        changed = [f"r{r['id']}" for r in con.execute("SELECT * FROM agent_estimates WHERE status = 'recorded' "
+                                                         "ORDER BY id")
+                   if baldur.report_digest(r, cited.get(int(r["id"]), [])) != r["report_hash"][:32]]
+        if changed:
+            report.add("warning", "agents", f"Agent estimates {', '.join(changed[:5])}"
+                       f"{' ...' if len(changed) > 5 else ''} cite commits they weren't recorded with, so Baldur "
+                       "doesn't count them.",
+                       f"Withdraw them (baldur.cmd ai withdraw {changed[0]}) and have the agent record them again.")
     return report
 
 

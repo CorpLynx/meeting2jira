@@ -235,3 +235,58 @@ class CalibrationCliTests(CalibrationCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --------------------------------------------------------------------------
+# The independent review of 2026-10-09 (docs/review-2026-10-09.md)
+# --------------------------------------------------------------------------
+
+class ReviewFindingsTests(CalibrationCase):
+    def test_r5_a_day_every_setting_estimates_alike_isnt_counted(self):
+        """Ten days at 1h58m real, where lead-in 15m (yours) runs low and 30m runs HIGH; an eleventh day's lone
+        commit at 00:05 rounds to 0 under every setting. Counting it made lead-in 30m pass as "runs low"."""
+        self.settings = config.update({"lead_in_minutes": 15})
+        self.days(10, 118)
+        self.commit(dt.datetime(2026, 9, 20, 0, 5).astimezone(), "PROJ-1")
+        calibrate.note(self.con, dt.date(2026, 9, 20), 360, today=TODAY)
+        result = self.fit()
+        self.assertEqual(result.flat, [dt.date(2026, 9, 20)])
+        self.assertNotIn(dt.date(2026, 9, 20), result.actual)
+        self.assertEqual(result.best.dials.lead_in_minutes, 15)
+        self.assertFalse(any(result.best.estimates[d] > result.actual[d] for d in result.days))
+        with self.assertRaisesRegex(calibrate.CalibrationError, "already fit best"):
+            calibrate.accept(self.con, self.settings, result)
+
+    def test_r12_baldur_json_is_written_while_muninn_is_locked(self):
+        self.days(10, 105)
+        seen = []
+        real = config.update
+
+        def spy(changes, path=None):
+            seen.append(self.con.in_transaction)
+            return real(changes, path)
+
+        with mock.patch.object(config, "update", spy):
+            calibrate.accept(self.con, self.settings, self.fit())
+        self.assertEqual(seen, [True], "the file is written inside the transaction that records it")
+
+    def test_r13_a_settings_folder_that_cant_be_written_is_a_message(self):
+        self.days(10, 105)
+        before = config.settings_path().read_bytes()
+        with mock.patch.object(config, "update", side_effect=PermissionError(13, "Permission denied")):
+            with self.assertRaisesRegex(calibrate.CalibrationError, "Couldn't write baldur.json .*nothing was changed"):
+                calibrate.accept(self.con, self.settings, self.fit())
+        self.assertEqual(config.settings_path().read_bytes(), before)
+        self.assertEqual(self.con.execute("SELECT count(*) FROM calibration_runs").fetchone()[0], 0)
+
+    def test_r16_real_hours_are_noted_only_for_your_projects(self):
+        for key in ("OPS-7", "SHA-256", "UTF-8"):
+            with self.subTest(key), self.assertRaisesRegex(calibrate.CalibrationError, "isn't in your projects"):
+                calibrate.note(self.con, dt.date(2026, 9, 1), 60, key, today=TODAY, projects=["PROJ"])
+        calibrate.note(self.con, dt.date(2026, 9, 1), 60, "proj-7", today=TODAY, projects=["PROJ"])
+        self.assertEqual(calibrate.actuals(self.con)[dt.date(2026, 9, 1)], {"PROJ-7": 60})
+        # A key noted before the fix can still be forgotten.
+        calibrate.note(self.con, dt.date(2026, 9, 2), 30, "OPS-7", today=TODAY)
+        self.assertTrue(calibrate.forget(self.con, dt.date(2026, 9, 2), "ops-7"))
+        self.assertNotIn(dt.date(2026, 9, 2), calibrate.actuals(self.con))
+

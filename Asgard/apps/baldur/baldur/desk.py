@@ -131,19 +131,20 @@ def load_day(con: sqlite3.Connection, settings: Settings, day: dt.date) -> DayVi
 
 
 def approve_day(con: sqlite3.Connection, settings: Settings, day: dt.date,
-                figures: Optional[Dict[str, int]] = None, take_ai: bool = False) -> List[int]:
+                figures: Optional[Dict[str, int]] = None, take_ai: Optional[str] = None) -> List[int]:
     """Store the day's estimate, then approve it; figures replace the proposals for those tickets.
 
-    take_ai approves at the day's AI-assisted figures instead (assist.approve_day); figures you
-    typed still win for their tickets.
+    take_ai, the id of the AI-assisted figures the window showed (DayView.ai.digest()), approves at
+    those figures instead (assist.approve_day), and only while they're still the ones shown; figures
+    you typed still win for their tickets.
     """
     figures = {k.upper(): int(v) for k, v in (figures or {}).items()}
     for key, minutes in figures.items():
         if not 0 <= minutes <= 24 * 60:
             raise DeskError(f"{key}: {minutes} minutes doesn't fit in a day.")
-    if take_ai:
+    if take_ai is not None:
         try:
-            return assist.approve_day(con, settings, day, figures)
+            return assist.approve_day(con, settings, day, figures, shown=take_ai)
         except assist.AssistError as exc:
             raise DeskError(str(exc)) from None
     store.run(con, settings, day, day)
