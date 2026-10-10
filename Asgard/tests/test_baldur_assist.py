@@ -14,6 +14,7 @@ import datetime as dt
 import io
 import json
 import random
+import sqlite3
 import sys
 import unittest
 from pathlib import Path
@@ -906,10 +907,36 @@ class ReviewFindingsTests(AssistCase):
         self.assertFalse({"adjustments", "model", "tier", "prompt_version"} & set(note))
         self.assertEqual(note["earlier"]["model"], "gpt-4o", "the stale review is kept apart, not mixed in")
 
-    def test_r14_a_report_whose_commits_changed_isnt_counted(self):
+    def test_r14_a_reports_commits_cant_be_added_to_later(self):
+        """Muninn refuses it now (a trigger in 0004), rather than only noticing afterwards."""
+        p42, p51 = self.worked()
+        done = self.record(commits=p42, minutes=45)
+        with self.assertRaisesRegex(sqlite3.DatabaseError, "commits are recorded with it"):
+            self.con.execute("INSERT INTO agent_estimate_commits (estimate_id, sha) VALUES (?, ?)", (done.id, p51[0]))
+        self.assertTrue(self.suggest().changed())
+
+    def test_p7_a_report_cant_be_back_dated(self):
+        with self.assertRaisesRegex(sqlite3.DatabaseError, "set by Muninn"):
+            self.con.execute("INSERT INTO agent_estimates (recorded_at, agent, local_date, minutes, confidence, summary, "
+                             "report_hash) VALUES ('2026-01-01T00:00:00Z', 'kiro', '2026-10-01', 30, 'low', 's', 'h')")
+        p42, _ = self.worked()
+        self.assertEqual(self.record(commits=p42, minutes=45).status, "recorded")
+
+    def test_a_database_made_before_the_triggers_gets_them_from_repair(self):
+        for name in ("agent_estimate_commits_with_their_report", "agent_estimates_recorded_now"):
+            self.con.execute(f"DROP TRIGGER {name}")
+        drift = muninn.integrity.schema_drift(self.con)
+        self.assertIn(("trigger", "agent_estimates_recorded_now"), drift.missing)
+        done, failed = muninn.integrity.repair_schema(self.con)
+        self.assertEqual(failed, [])
+        self.assertEqual(len(done), 2, done)
+        self.assertFalse(muninn.integrity.schema_drift(self.con))
+
+    def test_r14_on_a_database_made_before_the_trigger_the_change_is_still_caught(self):
         p42, p51 = self.worked()
         done = self.record(commits=p42, minutes=45)
         self.assertTrue(self.suggest().changed())
+        self.con.execute("DROP TRIGGER agent_estimate_commits_with_their_report")   # as before Oct 10
         self.con.execute("INSERT INTO agent_estimate_commits (estimate_id, sha) VALUES (?, ?)", (done.id, p51[0]))
         found = self.suggest()
         self.assertFalse(found.changed())

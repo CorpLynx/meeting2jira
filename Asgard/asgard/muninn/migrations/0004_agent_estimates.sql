@@ -92,5 +92,29 @@ BEGIN
     SELECT RAISE(ABORT, 'agent estimates are kept for audit; withdraw one instead');
 END;
 
+-- A report's commits are written with it and never added to later (review 2026-10-09, R14).
+-- muninn.baldur.record_agent_estimate inserts the report, then its commits, then the report's
+-- agent_estimate.recorded event, in one transaction. Once that event exists (events are never
+-- deleted) the report is sealed. Before it, only the connection that just inserted the report
+-- may add commits: an insert into a WITHOUT ROWID table leaves last_insert_rowid() alone, so it
+-- still names the report. (A database made before this trigger is caught by the report's
+-- digest, and --muninn repair adds the trigger.)
+CREATE TRIGGER agent_estimate_commits_with_their_report BEFORE INSERT ON agent_estimate_commits
+WHEN new.estimate_id IS NOT last_insert_rowid()
+  OR EXISTS (SELECT 1 FROM events WHERE entity_type = 'agent_estimates' AND entity_id = new.estimate_id
+             AND kind = 'agent_estimate.recorded')
+BEGIN
+    SELECT RAISE(ABORT, 'a report''s commits are recorded with it: withdraw it and record a new one');
+END;
+
+-- When a report was recorded is Muninn's to say (review 2026-10-09, P7): it defaults to now, and
+-- an explicit time must be now, give or take two minutes, so a report can't be back-dated.
+CREATE TRIGGER agent_estimates_recorded_now BEFORE INSERT ON agent_estimates
+WHEN new.recorded_at NOT BETWEEN strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-2 minutes')
+                             AND strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '+2 minutes')
+BEGIN
+    SELECT RAISE(ABORT, 'agent_estimates.recorded_at is set by Muninn when a report is recorded');
+END;
+
 PRAGMA user_version = 4;
 COMMIT;

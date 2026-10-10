@@ -692,6 +692,18 @@ if one("PRAGMA user_version") >= 4:
     for bad in ("ABCDEF1", "abc12", "g" * 40):
         rejects(f"an agent estimate's commit is a lower-case hex SHA of 7 to 64 characters: {bad!r} (v4)",
                 "INSERT INTO agent_estimate_commits (estimate_id, sha) VALUES (?, ?)", (ae, bad))
+    ae2 = one(AE, ("kiro", None, "2026-10-02", 30, None, "low", "Another report", "rh10"))
+    rejects("an older report's commits can't be added to (v4)",
+            "INSERT INTO agent_estimate_commits (estimate_id, sha) VALUES (?, ?)", (ae, "c" * 40))
+    con.execute("INSERT INTO agent_estimate_commits (estimate_id, sha) VALUES (?, ?)", (ae2, "d" * 40))
+    check("a report's own commits are recorded straight after it (v4)",
+          one("SELECT count(*) FROM agent_estimate_commits WHERE estimate_id = ?", (ae2,)) == 1)
+    one("INSERT INTO sources (kind, name) VALUES ('git', 'v4-other-insert') RETURNING id")
+    rejects("nor its own, once anything else was inserted (v4)",
+            "INSERT INTO agent_estimate_commits (estimate_id, sha) VALUES (?, ?)", (ae2, "e" * 40))
+    rejects("an agent estimate can't be back-dated (v4)",
+            "INSERT INTO agent_estimates (recorded_at, agent, local_date, minutes, confidence, summary, report_hash) "
+            "VALUES ('2026-01-01T00:00:00Z', 'kiro', '2026-10-01', 30, 'low', 's', 'rh11')")
     rejects("an agent estimate is never edited (v4)", "UPDATE agent_estimates SET minutes = 30 WHERE id = ?", (ae,))
     rejects("an agent estimate is never deleted (v4)", "DELETE FROM agent_estimates WHERE id = ?", (ae,))
     rejects("its commits are never removed (v4)", "DELETE FROM agent_estimate_commits WHERE estimate_id = ?", (ae,))
