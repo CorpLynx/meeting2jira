@@ -7,9 +7,9 @@ yourself from the extracted folder:
 
 Options: --desktop adds a desktop shortcut; --no-launch skips opening Asgard.
 
-The packaged build (docs/packaging.md) runs this through asgard-cli.exe. It isn't copied: it runs
-in place from the folder IT put it in, because setup never writes programs into your profile
-(AGENTS.md rule 2). Setup then adds only the shortcuts, the Settings > Apps entry and the record.
+The packaged build (docs/packaging.md) runs this through asgard-cli.exe, and installs the same way:
+the whole build (its programs, Python and Asgard's code) is copied to %LOCALAPPDATA%\\Asgard\\app,
+beside Asgard's data (Brandon, Oct 10). The folder you extracted can go afterwards.
 """
 from __future__ import annotations
 
@@ -60,22 +60,8 @@ def check_prerequisites() -> None:
                          f"       ({exc})", 2) from exc
     if not (SOURCE_ROOT / "Asgard.pyw").exists() or not (SOURCE_ROOT / "asgard" / "launcher.py").exists():
         raise SetupError("Setup can't find Asgard's files. Extract the whole zip, then run setup again.")
-    if paths.FROZEN:
-        if _within(SOURCE_ROOT, paths.data_dir()):
-            raise SetupError(f"The packaged build is inside Asgard's data folder ({paths.data_dir()}), which setup "
-                             "manages.\n       Put it in a folder of its own (one your IT allows programs to run "
-                             "from), then run setup again.")
-        return
     if paths.app_dir().exists() and SOURCE_ROOT.resolve() == paths.app_dir().resolve():
         raise SetupError("This is the installed copy. Run setup from the folder you downloaded and extracted.")
-
-
-def _within(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-        return True
-    except (OSError, ValueError):
-        return False
 
 
 def load_ledger() -> Dict[str, Any]:
@@ -102,6 +88,12 @@ def copy_payload(src: Path, dst: Path) -> int:
             shutil.copy2(item, dst / name)
             count += 1
     return count
+
+
+def copy_build(src: Path, dst: Path) -> int:
+    """The packaged build: everything in its folder (programs, DLLs, Python, Asgard's code and .pyc)."""
+    shutil.copytree(src, dst)
+    return sum(1 for p in dst.rglob("*") if p.is_file())
 
 
 def swap_in(staged: Path, app: Path) -> None:
@@ -139,22 +131,18 @@ def install(desktop: bool = False) -> Dict[str, Any]:
     previous = ledger.get("version")
     note = f", replacing {previous}" if previous and previous != __version__ else (
         ", reinstalled" if previous else "")
-    items: List[Dict[str, str]] = []
-    if paths.FROZEN:
-        app = SOURCE_ROOT       # runs in place; Valhalla never deletes it (it's outside the data folder)
-        say("ok", f"Runs from {app}{note}. Keep that folder: the shortcuts point to it")
-    else:
-        staged = data / "app.new"
-        if staged.exists():
-            shutil.rmtree(staged)
-        count = copy_payload(SOURCE_ROOT, staged)
-        swap_in(staged, app)
-        say("ok", f"Copied {count} files{note}")
-        items.append({"kind": "dir", "path": str(app)})
+    staged = data / "app.new"
+    if staged.exists():
+        shutil.rmtree(staged)
+    count = copy_build(SOURCE_ROOT, staged) if paths.FROZEN else copy_payload(SOURCE_ROOT, staged)
+    swap_in(staged, app)
+    say("ok", f"Copied {count} files to {app}{note}")
+    items: List[Dict[str, str]] = [{"kind": "dir", "path": str(app)}]
 
     paths.log_dir().mkdir(parents=True, exist_ok=True)
     catalog.ensure_local_manifest()
-    python, pythonw = catalog.python_paths()
+    # The installed copy's programs: the packaged build's own (in app\), or the Python running setup.
+    python, pythonw = paths.frozen_programs(app) if paths.FROZEN else catalog.python_paths()
     entry, icon = app / "Asgard.pyw", app / "asgard" / "asgard.ico"
     # The packaged build's Asgard.exe opens the launcher by itself; Python needs the script named.
     start = "" if paths.FROZEN else f'"{entry}"'
@@ -204,7 +192,7 @@ def install(desktop: bool = False) -> Dict[str, Any]:
     record = {"product": "Asgard", "version": __version__, "installed_at": now,
               "python": python, "pythonw": pythonw, "items": merged, "history": history[-20:]}
     if paths.FROZEN:
-        record["packaged"] = str(app)       # Valhalla says this folder stays, for you or IT to remove
+        record["packaged"] = True           # app\ holds programs: Valhalla removes it once Asgard has closed
     tmp = paths.ledger_path().with_suffix(".json.tmp")
     tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
     os.replace(tmp, paths.ledger_path())

@@ -7,7 +7,7 @@ Asgard ships two ways. Both hold the same code and keep their data in `%LOCALAPP
 | | The Python install (zip of the code) | The packaged build (PyInstaller) |
 | --- | --- | --- |
 | Needs | The agency's Python 3.11+ with Tcl/Tk; IT approval for any package wheels | Nothing installed; IT allows (or signs) the folder's programs and DLLs |
-| Setup | `setup-Asgard.cmd` copies it to `%LOCALAPPDATA%\Asgard\app` | `setup-Asgard.cmd` runs it in place: shortcuts, Settings > Apps and the record only |
+| Setup | `setup-Asgard.cmd` copies it to `%LOCALAPPDATA%\Asgard\app` | The same: `setup-Asgard.cmd` copies the whole build to `%LOCALAPPDATA%\Asgard\app` |
 | Brings | Your Python, and only the packages IT installed | Python 3.12, the standard library, PySide6, the MCP SDK and pydantic |
 | Made by | GitHub's **Download ZIP** | `packaging/build.py`, locally or in GitHub Actions |
 
@@ -15,15 +15,17 @@ The Python install stays the default: it needs no executables approved. The pack
 
 ## Decisions
 
-- **One folder ("onedir"), never one file.** A one-file program unpacks itself into `%TEMP%` on every start. That writes programs into the profile, which AGENTS.md rule 2 rules out, and App Control blocks running from there. A folder also starts faster and can be checked file by file (`payload.sha256`).
-- **It runs in place.** Setup never copies the build into `%LOCALAPPDATA%` (rule 2 again): it runs from the folder IT puts it in, ideally one App Control trusts. Setup adds only the shortcuts, the Settings > Apps entry and `install-ledger.json`, which records the folder as `packaged`. Valhalla removes those and says the folder stays, since it never deletes outside Asgard's data folder.
+- **One folder ("onedir"), never one file.** A one-file program unpacks a fresh copy of itself into `%TEMP%` on every start, which App Control blocks and which leaves copies behind. A folder starts faster, stays in one known place, and can be checked file by file (`payload.sha256`).
+- **Installed into `%LOCALAPPDATA%\Asgard\app`, like the Python install** (Brandon, Oct 10). Setup copies the whole build there (programs, DLLs, Python and Asgard's code), beside Asgard's data (Muninn, settings, logs, backups), and points the shortcut and Settings > Apps at the copy. The extracted download can go afterwards, and an upgrade is the new download's setup. It doesn't need admin rights, and uninstalling removes everything but your data unless you ask. App Control has to allow programs in that folder (by path, hash or signature); `asgard-cli.exe --self-test` there shows whether it does.
+- **Uninstalling the running copy.** Windows won't delete a program while it runs, so when Valhalla runs from `app\` it removes everything else at once and starts a hidden PowerShell that waits for Asgard to exit, then deletes `app\`. It uses cmdlets only (`Wait-Process`, `Remove-Item`), which Constrained Language Mode allows.
+- **Secrets stay in Windows Credential Manager.** Baldur's GitHub token is the one thing Asgard keeps outside `%LOCALAPPDATA%\Asgard`. Credential Manager encrypts it to your Windows account; a file in the profile would be readable by anything running as you.
 - **Two programs stand in for Python.** `Asgard.exe` is windowed, like `pythonw.exe`; `asgard-cli.exe` has a console, like `python.exe`. Both run `packaging/frozen_main.py`: with no script they open the launcher (`Asgard.pyw`, so `--uninstall` and `--muninn ...` work too); given one of Asgard's `.py` or `.pyw` files they run it as Python would. So everything that starts a process works unchanged: the launcher's tiles, Baldur's weekly task, the shared window's children, Ysildir's client entry, and the `.cmd` wrappers, which use `asgard-cli.exe` when it's beside them (`paths.frozen_programs()`).
 - **Only Asgard's own scripts run.** A script outside the build's folder is refused: the build is Asgard, not a general-purpose Python. An external tile such as Odin's runs under a real Python from `PATH` (or its own virtual environment), as it needs its own packages.
 - **Asgard's code ships as `.py` files**, at an installed copy's layout (`asgard\`, `apps\`, `Asgard.pyw`), with checked-hash `.pyc` files beside them. Everything that finds files from `__file__` (Muninn's migrations, prompts, QML, `apps.json`) keeps working, and nothing is compiled at start. PyInstaller still reads the code to find every module it imports; `asgard.spec` then takes Asgard's own packages out of the archive so they can't shadow the files. The self-test checks they load from the files.
 - **The flat layout** (`contents_directory="."`): the payload sits beside the programs, so `apps\baldur\baldur.cmd` finds `asgard-cli.exe` two folders up and paths match an installed copy.
 - **Python 3.12.** Muninn needs SQLite 3.37+ with FTS5 and JSON, which Windows Python has from 3.11, and Ysildir needs 3.10+. Every pin in `requirements.txt` supports 3.12.
 - **Playwright is left out.** It brings `node.exe` and a browser driver that App Control would block in this folder anyway. Heimdall's `fill` says what's missing, and `fill --dry-run` (and **Dry run** in the window) still lists every value (MODULES.md, "playwright").
-- **Running writes nothing into the folder.** Checked by the build, so the folder can be read-only (`Program Files`).
+- **Running writes nothing into the folder.** Checked by the build, so the installed copy only changes when setup replaces it.
 
 ## Building it
 
@@ -41,7 +43,7 @@ python3 packaging/build.py               macOS or Linux: that system's build, to
    - `asgard-cli --self-test` (SQLite, Muninn created and checked, Tk, Qt, the MCP SDK, the apps loading from their files, TLS);
    - `--muninn prepare` and `--muninn check`, and the windowed program;
    - Baldur from `setup` through `collect` and `estimate` to `days`, on a small git repository (when git is on `PATH`);
-   - `ysildir check`, Heimdall's `--help`, and setup in place (on Windows only in CI, as it writes Asgard's Settings > Apps entry);
+   - `ysildir check`, Heimdall's `--help`, and setup copying the build into the temporary `ASGARD_HOME\app`, with the self-test run again from there (on Windows only in CI, as setup writes Asgard's Settings > Apps entry);
    - a script from outside refused;
    - nothing written into the folder.
 5. `payload.sha256` in the folder (one line per file, as [updates.md](updates.md) designs), then `build\Asgard-VERSION-windows-x64.zip` and its `.sha256`.
@@ -63,11 +65,10 @@ Actions are pinned to commit SHAs. The workflow reads the repository only, excep
 ## On the workstation
 
 1. Check the zip against its `.sha256` (`certutil -hashfile Asgard-....zip SHA256`).
-2. Unzip it into a folder your policy allows programs to run from. If IT deploys it, that's their folder (`C:\Program Files\Asgard`, say); the build runs read-only.
-3. Run `asgard-cli.exe --self-test`. A part that fails with a blocked DLL or program means App Control needs to allow the folder's files (by path, hash or signature).
-4. Run `setup-Asgard.cmd` in the folder (or `asgard-cli.exe asgard\install.py`). It adds the Start menu shortcut and Settings > Apps entry, and opens Asgard.
+2. Unzip it anywhere and run `setup-Asgard.cmd` in it (or `asgard-cli.exe asgard\install.py`). Setup copies the build to `%LOCALAPPDATA%\Asgard\app`, adds the Start menu shortcut and Settings > Apps entry, and opens Asgard.
+3. If it doesn't start, run `asgard-cli.exe --self-test` in `%LOCALAPPDATA%\Asgard\app`. A part that fails with a blocked DLL or program means App Control needs to allow that folder's files (by path, hash or signature).
 
-To upgrade, put the new folder in place of the old one (close Asgard first) and run setup again. Your data and settings stay in `%LOCALAPPDATA%\Asgard`.
+To upgrade, close Asgard and run the new download's setup. Your data and settings stay in `%LOCALAPPDATA%\Asgard`.
 
 ## Alternatives, if PyInstaller won't do
 
@@ -81,7 +82,7 @@ In order:
 ## Open
 
 - [ ] **Signing.** Unsigned programs need App Control rules by path or hash. If the agency signs, add a signing step after the build, before `payload.sha256`.
-- [ ] **Where IT puts it**, and whether they deploy it through the software catalog.
+- [ ] **App Control's rule for `%LOCALAPPDATA%\Asgard\app`**: by path, by hash (every release changes it), or signing.
 - [ ] **Updates** ([updates.md](updates.md)): the build already writes `payload.sha256`; the updater that checks it isn't built.
 - [x] **The first Windows run** of the workflow: green on Oct 10 (run 4 on this branch).
 - [ ] **The self-test on the workstation**, under App Control: `asgard-cli.exe --self-test`.

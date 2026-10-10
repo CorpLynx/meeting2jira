@@ -4,7 +4,7 @@ The build itself needs PyInstaller and runs in packaging/build.py and the GitHub
 tests cover the parts that decide whether it works, without building:
 - frozen_main runs only Asgard's own scripts, the way python would, and the launcher otherwise;
 - every place Asgard starts a Python process uses the build's two programs when frozen;
-- setup runs the build in place (never copying programs into the profile) and Valhalla leaves it;
+- setup copies the whole build into %LOCALAPPDATA%\\Asgard\\app, and Valhalla removes it once it has closed;
 - the .cmd wrappers prefer the build's asgard-cli.exe, and the build's pins stay exact.
 """
 import ast
@@ -159,41 +159,79 @@ class FrozenProcessTests(Home):
 
 
 class FrozenSetupTests(Home):
-    def setup_in_place(self):
+    """Setup copies the whole packaged build into %LOCALAPPDATA%\\Asgard\\app (Brandon, Oct 10)."""
+
+    def fake_build(self) -> Path:
+        """A packaged build's folder: its programs, a DLL, the payload and a checked-hash .pyc."""
+        build = self.dir / "Downloads" / "Asgard"
+        ext = ".exe" if os.name == "nt" else ""
+        for rel in ("Asgard.pyw", "VERSION", f"Asgard{ext}", f"asgard-cli{ext}", "python312.dll",
+                    "asgard/launcher.py", "asgard/asgard.ico", "asgard/__pycache__/launcher.cpython-312.pyc",
+                    "apps/baldur/cli.py", "payload.sha256"):
+            (build / rel).parent.mkdir(parents=True, exist_ok=True)
+            (build / rel).write_text(rel)
+        return build
+
+    def setup_from(self, build: Path):
         out = io.StringIO()
-        with mock.patch.object(paths, "FROZEN", True), \
-                mock.patch.object(sys, "executable", str(ROOT / "Asgard")), contextlib.redirect_stdout(out):
+        with mock.patch.object(paths, "FROZEN", True), mock.patch.object(install, "SOURCE_ROOT", build), \
+                mock.patch.object(sys, "executable", str(build / "asgard-cli")), contextlib.redirect_stdout(out):
             done = install.install()
         return done, out.getvalue()
 
-    def test_setup_runs_the_build_in_place_and_copies_nothing(self):
-        done, text = self.setup_in_place()
-        home = self.dir / "home"
-        self.assertFalse((home / "app").exists(), "no programs are copied into the profile")
-        self.assertIn(f"Runs from {ROOT}", text)
-        self.assertEqual(done["entry"], ROOT / "Asgard.pyw")
-        ledger = json.loads((home / "install-ledger.json").read_text(encoding="utf-8"))
-        self.assertEqual(ledger["packaged"], str(ROOT))
-        self.assertFalse([i for i in ledger["items"] if i["kind"] == "dir"], "Valhalla must never delete the build")
-        res = valhalla.uninstall()
-        self.assertEqual(res.packaged, str(ROOT))
-        self.assertIn(f"The packaged build stays in {ROOT}", valhalla.summary(res))
-        self.assertTrue((ROOT / "Asgard.pyw").exists())
+    def test_setup_copies_the_whole_build_beside_asgards_data(self):
+        build = self.fake_build()
+        done, text = self.setup_from(build)
+        app = self.dir / "home" / "app"
+        copied = sorted(p.relative_to(app).as_posix() for p in app.rglob("*") if p.is_file())
+        self.assertEqual(copied, sorted(p.relative_to(build).as_posix() for p in build.rglob("*") if p.is_file()),
+                         "programs, DLLs, Asgard's code and its .pyc files all go")
+        self.assertIn(f"to {app}", text)
+        self.assertEqual(done["entry"], app / "Asgard.pyw")
+        console, windowed = paths.frozen_programs(app)
+        self.assertEqual(done["pythonw"], windowed, "the shortcut starts the installed copy, not the download")
+        ledger = json.loads((self.dir / "home" / "install-ledger.json").read_text(encoding="utf-8"))
+        self.assertIn({"kind": "dir", "path": str(app)}, ledger["items"])
+        self.assertEqual((ledger["python"], ledger["pythonw"], ledger["packaged"]), (console, windowed, True))
+        # The download can go now; upgrading means running the new download's setup.
+        (build / "VERSION").write_text("next")
+        self.setup_from(build)
+        self.assertEqual((app / "VERSION").read_text(), "next")
 
-    def test_setup_refuses_a_build_inside_the_data_folder(self):
-        inside = self.dir / "home" / "app"
-        inside.mkdir(parents=True)
-        with mock.patch.object(paths, "FROZEN", True), mock.patch.object(install, "SOURCE_ROOT", inside), \
-                mock.patch.object(install, "check_prerequisites", wraps=install.check_prerequisites):
-            (inside / "Asgard.pyw").write_text("")
-            (inside / "asgard").mkdir()
-            (inside / "asgard" / "launcher.py").write_text("")
-            try:
-                import tkinter  # noqa: F401
-                tkinter.Tcl()
-            except Exception:
-                self.skipTest("setup's prerequisites check Tcl/Tk first")
-            with self.assertRaisesRegex(install.SetupError, "inside Asgard's data folder"):
+    def test_uninstalling_from_the_running_build_removes_app_once_it_closes(self):
+        self.setup_from(self.fake_build())
+        app = self.dir / "home" / "app"
+        with mock.patch.object(paths, "FROZEN", True), mock.patch.object(paths, "CODE_ROOT", app), \
+                mock.patch.object(valhalla.winutil, "IS_WINDOWS", True), \
+                mock.patch.object(valhalla.winutil, "delete_uninstall_entry", return_value=False), \
+                mock.patch.object(valhalla.subprocess, "Popen") as popen:
+            res = valhalla.uninstall()
+        self.assertTrue(app.exists(), "Windows can't delete the programs that are running")
+        self.assertEqual(res.after_exit, str(app))
+        self.assertIn("goes as soon as Asgard closes", valhalla.summary(res))
+        argv = popen.call_args[0][0]
+        self.assertIn("-NoProfile", argv)
+        self.assertIn(f"Wait-Process -Id {os.getpid()}", argv[-1])
+        self.assertIn(f"Remove-Item -LiteralPath '{app}' -Recurse -Force", argv[-1])
+        self.assertNotIn("Add-Type", argv[-1], "cmdlets only: Constrained Language Mode")
+        self.assertFalse((self.dir / "home" / "install-ledger.json").exists())
+
+    def test_the_folder_path_is_quoted_for_powershell(self):
+        with mock.patch.object(valhalla.subprocess, "Popen"):
+            argv = valhalla.remove_after_exit(Path("C:/Users/O'Brien/AppData/Local/Asgard/app"), pid=42)
+        self.assertIn("'C:/Users/O''Brien/AppData/Local/Asgard/app'", argv[-1])
+
+    def test_setup_refuses_to_run_from_the_installed_copy(self):
+        build = self.fake_build()
+        self.setup_from(build)
+        app = self.dir / "home" / "app"
+        try:
+            import tkinter
+            tkinter.Tcl()
+        except Exception:
+            self.skipTest("setup's prerequisites check Tcl/Tk first")
+        with mock.patch.object(paths, "FROZEN", True), mock.patch.object(install, "SOURCE_ROOT", app):
+            with self.assertRaisesRegex(install.SetupError, "This is the installed copy"):
                 install.check_prerequisites()
 
 

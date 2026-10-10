@@ -8,9 +8,9 @@
 
 Set ASGARD_HOME to use another folder (tests do this).
 
-The packaged build (PyInstaller, docs/packaging.md) runs in place from the folder IT put it in:
-CODE_ROOT is that folder, and nothing is copied to app\\. Its two programs stand in for Python:
-Asgard.exe for pythonw and asgard-cli.exe for python, each running one of Asgard's scripts.
+The packaged build (PyInstaller, docs/packaging.md) installs the same way: setup copies the whole
+build into app\\. Its two programs stand in for Python there: Asgard.exe for pythonw and
+asgard-cli.exe for python, each running one of Asgard's scripts.
 """
 from __future__ import annotations
 
@@ -30,9 +30,9 @@ WINDOWED_PROGRAM = "Asgard"                        # + .exe on Windows: no conso
 CONSOLE_PROGRAM = "asgard-cli"                     # + .exe on Windows: a console, like python
 
 
-def frozen_programs() -> Tuple[str, str]:
-    """(console, windowed) programs of the packaged build, beside the one running."""
-    folder = Path(sys.executable).resolve().parent
+def frozen_programs(folder: Optional[Path] = None) -> Tuple[str, str]:
+    """(console, windowed) programs of the packaged build in folder (default: beside the one running)."""
+    folder = folder or Path(sys.executable).resolve().parent
     ext = ".exe" if os.name == "nt" else ""
     return str(folder / (CONSOLE_PROGRAM + ext)), str(folder / (WINDOWED_PROGRAM + ext))
 

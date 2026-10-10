@@ -35,11 +35,11 @@ You need Python 3.9 or newer with Tcl/Tk (tkinter); Muninn needs 3.11 or newer o
 The packaged build is a folder with `Asgard.exe`, `asgard-cli.exe`, Python 3.12 and the packages the apps use (the shared window's Qt and Ysildir's MCP SDK). It comes as `Asgard-VERSION-windows-x64.zip` from a GitHub release, or from the **Package Asgard** workflow's artifact.
 
 1. **Check the download.** Compare `certutil -hashfile Asgard-0.4.0-windows-x64.zip SHA256` with the `.sha256` file beside the zip.
-2. **Unblock it and extract it** into a folder your policy allows programs to run from. Ask IT which; they may put it in place for you. It runs where it is: setup doesn't copy it, and it never writes into its own folder, so a read-only folder is fine.
-3. **Check it.** Open Command Prompt in the folder and run `asgard-cli.exe --self-test`. Each line should say `[ok]`. A blocked DLL or program means App Control needs to allow this folder's files; show IT the output.
-4. **Double-click `setup-Asgard.cmd`** in the folder. If `.cmd` files are blocked, run `asgard-cli.exe asgard\install.py` instead. Setup adds the Start menu shortcut and the **Settings > Apps** entry, and opens Asgard.
+2. **Unblock it and extract it** anywhere, such as your Downloads folder.
+3. **Double-click `setup-Asgard.cmd`** in the extracted folder. If `.cmd` files are blocked, run `asgard-cli.exe asgard\install.py` there instead. Setup copies the whole build to `%LOCALAPPDATA%\Asgard\app`, beside Asgard's data, adds the Start menu shortcut and the **Settings > Apps** entry, and opens Asgard. You can delete the extracted folder afterwards.
+4. **If it doesn't start**, open Command Prompt in `%LOCALAPPDATA%\Asgard\app` and run `asgard-cli.exe --self-test`. Each line should say `[ok]`. A blocked DLL or program means App Control needs to allow that folder's files; show IT the output.
 
-Keep the folder where it is: the shortcut points to it. To upgrade, close Asgard, put the new folder in place of the old one, and run setup again. Heimdall's `fill` isn't in the packaged build, because it needs Playwright's own programs; `fill --dry-run` still lists every value to type. [docs/packaging.md](docs/packaging.md) has the details.
+To upgrade, close Asgard, extract the new zip and run its setup: it replaces `%LOCALAPPDATA%\Asgard\app` and keeps your data. Heimdall's `fill` isn't in the packaged build, because it needs Playwright's own programs; `fill --dry-run` still lists every value to type. [docs/packaging.md](docs/packaging.md) has the details.
 
 ## Using Asgard
 
@@ -267,13 +267,13 @@ python Asgard.pyw --muninn retention on|off  prune old run records daily (off un
 
 ## Uninstall
 
-Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > Uninstall Asgard**. Valhalla removes what setup recorded: the app folder, the shortcuts and the Settings entry. It asks before deleting your data (tile settings, logs, the Muninn database and its backups). It never deletes anything outside Asgard's own folders, and it doesn't touch apps that live elsewhere, such as Odin. So the packaged build's folder stays: Valhalla says where it is, and you (or IT) delete it once Asgard has closed.
+Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > Uninstall Asgard**. Valhalla removes what setup recorded: the app folder, the shortcuts and the Settings entry. It asks before deleting your data (tile settings, logs, the Muninn database and its backups). It never deletes anything outside Asgard's own folders, and it doesn't touch apps that live elsewhere, such as Odin. In the packaged build, Windows can't delete Asgard's programs while they run, so the app folder goes a moment after Asgard closes.
 
 ## Where things live
 
 | Path | What |
 | --- | --- |
-| `%LOCALAPPDATA%\Asgard\app` | The installed code, replaced on upgrade (the Python install only: the packaged build runs from its own folder) |
+| `%LOCALAPPDATA%\Asgard\app` | The installed copy, replaced on upgrade: Asgard's code, and in the packaged build its programs and Python too |
 | `%LOCALAPPDATA%\Asgard\apps.local.json` | Your tile settings |
 | `%LOCALAPPDATA%\Asgard\logs` | One log per app, plus `launcher.log` |
 | `%LOCALAPPDATA%\Asgard\muninn.db` | Muninn, the database the apps share (with `-wal` and `-shm` files beside it) |
@@ -287,7 +287,7 @@ Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > 
 | `%LOCALAPPDATA%\Asgard\settings\heimdall-templates.json` | Your Heimdall templates. Heimdall won't overwrite this file if it can't read it |
 | `%LOCALAPPDATA%\Asgard\heimdall\edge-profile` | The Edge profile Heimdall signs in with; delete it to sign out. Traces from `--trace` go in `heimdall\traces` |
 
-To upgrade, download the new zip and run setup again. Your tile settings stay. Close Asgard first. For the packaged build, replace its folder with the new one, then run its setup.
+To upgrade, download the new zip and run setup again. Your tile settings stay. Close Asgard first. The packaged build upgrades the same way: run the new download's setup.
 
 ## Muninn, for app authors
 

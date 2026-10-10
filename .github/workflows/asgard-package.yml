@@ -2,7 +2,7 @@
 #
 # It runs Asgard/packaging/build.py, the same script you run locally: the pinned packages in a fresh
 # virtual environment, the unit tests, PyInstaller, checks on the built folder (self-test, Muninn,
-# Baldur, Ysildir, Heimdall, setup in place) and the zip with its sha256. The zip is uploaded as an
+# Baldur, Ysildir, Heimdall, setup into ASGARD_HOME\app) and the zip with its sha256. The zip is uploaded as an
 # artifact. A tag named asgard-vX.Y.Z also publishes it as a GitHub release, once VERSION says X.Y.Z.
 #
 # Actions are pinned to full commit SHAs (the tag each was is in its comment), each released at
@@ -103,4 +103,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "Asgard ${TAG#asgard-v}" \
-            --notes "Asgard's packaged build for Windows x64. Unzip it where your policy allows programs to run (IT may need to allow or sign Asgard.exe and asgard-cli.exe), then run setup-Asgard.cmd. Check the zip against its .sha256. Asgard/README.md, \"Install the packaged build\", has the steps."
+            --notes "Asgard's packaged build for Windows x64. Unzip it and run setup-Asgard.cmd: it copies Asgard to %LOCALAPPDATA%\\Asgard\\app (IT may need to allow or sign Asgard.exe and asgard-cli.exe there). Check the zip against its .sha256. Asgard/README.md, \"Install the packaged build\", has the steps."

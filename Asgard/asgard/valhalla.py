@@ -4,6 +4,10 @@ Whatever the install record says, Valhalla only deletes folders inside
 Asgard's own data folder, Asgard's .lnk shortcuts, and its Settings > Apps
 entry. Your tile settings, logs and Muninn database stay unless you ask.
 
+The packaged build runs its programs from app\\, and Windows won't delete a program while it
+runs, so when Valhalla runs from there it removes app\\ just after Asgard closes: a hidden
+PowerShell (cmdlets only, as Constrained Language Mode allows) waits for it, then deletes it.
+
     pythonw Asgard.pyw --uninstall              (asks first)
     python  Asgard.pyw --uninstall --yes         (no window; add --purge to delete your data)
 """
@@ -13,6 +17,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -20,6 +25,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import paths, winutil
+
+DETACHED = 0x00000008 | 0x00000200 | 0x08000000      # detached, own group, no window
 
 USER_DATA = ("apps.local.json", "settings.json", "settings", "logs", "backups",
              "muninn.db", "muninn.db-wal", "muninn.db-shm")      # settings\: each app's own settings files
@@ -39,7 +46,7 @@ class Result:
     removed: List[str] = field(default_factory=list)
     kept: List[str] = field(default_factory=list)
     skipped: List[Tuple[str, str]] = field(default_factory=list)
-    packaged: Optional[str] = None      # the packaged build's folder: it runs in place, and stays
+    after_exit: Optional[str] = None    # app\ of the packaged build running now: removed once it closes
 
     @property
     def ok(self) -> bool:
@@ -109,6 +116,19 @@ def _remove(path: Path) -> None:
         path.unlink()
 
 
+def remove_after_exit(folder: Path, pid: Optional[int] = None) -> List[str]:
+    """Delete folder once this process has exited, from a hidden PowerShell. Returns the command started."""
+    from .catalog import powershell_path
+    quoted = str(folder).replace("'", "''")
+    script = (f"Wait-Process -Id {pid or os.getpid()} -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1; "
+              f"Remove-Item -LiteralPath '{quoted}' -Recurse -Force -ErrorAction SilentlyContinue")
+    argv = [powershell_path(), "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script]
+    subprocess.Popen(argv, cwd=tempfile.gettempdir(), close_fds=True, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     creationflags=DETACHED if os.name == "nt" else 0)
+    return argv
+
+
 def uninstall(purge: bool = False) -> Result:
     data = paths.data_dir()
     try:
@@ -118,7 +138,7 @@ def uninstall(purge: bool = False) -> Result:
     ledger = load_ledger()
     items = list(reversed(ledger.get("items", []))) if ledger else default_items()
     expected_key = ("HKCU\\" + paths.UNINSTALL_SUBKEY).lower()
-    res = Result(packaged=str(ledger["packaged"]) if ledger and ledger.get("packaged") else None)
+    res = Result()
     for item in items:
         kind, raw = item.get("kind"), str(item.get("path", ""))
         try:
@@ -138,6 +158,9 @@ def uninstall(purge: bool = False) -> Result:
                 p = Path(raw)
                 if not _within(p, data) or _resolve(p) == _resolve(data):
                     res.skipped.append((raw, "outside Asgard's folder, so left alone"))
+                elif p.exists() and winutil.IS_WINDOWS and paths.FROZEN and _within(paths.CODE_ROOT, p):
+                    remove_after_exit(p)
+                    res.after_exit = raw
                 elif p.exists():
                     _rmtree(p)
                     res.removed.append(raw)
@@ -177,9 +200,9 @@ def summary(res: Result) -> str:
     lines = ["Removed Asgard and its shortcuts." if res.removed else "There was nothing left to remove."]
     if res.kept:
         lines.append(f"\nKept your data in {paths.data_dir()}.")
-    if res.packaged:
-        lines.append(f"\nThe packaged build stays in {res.packaged}. Delete that folder yourself once Asgard "
-                     "has closed, or ask IT if they put it there.")
+    if res.after_exit:
+        lines.append(f"\nAsgard's program folder ({res.after_exit}) goes as soon as Asgard closes. If any of it is "
+                     "left (another Asgard app was still open), delete it once they've all closed.")
     if res.skipped:
         lines.append("\nNot removed:")
         lines += [f"  {path}: {why}" for path, why in res.skipped]

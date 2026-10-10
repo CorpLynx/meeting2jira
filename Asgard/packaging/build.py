@@ -14,8 +14,9 @@ Steps, each stopping the build if it fails:
   3. PyInstaller, with packaging/asgard.spec: build/dist/Asgard/.
   4. Checks on the built folder, run through its own programs in a temporary ASGARD_HOME: the
      self-test, Muninn created and checked, Baldur from setup to a day's estimate (when git is
-     here), Ysildir's server, Heimdall, setup in place, a script from outside refused, and that
-     running wrote nothing into the folder.
+     here), Ysildir's server, Heimdall, setup copying the build into ASGARD_HOME\\app and its
+     self-test there, a script from outside refused, and that running wrote nothing into the
+     folder.
   5. payload.sha256 inside the folder (docs/updates.md), then build/Asgard-VERSION-PLATFORM.zip
      and its .sha256.
 
@@ -222,8 +223,17 @@ def smoke(python: Path, bundle: Path = BUNDLE) -> None:
         if os.name != "nt" or os.environ.get("CI"):
             env["APPDATA"] = str(Path(tmp) / "appdata")      # shortcuts go to the temporary folder
             check(bundle / "asgard" / "install.py", "--no-launch", contains="Asgard is installed")
+            # Setup copied the build into the data folder; the installed copy must work on its own.
+            installed = home / "app" / ("asgard-cli" + EXE)
+            done = run([installed, "--self-test", *(["--skip", ",".join(skip)] if skip else [])],
+                       cwd=Path(tmp), env=env, quiet=True)
+            # (Its Apps check confirms Asgard loads from that copy's own files; paths aren't compared,
+            # because Windows may name the same temporary folder in its short 8.3 form.)
+            if "All parts load." not in done.stdout:
+                raise BuildError(f"The installed copy's self-test didn't pass from {home / 'app'}:\n{done.stdout}")
+            say(f"     ok: setup copied the build to {home / 'app'}, and its self-test passes there")
         else:   # setup writes Asgard's Settings > Apps entry, which would replace your real one
-            say("     skipped: setup in place (Windows, outside CI: it would replace your Settings > Apps entry)")
+            say("     skipped: setup (Windows, outside CI: it would replace your Settings > Apps entry)")
         outside = Path(tmp) / "outside.py"
         outside.write_text("print('ran')\n", encoding="utf-8")
         check(outside, expect=2, contains="isn't part of Asgard")
@@ -265,7 +275,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except BuildError as exc:
         say(f"\nBuild failed: {exc}")
         return 1
-    say("\nDone. Try it: run build/dist/Asgard/Asgard" + EXE + ", or unzip the zip anywhere your policy allows.")
+    say("\nDone. Install it: run setup-Asgard.cmd in build/dist/Asgard (or in the unzipped zip). Setup copies it to "
+        "%LOCALAPPDATA%\\Asgard\\app.")
     return 0
 
 
