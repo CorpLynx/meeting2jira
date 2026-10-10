@@ -4,7 +4,9 @@
      sentences and check count in the schema paragraph, Baldur's tables in "Who owns what", "Agent estimates (v4)", the
      two v4 indexes, the migrations list, and the encryption open decision; and the 2026-10-09 review's fixes in
      "Agent estimates (v4)". Edited on 2026-10-10: v5 (`meeting_subtasks`) in the schema paragraph, "Who owns what", the
-     Odin tables, the indexes, the migrations list, "Moving Odin into Muninn" and the state.db open decision.
+     Odin tables, the indexes, the migrations list, "Moving Odin into Muninn" and the state.db open decision; and
+     (refinements spec) the two agent estimate triggers in "Agent estimates (v4)" and `odin settle` in step 4 of the
+     posting protocol.
      Carry these over to the live doc. -->
 
 # Muninn data layer design
@@ -739,7 +741,7 @@ Three flows carry work between apps. Each is a few statements in one transaction
 1. You approve a day in Baldur (`baldur.approve()`). The proposal becomes approved with `minutes_final`, and Baldur emits `day_proposal.approved`.
 2. Odin reads `v_worklogs_to_post` (`odin.posts_due()`). For each row, `odin.begin_post()` writes a `sending` worklog and commits before Jira is called. The row has origin baldur, the proposal's id, `minutes_to_post`, a start kept inside the approved day, and a comment holding the proposal's basis, what Jira already held, the approved figure and when, and a random marker such as `[asgard:b-9f3c1a2b]`.
 3. Odin posts to the issue's current key. On success, `finish_post()` saves Jira's id and emits `worklog.posted`. A definite refusal (a 4xx) goes to `fail_post()`, which offers the day again. After a timeout the row stays `sending`.
-4. While any post for an issue and day is `sending`, that day waits. At startup, `odin.stuck_posts()` lists `sending` rows older than two minutes. Odin searches the issue's worklogs for each marker and calls `resolve_stuck()`: found means posted, not found means failed.
+4. While any post for an issue and day is `sending`, that day waits. At startup, `odin.stuck_posts()` lists `sending` rows older than two minutes. Odin searches the issue's worklogs for each marker and calls `resolve_stuck()`: found means posted, not found means failed. When Jira can't be asked (a 404 may be access lost for now), the row stays `sending`; `odin settle` lists such posts and settles one, by Jira's answer or by what the person found in Jira.
 
 Odin never edits or deletes a worklog in Jira. If you lower an approved day after it posted, Baldur shows that Jira holds more than you approved, and you fix it there. Approved time Jira can't take, because the issue was deleted or its key was never found, shows in `v_unpostable_days` and on Baldur's tile.
 

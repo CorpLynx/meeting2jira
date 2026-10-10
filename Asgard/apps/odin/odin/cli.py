@@ -39,6 +39,7 @@ Commands
   post        steps 1-2, the key lookups and worklog sync, then 6 and 7; --dry-run to list
   status      the last run, then recent sub-tasks and what waits to be posted
   forget      drop a sub-task's record so its meeting can be pushed again
+  settle      the posts in doubt (sent, but Jira's answer never came), and settling one
   report      every meeting sub-task as a CSV, for Power BI or Excel (read-only)
 """
 from __future__ import annotations
@@ -759,7 +760,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     if waiting:
         log.info("Meeting worklogs to retry: %d", len(waiting))
     if stuck:
-        log.info("Posts waiting for an answer from Jira: %d (settled at the start of the next run)", len(stuck))
+        log.info("Posts in doubt: %d. Odin sent them but never heard whether Jira took them; each run asks "
+                 "Jira again.", len(stuck))
+        for s in stuck:
+            log.info("  %s   settle: odin settle %d", _in_doubt(s), s["worklog_id"])
     return 0
 
 
@@ -775,6 +779,124 @@ def cmd_forget(args: argparse.Namespace) -> int:
         removed += history.forget_legacy(work_dir, args.issue_key)
     log.info("Removed %d record(s) for %s. Its meeting is pushed again on the next run; time already logged "
              "for that meeting isn't logged a second time.", removed, args.issue_key)
+    return 0
+
+
+_KINDS = {"baldur": "approved day", "meeting": "meeting", "manual": "time"}
+
+
+def _in_doubt(s: Dict[str, Any]) -> str:
+    """One post in doubt, for a person: what, where, when, and the marker to look for in Jira."""
+    start = muninn.from_ts(s["started_at"]).astimezone()
+    age = datetime.now(timezone.utc) - muninn.from_ts(s["sent_at"])
+    if age >= timedelta(days=2):
+        ago = f"{age.days} days ago"
+    elif age >= timedelta(hours=2):
+        ago = f"{int(age.total_seconds() // 3600)} hours ago"
+    else:
+        ago = f"{max(0, int(age.total_seconds() // 60))} min ago"
+    return (f"{s['worklog_id']:>5}  {s['key']:<12} {start:%Y-%m-%d %H:%M}  {posting._hm(s['seconds']):>6}  "
+            f"{_KINDS.get(s['origin'], s['origin']):<12} sent {ago:<12} {s['marker'] or '(no marker)'}")
+
+
+def cmd_settle(args: argparse.Namespace) -> int:
+    """List the posts in doubt, or settle one: by asking Jira again, or by what the person found."""
+    if args.worklog_id is None:
+        if args.posted or args.not_posted:
+            log.error("Say which post: odin settle ID --posted WORKLOG or odin settle ID --not-posted "
+                      "(odin settle lists them).")
+            return 2
+        con = store.open_muninn(readonly=True)
+        try:
+            stuck = mo.stuck_posts(con, older_than_seconds=0)
+        finally:
+            con.close()
+        if not stuck:
+            log.info("No posts in doubt.")
+            return 0
+        log.info("Posts in doubt: %d. Odin sent them but never heard whether Jira took them; each run asks Jira "
+                 "again.\n", len(stuck))
+        log.info("%5s  %-12s %-16s  %6s  %-12s %-17s %s", "ID", "issue", "start", "length", "kind", "sent", "marker")
+        for s in stuck:
+            log.info("%s", _in_doubt(s))
+        log.info("\nTo settle one:\n"
+                 "  odin settle ID                    ask Jira again\n"
+                 "  odin settle ID --posted WORKLOG   you found it in Jira: WORKLOG is that worklog's id\n"
+                 "  odin settle ID --not-posted       you checked Jira and it isn't there: its time is offered again\n"
+                 "In Jira, look for the marker in the issue's work log.")
+        return 0
+
+    if args.posted is not None and not args.posted.strip().isdigit():
+        log.error("--posted takes the Jira worklog's id, a number (in Jira, the worklog's link ends with it).")
+        return 2
+    cfg = load_config(args.config)
+    with store.RunLock(default_data_dir()):      # never while a run might be settling or sending it
+        con = store.open_muninn()
+        try:
+            return _settle_one(cfg, con, args)
+        finally:
+            con.close()
+
+
+def _settle_one(cfg: Dict[str, Any], con: sqlite3.Connection, args: argparse.Namespace) -> int:
+    wid = args.worklog_id
+    found = {s["worklog_id"]: s for s in mo.stuck_posts(con, older_than_seconds=0)}.get(wid)
+    if found is None:
+        row = con.execute("SELECT state, jira_worklog_id FROM worklogs WHERE id = ?", (wid,)).fetchone()
+        if row is None:
+            log.error("Muninn has no worklog %d. odin settle lists the posts in doubt.", wid)
+        elif row["state"] == "posted":
+            log.error("Worklog %d isn't in doubt: it's posted, as Jira worklog %s.", wid, row["jira_worklog_id"])
+        else:
+            log.error("Worklog %d isn't in doubt: it's %s.", wid, row["state"])
+        return 2
+    s, key = found, found["key"]
+
+    if args.posted is not None:
+        jira_id = args.posted.strip()
+        other = con.execute("SELECT o.id FROM worklogs o JOIN worklogs w ON w.work_item_id = o.work_item_id "
+                            "WHERE w.id = ? AND o.id <> w.id AND o.jira_worklog_id = ? AND o.origin <> 'jira'",
+                            (wid, jira_id)).fetchone()
+        if other is not None:
+            log.error("Jira worklog %s on %s is already recorded for another post (Muninn worklog %d). Check the "
+                      "id: this post's worklog carries the marker %s.", jira_id, key, other[0], s["marker"])
+            return 2
+        mo.resolve_stuck(con, wid, jira_id)
+        log.info("Recorded: worklog %d on %s is posted, as Jira worklog %s.", wid, key, jira_id)
+        return 0
+    if args.not_posted:
+        mo.resolve_stuck(con, wid, None, searched=True)
+        log.info("Recorded: worklog %d on %s is not in Jira, so its time is offered again on the next run. If it "
+                 "did reach Jira after all, it will be there twice: delete one in Jira.", wid, key)
+        return 0
+
+    if not s["marker"]:
+        log.error("Worklog %d has no marker to look for. Check %s's work log in Jira, then run odin settle %d "
+                  "--posted WORKLOG or --not-posted.", wid, key, wid)
+        return 1
+    token, _ = load_token(Path(cfg["data_dir"]))
+    client = JiraClient.from_config(cfg["jira"], token)
+    try:
+        landed = client.find_worklog(key, s["marker"])
+    except JiraError as exc:
+        log.error("Jira couldn't answer, so nothing changed: %s", exc)
+        if exc.status == 404:
+            log.error("  A 404 means %s was deleted, or you can't see it now. If it was deleted, its time can't "
+                      "be in Jira: odin settle %d --not-posted. If you lost access, get it back and run this "
+                      "again.", key, wid)
+        elif exc.status in (401, 403):
+            log.error("  Check your token (odin check) and that you can still see %s, then run this again.", key)
+        else:
+            log.error("  Try again later, or look in %s's work log for %s and settle it by hand "
+                      "(odin settle %d --posted WORKLOG or --not-posted).", key, s["marker"], wid)
+        return 1
+    if landed:
+        mo.resolve_stuck(con, wid, str(landed["id"]), searched=True)
+        log.info("Found in Jira: worklog %d on %s is posted, as Jira worklog %s.", wid, key, landed["id"])
+    else:
+        mo.resolve_stuck(con, wid, None, searched=True)
+        log.info("Not in %s's work log in Jira: worklog %d is recorded as not posted, and its time is offered "
+                 "again.", key, wid)
     return 0
 
 
@@ -883,6 +1005,18 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("forget", parents=[common], help="drop a sub-task's record so its meeting is pushed again")
     p.add_argument("issue_key")
     p.set_defaults(func=cmd_forget)
+
+    p = sub.add_parser("settle", parents=[common], help="list the posts in doubt, or settle one",
+                       description="Without an ID, list the posts Odin sent but never heard back about. With one, "
+                                   "ask Jira again by its marker, or record what you found in Jira yourself.")
+    p.add_argument("worklog_id", type=int, nargs="?", metavar="ID", help="the post's ID, from odin settle")
+    found = p.add_mutually_exclusive_group()
+    found.add_argument("--posted", metavar="WORKLOG", help="you found it in Jira: record it as posted with that "
+                                                           "Jira worklog id")
+    found.add_argument("--not-posted", action="store_true",
+                       help="you checked Jira and it isn't there: its time is offered again. If it did land, "
+                            "it would then be posted twice")
+    p.set_defaults(func=cmd_settle)
     return parser
 
 

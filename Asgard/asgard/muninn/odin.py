@@ -839,11 +839,13 @@ def stuck_posts(con: sqlite3.Connection, older_than_seconds: int = 120) -> List[
     """'sending' rows whose outcome is unknown. Search the issue's worklogs in Jira for each marker,
     then call resolve_stuck(). Keep older_than_seconds well above Odin's HTTP timeout, so a post
     still waiting on Jira is never mistaken for a lost one."""
-    rows = con.execute("SELECT w.id, w.comment, w.started_at, w.seconds, i.key FROM worklogs w "
-                       "JOIN work_items i ON i.id = w.work_item_id WHERE w.state = 'sending' AND w.created_at < ? "
-                       "ORDER BY w.created_at", (ago(older_than_seconds),)).fetchall()
+    rows = con.execute("SELECT w.id, w.comment, w.started_at, w.seconds, w.origin, w.created_at, i.key "
+                       "FROM worklogs w JOIN work_items i ON i.id = w.work_item_id "
+                       "WHERE w.state = 'sending' AND w.created_at <= ? ORDER BY w.created_at",
+                       (ago(older_than_seconds),)).fetchall()
     return [{"worklog_id": r["id"], "key": r["key"], "marker": marker_in(r["comment"]),
-             "started_at": r["started_at"], "seconds": r["seconds"]} for r in rows]
+             "started_at": r["started_at"], "seconds": r["seconds"], "origin": r["origin"],
+             "sent_at": r["created_at"]} for r in rows]
 
 
 def resolve_stuck(con: sqlite3.Connection, worklog_id: int, jira_worklog_id: Optional[str] = None,

@@ -234,7 +234,8 @@ ScrollPage {
             Layout.fillWidth: true
             label: "Posts in doubt"
             value: String(page.counts.posts_in_doubt || 0)
-            detail: "Checked against Jira by the next run"
+            detail: (page.counts.posts_in_doubt || 0) > 0 ? "Asked again each run; odin settle lists them"
+                                                          : "Checked against Jira by the next run"
             tone: (page.counts.posts_in_doubt || 0) > 0 ? "warning" : ""
             interactive: false
         }

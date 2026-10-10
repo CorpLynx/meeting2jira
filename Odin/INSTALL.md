@@ -179,6 +179,7 @@ odin status          last-run health, recent sub-tasks, what waits to be posted
 odin sync            read Jira into Muninn only
 odin post            post approved Baldur days only (post --dry-run lists them)
 odin report          every meeting sub-task as a CSV for Power BI (report --no-subjects)
+odin settle [ID]     posts in doubt (sent, but Jira's answer never came); settle ID asks Jira again
 odin doctor          read-only environment report
 odin schedule        register the weekday scheduled task
 odin unschedule      remove the scheduled task

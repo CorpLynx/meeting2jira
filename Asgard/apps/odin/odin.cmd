@@ -18,6 +18,7 @@ rem    odin post            post the days you approved in Baldur only (post --dr
 rem    odin selftest        Odin's unit tests plus the Windows-only checks
 rem    odin run   [args]    Invoke-MeetingSync.ps1 passthrough, e.g. odin run -DaysBack 7
 rem    odin report          every meeting sub-task as a CSV for Power BI (report --no-subjects)
+rem    odin settle [ID]     posts in doubt (sent, no answer from Jira); settle ID asks Jira again
 rem    odin cli   [args]    Python CLI passthrough, e.g. odin cli forget PROJ-501
 rem
 rem  There is deliberately no -ExecutionPolicy Bypass in here. If the scripts will not run, fix
@@ -92,6 +93,7 @@ if /i "%ACTION%"=="init"       goto :simplecli
 if /i "%ACTION%"=="set-token"  goto :simplecli
 if /i "%ACTION%"=="forget"     goto :simplecli
 if /i "%ACTION%"=="report"     goto :simplecli
+if /i "%ACTION%"=="settle"     goto :simplecli
 if /i "%ACTION%"=="help"       goto :usage
 if /i "%ACTION%"=="-h"         goto :usage
 if /i "%ACTION%"=="--help"     goto :usage
@@ -322,6 +324,7 @@ echo   odin post            post approved Baldur days only
 echo   odin selftest        unit tests plus the Windows-only checks
 echo   odin run [args]      Invoke-MeetingSync.ps1 passthrough
 echo   odin report          meeting sub-tasks as a CSV for Power BI
+echo   odin settle [ID]     posts in doubt, and settling one (settle --help)
 echo   odin cli [args]      Python CLI passthrough
 echo.
 echo Config: %CONFIG%
