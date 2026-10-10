@@ -263,9 +263,20 @@ class OdinTestCase(unittest.TestCase):
         self._saved_home = os.environ.get("ASGARD_HOME")
         os.environ["ASGARD_HOME"] = str(self.home)
         self.addCleanup(self._restore_home)
+        # main() logs to odin.log in the temporary folder; Windows can't delete the folder while that
+        # file is open, so the handlers are closed before it goes (cleanups run last-in, first-out).
+        self.addCleanup(self._close_odin_log)
         muninn.prepare(self.home / "muninn.db", backups=self.home / "backups")
         self.data = self.home / "odin"
         self.data.mkdir()
+
+    @staticmethod
+    def _close_odin_log() -> None:
+        import logging
+        logger = logging.getLogger("odin")
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+            handler.close()
 
     def _restore_home(self) -> None:
         if self._saved_home is None:

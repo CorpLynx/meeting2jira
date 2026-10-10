@@ -203,8 +203,10 @@ class LockTests(OdinTestCase):
         from fake_jira import APP, ROOT
         code = self.HOLD.format(root=str(ROOT), app=str(APP), data=str(self.data), then=then)
         proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
-        self.addCleanup(proc.kill)
+        # Cleanups run last first: kill, wait (Windows keeps its files open until it has exited), close.
         self.addCleanup(proc.stdout.close)
+        self.addCleanup(proc.wait, 10)
+        self.addCleanup(proc.kill)
         self.assertEqual(proc.stdout.readline().strip(), "held")
         return proc
 
