@@ -74,6 +74,11 @@ class Meeting:
     categories: List[str] = field(default_factory=list)
     organizer: Optional[str] = None
     is_teams: bool = False
+    # The calendar's own id for the meeting (the part of `key` before its "|") and whether it belongs
+    # to a series. Optional in the export; None means the source didn't say. Together they let Odin
+    # tell a one-off meeting that moved from a new one (sync.py, store.find_moved).
+    global_id: Optional[str] = None
+    is_recurring: Optional[bool] = None
 
     @property
     def minutes(self) -> int:
@@ -115,4 +120,7 @@ class Meeting:
             categories=[str(c) for c in categories],
             organizer=d.get("organizer") or None,
             is_teams=bool(d.get("is_teams", False)),
+            global_id=(str(d["global_id"]).strip() or None) if d.get("global_id") is not None else None,
+            # Only a real boolean counts: anything else (absent, "false" as text) means "didn't say".
+            is_recurring=d["is_recurring"] if isinstance(d.get("is_recurring"), bool) else None,
         )

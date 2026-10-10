@@ -56,7 +56,7 @@ This folder keeps what isn't part of Asgard:
 1. **Filters** are hard exclusions: cancelled, all-day, not ended yet, no attendees, declined, private, shown as free, too short or too long, or a subject pattern match.
 2. **Rules** are evaluated in order, and the first match wins. A match either routes the meeting to a specific parent issue or skips it.
 3. Anything left goes to `jira.default_parent`.
-4. **Dedupe**: the meeting's key and a content hash (subject + start + end) are checked against Muninn's `meeting_subtasks`. The content hash means a COM run and a CSV run won't duplicate each other.
+4. **Dedupe**: the meeting's key and a content hash (subject + start + end) are checked against Muninn's `meeting_subtasks`. The content hash means a COM run and a CSV run won't duplicate each other. A one-off meeting its organizer moved keeps its calendar id (`global_id` in the export), so it's recognised, reported as `MOVED` with both times, and its sub-task and worklog are left as they are: Odin never edits an issue, so change them in Jira if they should match. A moved occurrence of a recurring meeting still gets a sub-task of its own, because the whole series shares one id.
 5. The sub-task is created and recorded right away. Then its time is logged (through a marker-protected worklog, so it is never logged twice) and the optional transition happens.
 
 Safety rails:
@@ -187,6 +187,8 @@ The available `match` keys are `subject_regex`, `organizer_regex`, `location_reg
 
 This is the contract between any source and the Python side. `key` must be stable for the same occurrence; the COM exporter uses `GlobalAppointmentID|start_utc`.
 
+Two fields are optional, so the version stays 1: `global_id` is the calendar's id for the meeting, exactly the part of `key` before its `|`, and `is_recurring` says whether the meeting belongs to a series. Odin uses them to recognise a one-off meeting that moved. Absent, blank, or `is_recurring` that isn't a real boolean means the source didn't say, and Odin behaves as it did before. The COM exporter writes both (`GlobalAppointmentID`, `IsRecurring`); the Graph exporter writes both (`iCalUId`, and `type`: `singleInstance` is false, `occurrence`, `exception` or `seriesMaster` true); the OWA exporter writes `global_id`, and `is_recurring` only when the page it reads gives a `type`; the CSV path has neither.
+
 ```json
 {
   "schema_version": 1,
@@ -207,7 +209,9 @@ This is the contract between any source and the Python side. `key` must be stabl
       "location": "Microsoft Teams Meeting",
       "categories": [],
       "organizer": null,
-      "is_teams": true
+      "is_teams": true,
+      "global_id": "040000008200E000...",  // optional: the key before its "|"
+      "is_recurring": false                // optional: true for an occurrence or exception of a series
     }
   ]
 }

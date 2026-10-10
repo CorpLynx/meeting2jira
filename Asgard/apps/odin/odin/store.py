@@ -209,6 +209,41 @@ def find_subtask(con: sqlite3.Connection, m: Meeting) -> Optional[sqlite3.Row]:
                        "ORDER BY meeting_key = ? DESC, id LIMIT 1", (m.key, m.content_hash, m.key)).fetchone()
 
 
+def find_moved(con: sqlite3.Connection, m: Meeting) -> Optional[sqlite3.Row]:
+    """The record of this meeting from before it moved, if it is a one-off meeting that has one.
+
+    A one-off meeting keeps its calendar id when its organizer moves it, and every exporter builds
+    its key as `<id>|<start>`, so the earlier record's key starts with the same id. An occurrence of
+    a series shares the series' id with every other occurrence, so it is never matched this way;
+    neither is a meeting whose source didn't say (no id, or is_recurring unknown), nor one whose id
+    isn't the start of its own key (an export that doesn't build keys this way).
+    """
+    if not m.global_id or m.is_recurring is not False or not m.key.startswith(m.global_id + "|"):
+        return None
+    prefix = m.global_id + "|"
+    # A range on the unique index: every key that starts with "<id>|" ('}' follows '|').
+    return con.execute("SELECT * FROM meeting_subtasks WHERE meeting_key >= ? AND meeting_key < ? "
+                       "ORDER BY id DESC LIMIT 1", (prefix, m.global_id + "}")).fetchone()
+
+
+def link_moved(con: sqlite3.Connection, record_id: int, event_id: int, issue_key: str) -> bool:
+    """Point a moved meeting's record at its event now, when the event it had is gone (the export
+    swept it from the calendar) or it never had one. The v5 trigger allows only this change."""
+    try:
+        with muninn.transaction(con):
+            linked = con.execute(
+                "UPDATE meeting_subtasks SET calendar_event_id = ? WHERE id = ? AND calendar_event_id IS NOT ? "
+                "AND (calendar_event_id IS NULL OR calendar_event_id IN "
+                "(SELECT id FROM calendar_events WHERE deleted_at IS NOT NULL))",
+                (event_id, record_id, event_id)).rowcount
+            if linked:
+                con.execute("UPDATE calendar_events SET logged_as_key = coalesce(logged_as_key, ?) WHERE id = ?",
+                            (issue_key, event_id))
+        return bool(linked)
+    except (sqlite3.DatabaseError, muninn.MuninnError):
+        return False      # only a convenience; finding the record is what prevents the duplicate
+
+
 def _insert(con: sqlite3.Connection, rec: SubtaskRecord) -> bool:
     """Insert one record (inside the caller's transaction). False if the meeting already has one."""
     if con.execute("SELECT 1 FROM meeting_subtasks WHERE meeting_key = ?", (rec.meeting_key,)).fetchone():

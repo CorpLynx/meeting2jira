@@ -95,6 +95,10 @@ while ($null -ne $item -and $guard -lt 5000) {
             categories   = $categories
             organizer    = $organizer
             is_teams     = [bool]($location -match 'Microsoft Teams')
+            # The meeting's own id and whether it belongs to a series, so Odin can tell a one-off
+            # meeting that moved from a new one. Neither is a guarded property.
+            global_id    = [string]$item.GlobalAppointmentID
+            is_recurring = [bool]$item.IsRecurring
         }
     }
     $item = $restricted.GetNext()

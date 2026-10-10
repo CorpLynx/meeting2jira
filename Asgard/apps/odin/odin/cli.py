@@ -338,6 +338,8 @@ def _preview(cfg: Dict[str, Any], con: sqlite3.Connection, work_dir: Path, meeti
                      seen_before=legacy.find if legacy else None)
         skipped = sum(result.skipped.values())
         log.info("\nWould create %d, already synced %d, skipped %d.", result.planned, result.existing, skipped)
+        if result.moved:
+            log.info("%d meeting(s) moved since their sub-task was made; nothing would change for them.", len(result.moved))
         for reason, count in result.skipped.most_common():
             log.debug("  skipped %3d  %s", count, reason)
         errors += len(result.errors)
@@ -353,6 +355,8 @@ def _summarize(out: Outcome) -> None:
         skipped = sum(r.skipped.values())
         log.info("\nCreated %d, already synced %d, skipped %d, errors %d, warnings %d.",
                  len(r.created), r.existing, skipped, len(r.errors), len(r.warnings))
+        if r.moved:
+            log.info("Moved since their sub-task was made, left as they are: %s", ", ".join(r.moved))
         if r.recovered:
             log.info("Recovered %d sub-task(s) that a failed create had already made: %s",
                      len(r.recovered), ", ".join(r.recovered))
@@ -397,6 +401,7 @@ def _finish(cfg: Dict[str, Any], data_dir: Path, out: Outcome) -> int:
         "created": len(r.created),
         "recovered": len(r.recovered),
         "existing": r.existing,
+        "moved": len(r.moved),
         "skipped": sum(r.skipped.values()),
         "errors": len(errors),
         "warnings": len(out.all_warnings()),
@@ -701,6 +706,9 @@ def _report_last_run(data_dir: Path) -> None:
     log.info("Last run (%s) %s at %s: created %s, existing %s, skipped %s, errors %s.",
              last.get("command", "push"), verdict, finished, last.get("created"), last.get("existing"),
              last.get("skipped"), last.get("errors"))
+    if last.get("moved"):
+        log.info("  %s meeting(s) moved since their sub-task was made; the sub-tasks were left as they are.",
+                 last["moved"])
     if last.get("first_error"):
         log.info("  first error: %s", last["first_error"])
     try:

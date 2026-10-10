@@ -208,6 +208,14 @@ class PowerShellGuardrails(unittest.TestCase):
         self.assertTrue(all("IncludeOrganizer" in line for line in organizer_lines),
                         "$item.Organizer may only be read behind -IncludeOrganizer")
 
+    def test_exporter_says_the_meetings_id_and_whether_it_recurs(self):
+        """Odin recognises a one-off meeting that moved by these (refinements spec, 1a). The id has to
+        be the same value the key starts with, or the lookup finds nothing."""
+        code = self._read("Export-OutlookMeetings.ps1")
+        self.assertIn('key          = "$($item.GlobalAppointmentID)|$startUtc"', code)
+        self.assertIn("global_id    = [string]$item.GlobalAppointmentID", code)
+        self.assertIn("is_recurring = [bool]$item.IsRecurring", code)
+
     def test_clm_safe_scripts(self):
         # These must keep working under Constrained Language Mode: no COM, no Add-Type, no
         # New-Object, and no static method calls on .NET types.

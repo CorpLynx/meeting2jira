@@ -84,6 +84,20 @@ class KeyTests(unittest.TestCase):
         with self.assertRaises(MappingError):
             occurrence_key({}, datetime(2026, 9, 22, tzinfo=timezone.utc))
 
+    def test_the_calendar_id_is_the_key_before_its_start(self):
+        """Odin recognises a one-off meeting that moved by this id (export field global_id)."""
+        for event in load_sample()[:2]:
+            item = map_event(event)
+            self.assertEqual(item["global_id"], "owa:" + event["iCalUId"])
+            self.assertEqual(item["key"], item["global_id"] + "|" + item["start_utc"])
+
+    def test_without_a_series_type_it_is_unknown_whether_it_recurs(self):
+        """The captured samples have no `type`, so Odin treats these meetings as it always has."""
+        event = load_sample()[0]
+        self.assertNotIn("type", event)
+        self.assertIsNone(map_event(event)["is_recurring"])
+        self.assertIs(map_event(dict(event, Type="SingleInstance"))["is_recurring"], False)
+
 
 class FieldMappingTests(unittest.TestCase):
     """The filters in rules.py depend on these exact values, so each is pinned."""

@@ -10,7 +10,9 @@ Order of operations, and why
     1. Sort by start time and drop within-run duplicates (same key or same content hash).
     2. Router decides: skip with a reason, or create under a parent.
     3. store.find_subtask short-circuits anything already pushed (and, before the one-time import,
-       anything state.db or the journal knows).
+       anything state.db or the journal knows). A one-off meeting whose organizer moved it is found by
+       its calendar id (store.find_moved): reported as MOVED, never made again, and nothing in Jira is
+       changed, because Odin doesn't edit issues.
     4. Honour max_creates_per_run, counting created + recovered + planned.
     5. Look in Jira for this meeting's label, then create, then record in Muninn *immediately*,
        then fetch the new sub-task into Muninn, then log the meeting's time, then transition. A
@@ -63,6 +65,7 @@ class RunResult:
     created: List[str] = field(default_factory=list)
     planned: int = 0
     existing: int = 0
+    moved: List[str] = field(default_factory=list)       # one-off meetings moved since their sub-task was made
     capped: int = 0
     skipped: Counter = field(default_factory=Counter)
     errors: List[str] = field(default_factory=list)
@@ -203,7 +206,9 @@ def _push(meetings: Iterable[Meeting], cfg: Dict[str, Any], con: sqlite3.Connect
           seen_before: Optional[Callable[[Meeting], Optional[str]]], data_dir: Path) -> None:
     j = cfg["jira"]
     seen = set()
-    for m in sorted(meetings, key=lambda x: x.start_utc):
+    meetings = sorted(meetings, key=lambda x: x.start_utc)
+    on_calendar = {x.key for x in meetings}
+    for m in meetings:
         if m.key in seen or m.content_hash in seen:
             continue
         seen.update((m.key, m.content_hash))
@@ -234,6 +239,22 @@ def _push(meetings: Iterable[Meeting], cfg: Dict[str, Any], con: sqlite3.Connect
         if known:
             result.existing += 1
             log.info("  EXISTS   %-14s %s", known, label)
+            continue
+
+        moved = store.find_moved(con, m)
+        # A record whose meeting is still in this export at its old time belongs to another meeting
+        # that shares the id (a copied item can), not to this one before it moved.
+        if moved is not None and moved["meeting_key"] not in on_calendar:
+            result.moved.append(moved["issue_key"])
+            was = muninn.from_ts(moved["started_at"]).astimezone()
+            change = f"was {was:%Y-%m-%d %H:%M}"
+            if int(moved["minutes"]) != m.minutes:
+                change += f", {moved['minutes']}m"
+                if moved["worklog_wanted"]:
+                    change += "; its worklog keeps the old length: change it in Jira if it should match"
+            log.info("  MOVED    %-14s %s  (%s; its sub-task is left as it is)", moved["issue_key"], label, change)
+            if not dry_run and m.key in event_ids:
+                store.link_moved(con, moved["id"], event_ids[m.key], moved["issue_key"])
             continue
 
         # Recovered issues count against the cap too: they are sub-tasks this run is responsible

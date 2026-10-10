@@ -55,6 +55,15 @@ _SHOW_AS = {
 # sensitivity values that mean "keep this out of Jira"
 _PRIVATE = {"private", "confidential"}
 
+# Graph/OWA `type` -> the export's is_recurring. Anything else, or no `type` at all, is unknown
+# (None), and Odin then treats the meeting as it always has.
+_RECURRING = {
+    "singleinstance": False,
+    "occurrence": True,
+    "exception": True,
+    "seriesmaster": True,
+}
+
 _CANCELLED_SUBJECT = re.compile(r"^\s*cancell?ed\s*:", re.IGNORECASE)
 
 
@@ -150,13 +159,12 @@ def iso_utc(value: datetime) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def occurrence_key(event: Dict[str, Any], start: datetime) -> str:
-    """A stable per-occurrence identity, which is what state.db dedupes on.
+def calendar_id(event: Dict[str, Any]) -> str:
+    """The calendar's id for the meeting: everything in its key before the "|".
 
-    iCalUId is preferred: it is stable for the same occurrence across clients and across runs, and
-    it is shared with the COM path's notion of series identity. The series id is combined with the
-    start time so each instance of a recurring meeting is distinct - the mistake that otherwise
-    makes a daily standup appear once and never again.
+    iCalUId is preferred: it is stable for the same meeting across clients and across runs, and it
+    doesn't change when the meeting is moved, which is how Odin recognises a one-off meeting that
+    moved instead of making it a second sub-task (export field `global_id`).
     """
     # Each is tried in turn, and a key that is present but blank falls through to the next - an
     # empty iCalUId is no more usable than a missing one.
@@ -164,7 +172,16 @@ def occurrence_key(event: Dict[str, Any], start: datetime) -> str:
               or _text(_field(event, "id")))
     if not series:
         raise MappingError("event has no iCalUId or id to build a stable key from")
-    return f"{KEY_PREFIX}:{series}|{iso_utc(start)}"
+    return f"{KEY_PREFIX}:{series}"
+
+
+def occurrence_key(event: Dict[str, Any], start: datetime) -> str:
+    """A stable per-occurrence identity, which is what state.db dedupes on.
+
+    The calendar id is combined with the start time so each instance of a recurring meeting is
+    distinct - the mistake that otherwise makes a daily standup appear once and never again.
+    """
+    return f"{calendar_id(event)}|{iso_utc(start)}"
 
 
 def map_event(event: Dict[str, Any], include_organizer: bool = False) -> Dict[str, Any]:
@@ -226,6 +243,8 @@ def map_event(event: Dict[str, Any], include_organizer: bool = False) -> Dict[st
         "categories": categories,
         "organizer": organizer,
         "is_teams": is_teams,
+        "global_id": calendar_id(event),
+        "is_recurring": _RECURRING.get(_text(_field(event, "type")).lower()),
     }
 
 
