@@ -604,7 +604,7 @@ class AgentGuardTests(unittest.TestCase):
     guard = load_hook("guard_baldur")
 
     def test_the_persons_decisions_are_blocked(self):
-        b = r'py -3 "C:\Users\Brandon Doe\AppData\Local\Asgard\app\apps\baldur\cli.py"'
+        b = r'py -3 "C:\Users\Dev User\AppData\Local\Asgard\app\apps\baldur\cli.py"'
         for command in (f"{b} approve --date 2026-10-01", f"{b} approve --date 2026-10-01 --ai", f"{b} reject 12",
                         f"{b} change 12 2h", f"{b} actual 2026-10-01 6h", f"{b} calibrate --accept",
                         f"{b} setup --set review_mode=metadata", f"{b} setup --email x@agency.gov",
@@ -933,6 +933,6 @@ class ReviewFindingsTests(AssistCase):
 
     def test_p6_an_agent_is_named_in_one_word(self):
         with self.assertRaisesRegex(muninn.MuninnError, "one word"):
-            self.record(agent="kiro approved by Brandon")
+            self.record(agent="kiro approved by the owner")
         self.record(agent="claude-code")
 

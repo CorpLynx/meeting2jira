@@ -15,7 +15,7 @@
 playwright==1.49.1
 # The shared desktop window (asgard/ui/shell.py, apps/*/ui/*.qml): Qt Quick via PySide6. Imported
 # only when a window opens; the launcher, Muninn and every CLI work without it. Not pure Python
-# (Qt DLLs and .pyd files): native, approved by Brandon Oct 2026 (in use on-prem). 6.10.3 is the
+# (Qt DLLs and .pyd files): native, approved by the owner Oct 2026 (in use on-prem). 6.10.3 is the
 # last release that supports Python 3.9. Essentials has QtQml, QtQuick and Quick Controls.
 PySide6-Essentials==6.10.3
 # Ysildir's MCP server: the official MCP Python SDK (MCPServer; Ysildir runs only its stdio transport

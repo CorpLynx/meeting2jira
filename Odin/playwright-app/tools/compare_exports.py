@@ -5,7 +5,7 @@ the same days both ways and compare: anything that disagrees is either a field t
 wrong or a genuine difference between what the two APIs expose.
 
     # on a machine with classic Outlook
-    .\\meeting2jira sync -DaysBack 7 -KeepExport -DryRun     # leaves a COM export behind
+    .\\Odin sync -DaysBack 7 -KeepExport -DryRun     # leaves a COM export behind
     python export_owa.py --days-back 7 --out owa.json
     python tools/compare_exports.py com_export.json owa.json
 

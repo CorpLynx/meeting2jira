@@ -12,7 +12,7 @@ What always stays standard library: `asgard/muninn/` (every app and Odin import 
 | --- | --- |
 | Pin | `playwright==1.49.1` |
 | Used in | `apps/heimdall/heimdall/browser.py` (only when `heimdall fill` runs; imported inside functions) |
-| Needed for | Driving the installed Edge to fill the SeCcHm form. Every other Heimdall command, and Heimdall's window, works without it |
+| Needed for | Driving the installed Edge to fill the security change form. Every other Heimdall command, and Heimdall's window, works without it |
 | Native code | Yes: it runs a bundled `node.exe`. AppLocker blocks it in a user-profile path, so IT installs it in an allowed folder. With `channel="msedge"` it uses the installed Edge and downloads no browser |
 | Approval | Pending |
 | If it's missing | `fill` stops with a message saying to ask IT for it. `fill --dry-run` (and **Dry run** in the window) still lists every value to type by hand |
@@ -27,7 +27,7 @@ What always stays standard library: `asgard/muninn/` (every app and Odin import 
 | Used in | `asgard/ui/shell.py` (the shared window), `asgard/ui/__init__.py` (`available()`, which checks the window can open before the launcher picks it), and the QML it loads: `asgard/ui/qml/` and `apps/*/ui/*.qml` |
 | Needed for | Asgard's shared window: Heimdall's tile, `python -m asgard.ui`. The launcher, Muninn and every command line work without it |
 | Native code | Yes: Qt DLLs and `.pyd` files. App Control must allow them |
-| Approval | Approved by Brandon, Oct 2026 (in use on-prem) |
+| Approval | Approved by the owner, Oct 2026 (in use on-prem) |
 | If it's missing | Heimdall's tile shows a message saying what to install (`asgard.ui.run`); the `heimdall` commands still do everything the window does |
 | Stdlib alternative | `tkinter`, which Baldur's window uses and which the launcher keeps as its fallback (`asgard/launcher.py`). `asgard/ui/theme.py`, `prefs.py` and `registry.py` are standard library, so a tkinter shell could reuse the tokens, preferences and manifests; the QML pages would be rewritten as Tk widgets, and each app's backend (plain Python) stays as it is |
 | Package alternatives | `PyQt6` (and `PyQt6-Qt6`): the same Qt, so the QML files work unchanged; `shell.py` needs its imports renamed (`Signal` to `pyqtSignal`, `Slot` to `pyqtSlot`, `Property` to `pyqtProperty`). GPL or a commercial licence, which IT may weigh differently from PySide6's LGPL. The full `PySide6` package works too; it's larger |

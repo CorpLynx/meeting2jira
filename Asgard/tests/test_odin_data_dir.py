@@ -1,8 +1,9 @@
-"""Odin's files live under Asgard's folder: %LOCALAPPDATA%\\Asgard\\odin (Brandon, Oct 2026).
+"""Odin's files live under Asgard's folder: %LOCALAPPDATA%\\Asgard\\odin (decided Oct 2026).
 
 - The folder honours ASGARD_HOME, as Asgard does, and Odin still needs no Asgard installed.
-- A folder from before (%LOCALAPPDATA%\\meeting2jira) moves there once, whole, in one rename, so the
-  DPAPI token files, state.db, logs and exports come across unchanged.
+- A folder from before moves there once, whole, in one rename, so the DPAPI token files, state.db,
+  logs and exports come across unchanged: %LOCALAPPDATA%\\odin (the on-premises install), or
+  %LOCALAPPDATA%\\meeting2jira before that. Two at once is refused rather than guessed.
 - A move that fails stops with a message instead of starting an empty folder beside the old one.
 - Odin and its two exporters (graph-app, playwright-app) and the scripts agree on the folder.
 """
@@ -51,8 +52,8 @@ class DataDirTests(unittest.TestCase):
                 os.environ[key] = value
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def legacy(self):
-        old = self.tmp / "meeting2jira"
+    def legacy(self, name="meeting2jira"):
+        old = self.tmp / name
         (old / "logs").mkdir(parents=True)
         (old / "config.json").write_text("{}", encoding="utf-8")
         (old / "jira_token.dpapi").write_bytes(b"\x01\x00\x00\x00ciphertext")
@@ -101,6 +102,25 @@ class DataDirTests(unittest.TestCase):
             with self.assertRaisesRegex(config.ConfigError, "couldn't be moved .*Close anything using it"):
                 config.default_data_dir()
 
+    def test_the_on_premises_folder_moves_too(self):
+        """The on-premises install kept its files in %LOCALAPPDATA%\\odin, not \\meeting2jira."""
+        old = self.legacy("odin")
+        target = self.tmp / "Asgard" / "odin"
+        self.assertEqual(config.default_data_dir(), target)
+        self.assertFalse(old.exists())
+        for name in ("config.json", "jira_token.dpapi", "state.db"):
+            self.assertTrue((target / name).is_file(), name)
+
+    def test_two_old_folders_are_refused_rather_than_guessed(self):
+        """Moving one and leaving the other could orphan the state.db that holds the history."""
+        self.legacy("odin")
+        self.legacy("meeting2jira")
+        with self.assertRaisesRegex(config.ConfigError, "two of its old folders"):
+            config.default_data_dir()
+        self.assertTrue((self.tmp / "odin" / "state.db").is_file())        # nothing was moved
+        self.assertTrue((self.tmp / "meeting2jira" / "state.db").is_file())
+        self.assertFalse((self.tmp / "Asgard" / "odin").exists())
+
     def test_the_other_apps_use_the_same_folder_and_move_it_too(self):
         graph_config = load("odin_graph_config", ODIN / "graph-app" / "graph" / "config.py")
         export_owa = load("odin_export_owa", ODIN / "playwright-app" / "export_owa.py", ODIN / "playwright-app")
@@ -116,15 +136,18 @@ class DataDirTests(unittest.TestCase):
                 self.assertEqual(data_dir(), self.tmp / "h" / "odin")
                 os.environ.pop("ASGARD_HOME")
 
-    def test_no_script_still_writes_to_the_old_folder(self):
-        """Only the move itself may name %LOCALAPPDATA%\\meeting2jira."""
+    def test_no_script_still_writes_to_the_old_folders(self):
+        """Only the move itself may name %LOCALAPPDATA%\\odin or %LOCALAPPDATA%\\meeting2jira.
+
+        %LOCALAPPDATA%\\Asgard\\odin, the folder they move to, is a different path and never matches.
+        """
         offenders = []
         for path in sorted(ODIN.rglob("*")) + sorted(APP.rglob("*")):
             if path.suffix.lower() not in (".py", ".ps1", ".cmd") or "tests" in path.parts or not path.is_file():
                 continue
             for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-                if re.search(r"LOCALAPPDATA%?\\?\)?[\\/ ,'\"]+\\?'?meeting2jira", line, re.I) and not re.search(
-                        r"legacy|move|before|exist|rem |#|\"\"\"|^\s*\(", line, re.I):
+                if re.search(r"LOCALAPPDATA%?\\?\)?[\\/ ,'\"]+\\?'?(odin|meeting2jira)\b", line, re.I) and not re.search(
+                        r"legacy|move|before|exist|rem |#|\"\"\"|^\s*\(|echo|throw|Write-Check", line, re.I):
                     offenders.append(f"{path}:{n}: {line.strip()}")
         self.assertEqual(offenders, [])
 

@@ -4,7 +4,7 @@ Identity `odin` · code `apps/odin` (package `odin`), Muninn side `asgard.muninn
 
 Odin is the only app that talks to Jira, in both directions. It turns your finished meetings into Jira sub-tasks and logs their time, mirrors your Jira issues, calendar and worklogs into Muninn for the other apps, resolves the keys they store, and posts the time you approved in Baldur. It never edits or deletes an issue or a worklog in Jira.
 
-Before Oct 2026 Odin was a separate program (`Odin/app`, package `meeting2jira`) that kept its own `state.db`. It moved into Asgard in the steps of [../muninn-design.md](../muninn-design.md#moving-odin-into-muninn); `Odin/` keeps only the optional Graph and OWA exporters, the Power Platform material and Odin's history.
+Before Oct 2026 Odin was a separate program under `Odin/app` that kept its own `state.db`. It moved into Asgard in the steps of [../muninn-design.md](../muninn-design.md#moving-odin-into-muninn); `Odin/` keeps only the optional Graph and OWA exporters, the Power Platform material and Odin's history.
 
 ## Tables
 

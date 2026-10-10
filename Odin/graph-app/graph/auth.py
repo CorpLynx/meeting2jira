@@ -59,7 +59,7 @@ class AuthError(Exception):
 
 
 # ---------------------------------------------------------------------------------------------
-# DPAPI, duplicated in spirit from app/src/meeting2jira/credstore.py.
+# DPAPI, duplicated in spirit from Asgard/apps/odin/odin/credstore.py.
 #
 # Not imported from there: app/ must remain independently copyable, and this folder must not reach
 # into it. The surface used here is small and stable (two calls), so a copy is cheaper than coupling
@@ -98,7 +98,7 @@ if sys.platform == "win32":
     def _protect(data: bytes) -> bytes:
         blob_in, _keepalive = _to_blob(data)
         blob_out = _Blob()
-        if not _crypt32.CryptProtectData(ctypes.byref(blob_in), "meeting2jira-graph", None, None,
+        if not _crypt32.CryptProtectData(ctypes.byref(blob_in), "odin-graph", None, None,
                                          None, _CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out)):
             raise ctypes.WinError(ctypes.get_last_error())
         return _take(blob_out)
@@ -228,7 +228,7 @@ def acquire_token(cfg: Dict[str, Any], interactive_ok: bool = False,
     if result is None:
         if not interactive_ok:
             raise AuthError(
-                "No usable cached token, and this run is non-interactive. Run `meeting2jira-graph "
+                "No usable cached token, and this run is non-interactive. Run `odin-graph "
                 "login` once as yourself, then retry. If this happens on a schedule, Conditional "
                 "Access is forcing reauthentication: auth_mode \"broker\" avoids that, because the "
                 "device itself satisfies the policy.")

@@ -6,14 +6,14 @@ Oct 9, 2026 · status: spec, not built · runs on `infra/windows-test-vm/` throu
 
 ## Decision: US time zones only
 
-Brandon (Oct 9): Asgard only ever runs in US time zones. This has three consequences:
+the owner (Oct 9): Asgard only ever runs in US time zones. This has three consequences:
 
 - **The suite runs in the US zones**, not the old spread. Arizona and Hawaii are in because they have no daylight saving:
 
 | Windows zone | Why |
 | --- | --- |
 | UTC | Control |
-| Eastern Standard Time | Brandon's zone, and the zone the macOS tests use |
+| Eastern Standard Time | the owner's zone, and the zone the macOS tests use |
 | Central Standard Time | |
 | Mountain Standard Time | |
 | US Mountain Standard Time | Arizona: no daylight saving |

@@ -182,10 +182,15 @@ def asgard_dir() -> Path:
 
 
 def legacy_data_dirs() -> List[Path]:
-    """Where Odin kept its files before they moved under Asgard (Oct 2026)."""
+    """Where Odin kept its files before they moved under Asgard (Oct 2026), newest naming first.
+
+    Two folders came before %LOCALAPPDATA%\\Asgard\\odin: the on-premises install kept its files in
+    %LOCALAPPDATA%\\odin (and before that, %LOCALAPPDATA%\\meeting2jira). Both are looked for: missing
+    one leaves its state.db behind, and a run with no history re-creates every meeting ever synced.
+    """
     base = os.environ.get("LOCALAPPDATA")
     if base:
-        return [Path(base) / "meeting2jira"]
+        return [Path(base) / "odin", Path(base) / "meeting2jira"]
     return [Path.home() / ".meeting2jira", Path.home() / "meeting2jira"]
 
 
@@ -210,17 +215,25 @@ def move_legacy_data(target: Path) -> Optional[Path]:
                     "if it holds nothing you need), then run again. Running now would re-create every "
                     "meeting already synced.")
         return None
-    for old in legacy_data_dirs():
-        if old.is_dir():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                os.replace(old, target)
-            except OSError as exc:
-                raise ConfigError(
-                    f"Odin's files are moving to {target}, but {old} couldn't be moved ({exc}). Close "
-                    "anything using it (Odin's window, a sync that's running, a log open in an editor) and "
-                    "run again.") from None
-            return old
+    present = [old for old in legacy_data_dirs() if old.is_dir()]
+    if len(present) > 1:
+        # Two old folders, so which one holds the history is a guess. Guessing wrong leaves a state.db
+        # behind, and the first run without it re-creates every meeting already synced.
+        where = " and ".join(str(p) for p in present)
+        raise ConfigError(
+            f"Odin found two of its old folders ({where}) and can't tell which to keep. Move the one "
+            f"with the newest state.db to {target} yourself, check the other holds nothing you need, "
+            "then run again.")
+    for old in present:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(old, target)
+        except OSError as exc:
+            raise ConfigError(
+                f"Odin's files are moving to {target}, but {old} couldn't be moved ({exc}). Close "
+                "anything using it (Odin's window, a sync that's running, a log open in an editor) and "
+                "run again.") from None
+        return old
     return None
 
 
@@ -228,8 +241,8 @@ def default_data_dir() -> Path:
     """Odin's files: %LOCALAPPDATA%\\Asgard\\odin, beside Asgard's (ASGARD_HOME\\odin when set).
 
     Odin is an Asgard app: its config, token, logs and exports sit beside Asgard's own files, and
-    its records are in Muninn. A folder from before
-    (%LOCALAPPDATA%\\meeting2jira) is moved here the first time.
+    its records are in Muninn. A folder from before (%LOCALAPPDATA%\\odin on the on-premises
+    install, or %LOCALAPPDATA%\\meeting2jira before that) is moved here the first time.
     """
     target = asgard_dir() / "odin"
     move_legacy_data(target)

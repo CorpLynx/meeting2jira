@@ -6,7 +6,7 @@
 
 ## Read this first (for the implementing agent)
 
-This spec was written off-premises against the `Asgard/` folder of the `meeting2jira` repository,
+This spec was written off-premises against the `Asgard/` folder of the `Odin` repository,
 on branch `claude/baldur-estimation`. That branch has Muninn schema v4, Baldur's AI-assisted
 method, and the agent guide `baldur-agent-2`. The on-premises copy may be ahead of it.
 Statements about existing code are tagged **(repo)**. Check each one in task 0 and edit the spec
@@ -18,7 +18,7 @@ most here:
 
 - Per-user and no admin. Asgard's floor is Python 3.9, but Ysildir needs 3.10+ because the MCP
   SDK does. On Windows, Muninn already needs 3.11.
-- **Use the best module for each job** (Brandon, 2026-10-09: standard-library-only is gone).
+- **Use the best module for each job** (decided 2026-10-09: standard-library-only is gone).
   Declare and pin it in `Asgard/requirements.txt`. The comment above each pin says:
   - what it's for;
   - whether it's compiled ("native: needs IT approval", since App Control checks DLLs);
@@ -68,7 +68,7 @@ Baldur and Odin.
 | Decision | Choice | Why |
 | --- | --- | --- |
 | Implementation | The official MCP Python SDK, `mcp` 2.x (`MCPServer`), stdio transport only | It's the reference implementation. It handles every protocol version (2024-11-05 to 2026-07-28 in 2.3.0) and builds input and output schemas from type hints. It also handles validation, structured results, annotations, prompts and resources, and ships a real client for tests. Ysildir then holds only Asgard's logic. The cost: Python 3.10+ and five compiled wheels for IT to approve. The design's "Modules" table lists the alternatives if it isn't available on-premises |
-| Modules | The best module for each job, each pin commented with its alternatives | Brandon's rule (2026-10-09). An on-premises gap then has a known answer rather than a redesign |
+| Modules | The best module for each job, each pin commented with its alternatives | the owner's rule (2026-10-09). An on-premises gap then has a known answer rather than a redesign |
 | Location | `Asgard/apps/ysildir/`, shipped in the Asgard zip | Setup copies `apps/` **(repo: `install.PAYLOAD`)**. Ysildir and Baldur always ship together, so Ysildir can import Baldur's modules without the two drifting apart |
 | Identity | Reads use `open_app("ysildir", readonly=True)`. Each write calls one Baldur function on a connection opened as `baldur` for that call | `docs/integration/ysildir.md` says a write runs under the owning app's identity; the guard then enforces Baldur's ownership as it always does |
 | Phase 1 scope | Teaching; Baldur's agent intake; Baldur's day view and the MCP-tier review; Muninn reads | The request: teach agents to use Baldur and Muninn |

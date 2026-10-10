@@ -1,6 +1,6 @@
 # Parity checklist
 
-Every row below exists in meeting2jira because it was, at some point, a bug. A rewrite starts with
+Every row below exists in Odin because it was, at some point, a bug. A rewrite starts with
 none of them. Work through this before pointing a flow at real data.
 
 Ordered by what goes wrong if you skip it.

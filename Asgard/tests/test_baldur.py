@@ -335,7 +335,7 @@ class MuninnCase(unittest.TestCase):
         self.addCleanup(lambda: self.con.close())
         self.settings = config.Settings(config.validate({"project_keys": ["PROJ", "OPS"], "history_days": 3650}))
         self.source = muninn.ensure_source(self.con, "git", "local-git")
-        muninn.add_identity(self.con, "git_email", "brandon@agency.gov")
+        muninn.add_identity(self.con, "git_email", "dev@agency.gov")
         self.repo = self.add_repo("asgard")
         self.n = 0
 
@@ -354,7 +354,7 @@ class MuninnCase(unittest.TestCase):
         ts = muninn.to_ts(at)
         cid = int(self.con.execute(
             "INSERT INTO commits (repo_id, sha, author_name, author_email, authored_at, committed_at, subject, "
-            "is_mine, branch_hint, first_seen_at) VALUES (?, ?, 'Brandon', 'brandon@agency.gov', ?, ?, ?, ?, ?, ?) "
+            "is_mine, branch_hint, first_seen_at) VALUES (?, ?, 'Dev', 'dev@agency.gov', ?, ?, ?, ?, ?, ?) "
             "RETURNING id", (repo or self.repo, f"{self.n:040x}", ts, ts, subject or f"change {self.n}", mine, branch,
                              ts)).fetchone()[0])
         for k in ks:
@@ -630,7 +630,7 @@ class Repo:
         path.mkdir(parents=True)
         self.git("init", "-q")
         self.git("symbolic-ref", "HEAD", "refs/heads/main")
-        for k, v in (("user.email", "brandon@agency.gov"), ("user.name", "Brandon"), ("commit.gpgsign", "false")):
+        for k, v in (("user.email", "dev@agency.gov"), ("user.name", "Dev"), ("commit.gpgsign", "false")):
             self.git("config", k, v)
         self.n = 0
 
@@ -664,7 +664,7 @@ class CollectBase(MuninnCase):
         self._env = {k: os.environ.get(k) for k in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")}
         (self.dir / "gitconfig").write_text("")
         os.environ.update(GIT_CONFIG_GLOBAL=str(self.dir / "gitconfig"), GIT_CONFIG_NOSYSTEM="1")
-        muninn.add_identity(self.con, "git_email", "brandon@agency.gov")
+        muninn.add_identity(self.con, "git_email", "dev@agency.gov")
         self.git = Repo(self.dir / "src" / "asgard")
 
     def tearDown(self):
@@ -702,9 +702,9 @@ class CollectTests(CollectBase):
         self.worked_repo()
         g = self.git
         g.commit("2026-10-01T15:30:00", "teammate's work", author=("Sam", "sam@agency.gov"))
-        g.commit("2026-10-01T15:35:00", "same name, someone else", author=("Brandon", "brandon.k@contractor.example"))
+        g.commit("2026-10-01T15:35:00", "same name, someone else", author=("Dev", "dev.k@contractor.example"))
         g.commit("2026-10-01T15:40:00", "Retry on 503 (#12)", committer=("GitHub", "noreply@github.com"))
-        g.commit("2026-10-01T15:50:00", "pairing\n\nCo-authored-by: Brandon <brandon@agency.gov>",
+        g.commit("2026-10-01T15:50:00", "pairing\n\nCo-authored-by: Dev <dev@agency.gov>",
                  author=("Sam", "sam@agency.gov"))
         res = self.collect()
         self.assertEqual((res.commits_new, res.keyed, res.skipped_copies, res.coauthored), (8, 8, 1, 1))
@@ -761,7 +761,7 @@ class CollectTests(CollectBase):
         self.con.execute("DELETE FROM identities")
         with self.assertRaisesRegex(collect.CollectError, "which commits are yours"):
             collect.collect(self.con, self.settings, only=[self.git.path])
-        muninn.add_identity(self.con, "git_email", "brandon@agency.gov")
+        muninn.add_identity(self.con, "git_email", "dev@agency.gov")
         self.settings.values["project_keys"] = []
         with self.assertRaisesRegex(collect.CollectError, "project_keys"):
             collect.collect(self.con, self.settings, only=[self.git.path])
@@ -888,7 +888,7 @@ class ReviewStoreTests(MuninnCase):
         self.con.execute("DELETE FROM identities")
         with self.assertRaisesRegex(collect.CollectError, "which commits are yours"):
             self.run_store()
-        muninn.add_identity(self.con, "git_email", "brandon@agency.gov")
+        muninn.add_identity(self.con, "git_email", "dev@agency.gov")
         self.settings.values["project_keys"] = []
         with self.assertRaisesRegex(collect.CollectError, "project_keys"):
             self.run_store()
@@ -1030,18 +1030,18 @@ class ReviewCollectTests(CollectBase):
 
     def test_setup_finds_an_email_kept_in_an_included_config_file(self):
         # git config --global skips [include] files; the email in one was invisible to setup --from-git.
-        (self.dir / "work.gitconfig").write_text("[user]\n\temail = brandon@agency.gov\n")
+        (self.dir / "work.gitconfig").write_text("[user]\n\temail = dev@agency.gov\n")
         (self.dir / "gitconfig").write_text(f"[include]\n\tpath = {(self.dir / 'work.gitconfig').as_posix()}\n")
         here = os.getcwd()
         os.chdir(self.dir)              # not inside a repository, so only system and global config apply
         try:
-            self.assertEqual(gitread.configured_identity()[0], "brandon@agency.gov")
+            self.assertEqual(gitread.configured_identity()[0], "dev@agency.gov")
         finally:
             os.chdir(here)
 
 
 # --------------------------------------------------------------------------
-# GitHub Enterprise Server (Brandon, 2026-10-04)
+# GitHub Enterprise Server (decided 2026-10-04)
 # --------------------------------------------------------------------------
 
 class EnterpriseServerTests(CollectBase):
@@ -1129,7 +1129,7 @@ class EnterpriseServerTests(CollectBase):
         g.commit("2026-10-01T08:00:00", "initial", author=("Sam", "sam@agency.gov"))
         g.commit("2026-10-01T09:00:00", "PROJ-2 Update README.md",
                  committer=("GitHub Enterprise", "noreply@github.agency.gov"))
-        g.commit("2026-10-01T09:30:00", "PROJ-2 fix the link (#3)", committer=("Brandon", "brandon@agency.gov"))
+        g.commit("2026-10-01T09:30:00", "PROJ-2 fix the link (#3)", committer=("Dev", "dev@agency.gov"))
         res = self.collect()
         self.assertEqual((res.commits_new, res.skipped_copies), (2, 0),
                          "only a pull request's squash is a copy; a web edit or your own (#3) subject is work")
@@ -1153,7 +1153,7 @@ class EnterpriseServerTests(CollectBase):
         self.assertEqual(len(labels), 4, "v_activity leaves the copy out (schema v2)")
         self.assertNotIn("PROJ-1 retry (#3)", labels)
         self.con.execute("DELETE FROM identities")
-        self.assertEqual(collect.refresh_ownership(self.con, ["brandon@agency.gov"]), 4,
+        self.assertEqual(collect.refresh_ownership(self.con, ["dev@agency.gov"]), 4,
                          "the copy isn't counted among the commits that stopped being yours")
 
     def test_a_clone_still_holding_a_copy_as_work_doesnt_count_it(self):
@@ -1706,7 +1706,7 @@ class CliTests(MuninnCase):
 
     def test_review_flow(self):
         self.worked_example()
-        code, out, _ = self.cli("setup", "--email", "brandon@agency.gov", "--project", "proj", "--set", "history_days=400")
+        code, out, _ = self.cli("setup", "--email", "dev@agency.gov", "--project", "proj", "--set", "history_days=400")
         self.assertEqual(code, 0, out)
         self.assertIn("Jira projects        PROJ", out)
         self.assertEqual(config.load().values["history_days"], 400)
@@ -1775,7 +1775,7 @@ class CliTests(MuninnCase):
         ts = muninn.to_ts(t(1, 10))
         copy = int(self.con.execute(
             "INSERT INTO commits (repo_id, sha, author_name, author_email, authored_at, committed_at, subject, "
-            "is_mine, first_seen_at) VALUES (?, ?, 'Brandon', 'brandon@agency.gov', ?, ?, 'change 1', 1, ?) "
+            "is_mine, first_seen_at) VALUES (?, ?, 'Dev', 'dev@agency.gov', ?, ?, 'change 1', 1, ?) "
             "RETURNING id", (self.add_repo("asgard-second-clone"), sha, ts, ts, ts)).fetchone()[0])
         code, out, err = self.cli("keys", sha, "PROJ-9")
         self.assertEqual(code, 0, err)

@@ -179,7 +179,7 @@ con.execute("INSERT INTO work_item_transitions (work_item_id, changelog_id, at, 
             "'in_progress', 1)", (WI,))
 
 # A second issue of mine, finished later, and one that someone else owns.
-other = dict(item, jira_id="10300", key="XYZ-50", summary="Retry SeCcHm polling", status="Done",
+other = dict(item, jira_id="10300", key="XYZ-50", summary="Retry security change polling", status="Done",
              status_category="done", resolution="Done", url="https://jira.example.gov/browse/XYZ-50",
              updated_at="2026-10-02T12:00:00Z", resolved_at="2026-10-02T12:00:00Z")
 WI2 = con.execute(UPSERT, other).fetchone()[0]
@@ -451,13 +451,13 @@ rejects("date convention", "INSERT INTO time_actuals (on_date, minutes) VALUES (
 # Loki
 # =====================================================================
 con.execute("INSERT INTO meetings (source_id, external_id, calendar_event_id, title, starts_at, ends_at, "
-            "recap_origin, notes_summary, first_seen_at) VALUES (4,'paste:9f2c',2,'BEARs intake sync',"
+            "recap_origin, notes_summary, first_seen_at) VALUES (4,'paste:9f2c',2,'entitlements intake sync',"
             "'2026-10-01T15:00:00Z','2026-10-01T16:00:00Z','paste',"
-            "'Agreed to submit BEARs workbook Friday; Confluence page owner is the PMO.',?)", (NOW,))
+            "'Agreed to submit entitlements workbook Friday; Confluence page owner is the PMO.',?)", (NOW,))
 con.execute("INSERT INTO action_items (meeting_id, text, owner, is_mine, due_on) "
-            "VALUES (1,'Submit BEARs workbook','me',1,'2026-10-09')")
+            "VALUES (1,'Submit entitlements workbook','me',1,'2026-10-09')")
 con.execute("INSERT INTO blufs (subject_type, subject_ref, bottom_line, body_md, tier, prompt_version) VALUES "
-            "('meeting','paste:9f2c','BEARs workbook goes to the PMO page Friday.','**BLUF:** ...','clipboard','loki-v1')")
+            "('meeting','paste:9f2c','entitlements workbook goes to the PMO page Friday.','**BLUF:** ...','clipboard','loki-v1')")
 rejects("a posted BLUF needs posted_at and sent_via", "UPDATE blufs SET state = 'posted' WHERE id = 1")
 con.execute("UPDATE blufs SET state='approved', approved_at=? WHERE id=1", (NOW,))
 con.execute("UPDATE blufs SET state='posted', posted_at='2026-10-01T17:00:00Z', sent_via='mailto' WHERE id=1")
@@ -507,10 +507,10 @@ acc = rows("SELECT work_item_key, approved_minutes, commit_count, merged_pr_coun
 check("a won't-do resolution is not an accomplishment; stats come from Baldur's tables",
       acc == [("XYZ-50", 105, 1, 0)], acc)
 check("the cursor stops Freya handling an event twice", rows(PENDING) == [])
-con.execute("UPDATE accomplishments SET impact_note='Cut failed SeCcHm polls from 12 to 0 a week' "
+con.execute("UPDATE accomplishments SET impact_note='Cut failed security change polls from 12 to 0 a week' "
             "WHERE work_item_key='XYZ-50'")
 check("an impact note is searchable",
-      one("SELECT kind FROM search WHERE search MATCH 'SeCcHm AND polls' AND kind='accomplishments'") == "accomplishments")
+      one("SELECT kind FROM search WHERE search MATCH '\"security change\" AND polls' AND kind='accomplishments'") == "accomplishments")
 con.execute("UPDATE accomplishments SET state='reopened', reopened_count=reopened_count+1 WHERE work_item_key='XYZ-50'")
 con.execute("UPDATE accomplishments SET state='done', last_done_at='2026-10-03T12:00:00Z' WHERE work_item_key='XYZ-50'")
 rejects("last done cannot precede first done",
@@ -529,7 +529,7 @@ ev = rows("SELECT evidence_type, evidence_ref FROM v_review_evidence WHERE perio
 check("v_review_evidence: accomplishments, merged PRs and posted BLUFs",
       ev == [("accomplishment", "XYZ-50"), ("bluf", "paste:9f2c"), ("pull_request", "asgard#7")], ev)
 con.execute("INSERT INTO review_drafts (period_id, element, text, tier, prompt_version) VALUES "
-            "(2,'Technical execution','Fixed SeCcHm polling (XYZ-50, asgard#7).','api','freya-v1')")
+            "(2,'Technical execution','Fixed security change polling (XYZ-50, asgard#7).','api','freya-v1')")
 con.execute("INSERT INTO citations (owner_type, owner_id, evidence_type, evidence_ref) VALUES "
             "('review_draft',1,'accomplishment','XYZ-50')")
 con.execute("INSERT INTO citations (owner_type, owner_id, evidence_type, evidence_ref) VALUES "
@@ -549,8 +549,8 @@ check("the checker leaves an invented ID unverified",
 # Heimdall and Bifrost
 # =====================================================================
 rejects("a non-draft submission needs approved_at",
-        "INSERT INTO submissions (system, title, state) VALUES ('bears','Q4 BEARs','approved')")
-con.execute("INSERT INTO submissions (system, title, work_item_key) VALUES ('bears','Q4 BEARs workbook','XYZ-45')")
+        "INSERT INTO submissions (system, title, state) VALUES ('bears','Q4 entitlements','approved')")
+con.execute("INSERT INTO submissions (system, title, work_item_key) VALUES ('bears','Q4 entitlements workbook','XYZ-45')")
 rejects("submitted needs submitted_at", "UPDATE submissions SET state='submitted', approved_at=? WHERE id=1", (NOW,))
 con.execute("UPDATE submissions SET state='approved', approved_at=? WHERE id=1", (NOW,))
 con.execute("UPDATE submissions SET state='submitted', submitted_at=?, external_id='884213', "
@@ -562,7 +562,7 @@ check("the history trigger logs every state",
       hist == [(None, "draft", None), ("draft", "approved", None), ("approved", "submitted", None),
                ("submitted", "in_review", "Under PMO review")], hist)
 
-hits = {r[0] for r in rows("SELECT kind FROM search WHERE search MATCH 'bears'")}
+hits = {r[0] for r in rows("SELECT kind FROM search WHERE search MATCH 'entitlements'")}
 check("search spans meetings, action items, BLUFs and submissions",
       hits == {"meetings", "action_items", "blufs", "submissions"}, hits)
 

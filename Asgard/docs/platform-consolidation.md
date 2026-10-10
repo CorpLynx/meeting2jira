@@ -6,11 +6,11 @@ Asgard's apps were built one at a time, so each carries its own copy of things e
 
 ## Principles
 
-1. **Core owns the cross-cutting; apps own their domain.** Paths, files, logs, processes, scheduling, HTTP, secrets, versions, install and update, diagnostics and UI chrome live in `asgard/`. What counts as your commit, how an estimate rounds, what a SeCcHm field means, stay in the app.
+1. **Core owns the cross-cutting; apps own their domain.** Paths, files, logs, processes, scheduling, HTTP, secrets, versions, install and update, diagnostics and UI chrome live in `asgard/`. What counts as your commit, how an estimate rounds, what a security change field means, stay in the app.
 2. **Move a thing to core when a second app needs it, or when correctness needs exactly one copy** (atomic writes, TLS, secrets, the schema). Not before: a core module with one caller is a guess about the second.
 3. **One rule, one place, one test.** A consolidated module comes with the test that would have caught the drift, and a guardrail that stops a new copy appearing.
 4. **Policies may differ; mechanisms may not.** Two apps can want different behaviour for a broken settings file (refuse vs. reset); they should share the code that reads it and pass the policy in.
-5. **Odin is an Asgard app (Oct 10, 2026).** It used to have to run with no Asgard present; since Brandon made it an Asgard app (`apps/odin`, on Muninn) it uses `asgard.paths` and Muninn like the others. Its Jira write path, DPAPI token, exit codes and PowerShell `Resolve-Python` copies are still its own, because they carry its no-duplicates guarantees; a shared `asgard.http` would have to keep its retry rules (writes retried only on 429) to replace them.
+5. **Odin is an Asgard app (Oct 10, 2026).** It used to have to run with no Asgard present; since the owner made it an Asgard app (`apps/odin`, on Muninn) it uses `asgard.paths` and Muninn like the others. Its Jira write path, DPAPI token, exit codes and PowerShell `Resolve-Python` copies are still its own, because they carry its no-duplicates guarantees; a shared `asgard.http` would have to keep its retry rules (writes retried only on 429) to replace them.
 6. **Heimdall's on-prem fork is out of scope.** The copy here is a pattern sample; nothing in core is shaped around it.
 
 ## How to interrogate the codebase

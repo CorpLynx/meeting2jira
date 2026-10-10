@@ -90,7 +90,7 @@ Item {
         PageHeader {
             Layout.fillWidth: true
             title: "Templates"
-            subtitle: "Saved values for the SeCcHm form. Fill opens Edge, fills the form, and stops so you can "
+            subtitle: "Saved values for the security change form. Fill opens Edge, fills the form, and stops so you can "
                       + "review it and click Submit yourself."
             AppButton {
                 text: "New template"

@@ -8,11 +8,11 @@ Follow [Asgard's install steps](../Asgard/README.md#install): the Python install
 
 Odin's command line is `odin.cmd` in `%LOCALAPPDATA%\Asgard\app\apps\odin`. Open a Command Prompt there (or add that folder to your PATH) to use the `odin` commands below.
 
-## 2. Moving from meeting2jira
+## 2. Moving from Odin
 
-If you used Odin before it moved into Asgard (as `meeting2jira`):
+If you used Odin before it moved into Asgard (as `Odin`):
 
-- Its folder, `%LOCALAPPDATA%\meeting2jira`, moves to `%LOCALAPPDATA%\Asgard\odin` the first time any Odin command runs: your config, the DPAPI-encrypted token and the logs come across unchanged.
+- Its folder, `%LOCALAPPDATA%\odin` (or `%LOCALAPPDATA%\meeting2jira` from the first version), moves to `%LOCALAPPDATA%\Asgard\odin` the first time any Odin command runs: your config, the DPAPI-encrypted token and the logs come across unchanged.
 - Its record of which meetings already have sub-tasks (`state.db`) moves into Muninn on the first real run, before anything is created, so no meeting is created again. The old file is kept as `state.db.migrated-DATE` for 30 days. Run `odin preview` first if you want to see that for yourself: it reads `state.db` and lists those meetings as already there.
 - `odin schedule` replaces the old `meeting2jira-daily` task with "Asgard Odin daily".
 - If you had pointed Asgard's Odin tile at your old copy, setup puts it back to Asgard's own Odin.

@@ -1,4 +1,4 @@
-"""Microsoft Graph calendar source for meeting2jira (Path D).
+"""Microsoft Graph calendar source for Odin (Path D).
 
 Three modules, split so that only one of them needs anything from pip:
 

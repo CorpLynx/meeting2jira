@@ -1,4 +1,4 @@
-"""The SeCcHm form Heimdall fills: %LOCALAPPDATA%\\Asgard\\settings\\heimdall.json.
+"""The security change form Heimdall fills: %LOCALAPPDATA%\\Asgard\\settings\\heimdall.json.
 
 The form file says where the catalog item is and which fields it has. It holds no values for a
 particular submission; those live in templates (templates.py). Each field is known by its label,

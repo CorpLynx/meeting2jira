@@ -10,8 +10,8 @@ Muninn is one SQLite file per user (`%LOCALAPPDATA%\Asgard\muninn.db`) that ever
 | [baldur.md](baldur.md) | Baldur: git, GitHub, time estimates and approvals | Integrated |
 | [freya.md](freya.md) | Freya: accomplishments and review drafts | Spec |
 | [loki.md](loki.md) | Loki: meeting recaps, action items, BLUFs | Spec |
-| [heimdall.md](heimdall.md) | Heimdall: SeCcHm submissions | Diverging on-prem; contract only |
-| [bifrost.md](bifrost.md) | Bifrost: BEARs workbooks and Confluence uploads | Spec |
+| [heimdall.md](heimdall.md) | Heimdall: security change submissions | Diverging on-prem; contract only |
+| [bifrost.md](bifrost.md) | Bifrost: entitlements workbooks and Confluence uploads | Spec |
 | [ysildir.md](ysildir.md) | Ysildir: MCP server that teaches AI agents Baldur and Muninn, takes their estimates, answers questions | Built (`apps/ysildir/`); not yet tried on the workstation |
 | [valkyrie.md](valkyrie.md) | Valkyrie and Valhalla: install and uninstall | Spec |
 | [huginn.md](huginn.md) | Huginn: scheduled collection | Spec |
@@ -91,7 +91,7 @@ Put each app's decisions in `asgard/muninn/<app>.py` beside the schema, as `muni
 
 ### Something that leaves Asgard
 
-Anything sent to another system (Jira, Confluence, SeCcHm, mail) follows Odin's posting protocol, because a timeout leaves you not knowing whether it arrived:
+Anything sent to another system (Jira, Confluence, security change, mail) follows Odin's posting protocol, because a timeout leaves you not knowing whether it arrived:
 
 1. In one transaction, write the outgoing row in a `sending` state with a random marker that will travel with the payload (`[asgard:b-9f3c1a2b]` in a worklog comment).
 2. Commit, then make the network call with no lock held.

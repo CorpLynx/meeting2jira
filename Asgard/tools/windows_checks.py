@@ -35,7 +35,7 @@ ZONES = ("UTC", "Eastern Standard Time", "India Standard Time", "Line Islands St
          "Newfoundland Standard Time")
 AS_USER_DIR = Path(r"C:\m2j\asuser")
 AS_USER_TASK = "m2j-as-user"
-DEMO_EMAIL = "brandon@agency.gov"
+DEMO_EMAIL = "dev@agency.gov"
 
 results: List[Dict[str, Any]] = []
 
@@ -156,7 +156,7 @@ def as_user(logs: Path) -> None:
               f'> "{AS_USER_DIR / "out.txt"}" 2>&1\r\n')
     (AS_USER_DIR / "run.cmd").write_text(script, encoding="ascii")
     before = current_zone()
-    set_zone("Eastern Standard Time")      # Brandon's zone, so local days and UTC differ
+    set_zone("Eastern Standard Time")      # the owner's zone, so local days and UTC differ
     try:
         started = run(["schtasks", "/Run", "/TN", AS_USER_TASK])
         if not check("the standard-account task starts", started.returncode == 0, started.text.strip()):
@@ -196,7 +196,7 @@ def _user_steps(out: Path, env: Dict[str, str]) -> None:
     check("this account isn't an administrator", "S-1-5-32-544" not in groups,
           run(["whoami"]).text.strip())
 
-    # Install from an extracted zip in a folder with spaces, as Brandon would.
+    # Install from an extracted zip in a folder with spaces, as the owner would.
     home = Path(os.environ["USERPROFILE"])
     extracted = home / "Downloads" / "Asgard test copy" / "Asgard"
     if extracted.exists():
@@ -316,7 +316,7 @@ def _demo_repo(repo: Path, env: Dict[str, str]) -> dt.date:
     git("init", "-q")
     git("symbolic-ref", "HEAD", "refs/heads/main")
     git("config", "user.email", DEMO_EMAIL)
-    git("config", "user.name", "Brandon")
+    git("config", "user.name", "Dev")
     git("config", "commit.gpgsign", "false")
     (repo / "a.txt").write_text("a\n")
     git("add", "a.txt")

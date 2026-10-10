@@ -1,6 +1,6 @@
 """Make Asgard's packaged build with PyInstaller, and check it: the steps the GitHub workflow runs.
 
-    py -3.12 packaging\\build.py                 Windows (the build Brandon ships)
+    py -3.12 packaging\\build.py                 Windows (the build the owner ships)
     python3 packaging/build.py                  macOS or Linux: a build for that system, to test the steps
 
     --skip-tests     don't run the unit tests first (the checks on the built folder still run)

@@ -20,9 +20,9 @@ import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
-OWA_CMD = HERE / "meeting2jira-owa.cmd"
+OWA_CMD = HERE / "odin-owa.cmd"
 APP_CMD = HERE.parent.parent / "Asgard" / "apps" / "odin" / "odin.cmd"
-GRAPH_CMD = HERE.parent / "graph-app" / "meeting2jira-graph.cmd"
+GRAPH_CMD = HERE.parent / "graph-app" / "odin-graph.cmd"
 
 # Outlook-specific, so the OWA entry point is not expected to offer them.
 NOT_APPLICABLE = {
@@ -73,7 +73,7 @@ class EntryPointParityTests(unittest.TestCase):
         owa_actions = actions(OWA_CMD)
         missing = sorted(app_actions - owa_actions)
         self.assertEqual(missing, [],
-                         f"meeting2jira-owa.cmd is missing commands Odin has: {missing}")
+                         f"odin-owa.cmd is missing commands Odin has: {missing}")
 
     def test_owa_specific_commands_exist(self):
         """The three things this path needs that the COM path does not."""

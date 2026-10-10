@@ -15,7 +15,7 @@ ScrollPage {
     PageHeader {
         Layout.fillWidth: true
         title: "Form"
-        subtitle: "Where the SeCcHm catalog item is and which fields Heimdall fills. Edit the form file, then Reload."
+        subtitle: "Where the security change catalog item is and which fields Heimdall fills. Edit the form file, then Reload."
         AppButton {
             text: "Open form file"
             enabled: !page.st.form_missing
@@ -41,7 +41,7 @@ ScrollPage {
             onClicked: {
                 var r = page.bridge.call("init_form", [])
                 if (r.error) { shell.toast(r.error, "error"); return }
-                shell.toast("Created " + r.path + ". Edit it to match the SeCcHm form, then Reload.", "info")
+                shell.toast("Created " + r.path + ". Edit it to match the security change form, then Reload.", "info")
                 page.reload()
                 shell.openPath(r.path)
             }

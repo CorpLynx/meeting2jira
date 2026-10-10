@@ -79,7 +79,7 @@ def read_rows(path: Path) -> List[Dict[str, Any]]:
     except sqlite3.DatabaseError as exc:
         if "locked" in str(exc).lower():
             raise HistoryError(f"Odin's old history file {path} is locked by another program ({exc}). Close it "
-                               "(an old copy of meeting2jira, or a database viewer) and run again.") from None
+                               "(an old copy of Odin, or a database viewer) and run again.") from None
         raise HistoryError(
             f"Odin's old history file {path} looks corrupt ({exc}). It records which meetings already have "
             "sub-tasks. If it can't be repaired, move state.db aside and run `odin preview` before a real "

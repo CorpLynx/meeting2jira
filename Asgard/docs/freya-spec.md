@@ -52,7 +52,7 @@ Every fact in a pack has an ID that a claim cites, and that a person can read:
 | `RV:FY26Q2` | Reviews you gave in a quarter: count and repositories | `pr_reviews` |
 | `M:9f3c` | A meeting you organized or recapped (hash of its ID) | `calendar_events`, `meetings` |
 | `B:31`, `AI:12` | A posted BLUF; an action item you closed | `blufs`, `action_items` |
-| `S:secchm/CHG1` | An accepted submission | `submissions` |
+| `S:security change/CHG1` | An accepted submission | `submissions` |
 | `X:cycle-PROJ-42` | A computed number, with its formula and inputs | code, never the model |
 
 A fact carries its kind, dates, a cleaned one-line title, its numbers, its element tags, and the source rows behind it (`table:id` list). The source rows are what make a citation checkable later.

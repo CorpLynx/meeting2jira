@@ -1,9 +1,9 @@
-"""Turn calendar JSON captured from OWA into meeting2jira's schema-v1 export format.
+"""Turn calendar JSON captured from OWA into Odin's schema-v1 export format.
 
 Position in the flow
     capture.py obtains raw event JSON from the browser session; this module converts it and
     export_owa.py writes the result. The output is consumed by the existing, unmodified pipeline:
-    `python -m meeting2jira push --input <file>`.
+    `odin push --input <file>`.
 
 Why this file imports nothing but the standard library
     It is the part worth testing, and it is the part most likely to be wrong, because it encodes

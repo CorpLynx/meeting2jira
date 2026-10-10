@@ -4,8 +4,9 @@
 # (`odin selftest`) on the lab VM and the workstation; this covers the rest on every change to Odin:
 #   - Odin's unit tests (Asgard/tests/test_odin_*.py, on a real Muninn) and the exporters', on Windows;
 #   - every PowerShell script parsing under Windows PowerShell 5.1, the version on the workstation;
-#   - each .cmd launcher moving Odin's old %LOCALAPPDATA%\meeting2jira folder to
-#     %LOCALAPPDATA%\Asgard\odin, whole, the first time it runs.
+#   - each .cmd launcher moving either of Odin's old folders (%LOCALAPPDATA%\odin on the
+#     on-premises install, %LOCALAPPDATA%\meeting2jira before that) to %LOCALAPPDATA%\Asgard\odin,
+#     whole, the first time it runs, and refusing to guess when both are there.
 # Actions are pinned to full commit SHAs (the tag each was is in its comment).
 name: Odin checks
 
@@ -81,26 +82,42 @@ jobs:
           Write-Host "PowerShell $($PSVersionTable.PSVersion)"
           if ($failed) { exit 1 }
 
-      - name: Each launcher moves the old folder under Asgard
+      - name: Each launcher moves either old folder under Asgard
         shell: cmd
         run: |
           setlocal
-          for %%L in (Asgard\apps\odin\odin.cmd Odin\graph-app\meeting2jira-graph.cmd Odin\playwright-app\meeting2jira-owa.cmd) do call :moves "%%L" || exit /b 1
-          echo All three launchers moved the folder.
+          rem Both names Odin used before: %LOCALAPPDATA%\odin (the on-premises install) and
+          rem %LOCALAPPDATA%\meeting2jira (the first version of all).
+          for %%O in (odin meeting2jira) do for %%L in (Asgard\apps\odin\odin.cmd Odin\graph-app\odin-graph.cmd Odin\playwright-app\odin-owa.cmd) do call :moves "%%L" "%%O" || exit /b 1
+          call :refuses "Asgard\apps\odin\odin.cmd" || exit /b 1
+          echo All three launchers moved both old folders.
           exit /b 0
 
           :moves
           set "LOCALAPPDATA=%RUNNER_TEMP%\odin-move-%RANDOM%"
           set "ASGARD_HOME="
-          mkdir "%LOCALAPPDATA%\meeting2jira\logs"
-          echo ciphertext> "%LOCALAPPDATA%\meeting2jira\jira_token.dpapi"
+          mkdir "%LOCALAPPDATA%\%~2\logs"
+          echo ciphertext> "%LOCALAPPDATA%\%~2\jira_token.dpapi"
           call "%~1" help >nul 2>&1
-          if exist "%LOCALAPPDATA%\meeting2jira\" (echo FAIL %~1 left the old folder & exit /b 1)
-          if not exist "%LOCALAPPDATA%\Asgard\odin\jira_token.dpapi" (echo FAIL %~1 didn't move the token & exit /b 1)
-          if not exist "%LOCALAPPDATA%\Asgard\odin\logs\" (echo FAIL %~1 didn't move the logs & exit /b 1)
-          echo OK   %~1 moved it to %LOCALAPPDATA%\Asgard\odin
+          if exist "%LOCALAPPDATA%\%~2\" (echo FAIL %~1 left %~2 behind & exit /b 1)
+          if not exist "%LOCALAPPDATA%\Asgard\odin\jira_token.dpapi" (echo FAIL %~1 didn't move the token from %~2 & exit /b 1)
+          if not exist "%LOCALAPPDATA%\Asgard\odin\logs\" (echo FAIL %~1 didn't move the logs from %~2 & exit /b 1)
+          echo OK   %~1 moved %~2 to %LOCALAPPDATA%\Asgard\odin
           rem A second run with the new folder in place moves nothing and still works.
+          mkdir "%LOCALAPPDATA%\%~2"
+          call "%~1" help >nul 2>&1
+          if not exist "%LOCALAPPDATA%\%~2\" (echo FAIL %~1 moved over an existing folder & exit /b 1)
+          exit /b 0
+
+          :refuses
+          rem Two old folders at once: moving one could orphan the state.db in the other, so it stops.
+          set "LOCALAPPDATA=%RUNNER_TEMP%\odin-both-%RANDOM%"
+          set "ASGARD_HOME="
+          mkdir "%LOCALAPPDATA%\odin"
           mkdir "%LOCALAPPDATA%\meeting2jira"
           call "%~1" help >nul 2>&1
-          if not exist "%LOCALAPPDATA%\meeting2jira\" (echo FAIL %~1 moved over an existing folder & exit /b 1)
+          if not exist "%LOCALAPPDATA%\odin\" (echo FAIL %~1 moved one of two old folders & exit /b 1)
+          if not exist "%LOCALAPPDATA%\meeting2jira\" (echo FAIL %~1 moved one of two old folders & exit /b 1)
+          if exist "%LOCALAPPDATA%\Asgard\odin\" (echo FAIL %~1 made the new folder anyway & exit /b 1)
+          echo OK   %~1 refused to guess between two old folders
           exit /b 0

@@ -6,7 +6,7 @@ version, and it is the part that quietly produces a mess in Jira if you get it w
 
 ## The mechanism
 
-Every sub-task meeting2jira creates carries a deterministic label:
+Every sub-task Odin creates carries a deterministic label:
 
 ```
 m2j-<first 10 hex characters of sha256(subject | start_utc | end_utc)>
@@ -31,7 +31,7 @@ Attach the label on create or the next run will not find it and you will get a d
 This is the fiddly part. The label must match **byte for byte** or the flow and the existing tool
 will not recognise each other's work, and you will end up with two sub-tasks per meeting.
 
-The Python definition, from `app/src/meeting2jira/models.py`:
+The Python definition, from `Asgard/apps/odin/odin/models.py`:
 
 ```python
 subject = " ".join(self.subject.split()).lower()
@@ -71,8 +71,8 @@ Build the hash step, then check it against values the real implementation produc
 cd app
 PYTHONPATH=src python3 -c "
 from datetime import datetime, timezone
-from meeting2jira.models import Meeting
-from meeting2jira.sync import dedupe_label
+from odin.models import Meeting
+from odin.sync import dedupe_label
 start = datetime(2026, 9, 21, 14, 0, tzinfo=timezone.utc)
 m = Meeting(source='t', key='k', subject='Sprint  Planning ',
             start_utc=start, end_utc=datetime(2026, 9, 21, 15, 0, tzinfo=timezone.utc))

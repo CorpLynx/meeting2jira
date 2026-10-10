@@ -62,7 +62,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(forms.EXAMPLE, target)
     _say(f"Created {target}.")
-    _say("Edit instance_url, catalog_sys_id and the fields to match the SeCcHm form, then run 'heimdall fields'.")
+    _say("Edit instance_url, catalog_sys_id and the fields to match the security change form, then run 'heimdall fields'.")
     return 0
 
 
@@ -199,7 +199,7 @@ def _item_url(form: Form) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="heimdall", description="Heimdall: fill SeCcHm submissions from templates.")
+    parser = argparse.ArgumentParser(prog="heimdall", description="Heimdall: fill security change submissions from templates.")
     parser.add_argument("--form", type=Path, help="form file (default: settings\\heimdall.json under Asgard's data folder)")
     parser.add_argument("--templates", type=Path, help="templates file (default: settings\\heimdall-templates.json)")
     sub = parser.add_subparsers(dest="command", metavar="command")

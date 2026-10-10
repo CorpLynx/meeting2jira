@@ -1,6 +1,6 @@
 # Dev and test tooling for working on this repo (your dev machine, not the target workstation).
 # Nothing here is needed to run the apps; their runtime packages are pinned in
-# Odin/app/requirements.txt and Asgard/requirements.txt (Asgard/docs/dependency-policy.md).
+# Asgard/requirements.txt and the exporters' own (Asgard/docs/dependency-policy.md).
 pytest>=7
 pytest-timeout>=2
 pytest-cov>=4

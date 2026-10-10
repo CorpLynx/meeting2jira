@@ -511,10 +511,16 @@ $doctorScript = Join-Path $appRoot 'windows\Test-Environment.ps1'
 # else %LOCALAPPDATA%\Asgard\odin. Odin is an Asgard app; its records are in Muninn beside them.
 $asgardDir = if ($env:ASGARD_HOME) { $env:ASGARD_HOME } else { Join-Path $env:LOCALAPPDATA 'Asgard' }
 $dataDir = Join-Path $asgardDir 'odin'
-# A folder from before (%LOCALAPPDATA%\meeting2jira) moves here the first time, in one rename, so the
-# DPAPI token files come across unchanged (they open for the same Windows user wherever they are).
-$legacyDir = Join-Path $env:LOCALAPPDATA 'meeting2jira'
-if (-not $env:ASGARD_HOME -and -not (Test-Path -LiteralPath $dataDir) -and (Test-Path -LiteralPath $legacyDir)) {
+# A folder from before moves here the first time, in one rename, so the DPAPI token files come
+# across unchanged (they open for the same Windows user wherever they are): %LOCALAPPDATA%\odin
+# (the on-premises install), or %LOCALAPPDATA%\meeting2jira before that.
+$legacyDirs = @((Join-Path $env:LOCALAPPDATA 'odin'), (Join-Path $env:LOCALAPPDATA 'meeting2jira'))
+$legacyFound = @($legacyDirs | Where-Object { Test-Path -LiteralPath $_ })
+if (-not $env:ASGARD_HOME -and -not (Test-Path -LiteralPath $dataDir) -and $legacyFound.Count -gt 0) {
+    if ($legacyFound.Count -gt 1) {
+        throw "Odin found two of its old folders ($($legacyFound -join ' and ')) and can't tell which to keep. Move the one with the newest state.db to $dataDir yourself, then run again."
+    }
+    $legacyDir = $legacyFound[0]
     New-Item -ItemType Directory -Force -Path $asgardDir | Out-Null
     try {
         Move-Item -LiteralPath $legacyDir -Destination $dataDir -ErrorAction Stop

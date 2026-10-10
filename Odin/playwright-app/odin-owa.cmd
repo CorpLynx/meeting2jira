@@ -1,22 +1,22 @@
 @echo off
 rem =============================================================================================
-rem  meeting2jira-owa - entry point for the Outlook-on-the-web path ("new Outlook").
+rem  odin-owa - entry point for the Outlook-on-the-web path ("new Outlook").
 rem
 rem  Same surface as the COM app, so muscle memory carries over:
 rem
-rem    meeting2jira-owa                 daily run: export from OWA, push to Jira
-rem    meeting2jira-owa preview         same, but create nothing
-rem    meeting2jira-owa setup           first-run walkthrough (pip, browser, sign-in, config)
-rem    meeting2jira-owa login           re-authenticate when the browser session expires
-rem    meeting2jira-owa export          export only, keep the JSON, push nothing
-rem    meeting2jira-owa discover        print the calendar API requests OWA makes (diagnosis)
-rem    meeting2jira-owa check           verify config, token and Jira access
-rem    meeting2jira-owa status          last-run health, then recent sub-tasks
-rem    meeting2jira-owa doctor          read-only environment report
-rem    meeting2jira-owa schedule        register the weekday scheduled task
-rem    meeting2jira-owa unschedule      remove the scheduled task
-rem    meeting2jira-owa selftest        mapping tests plus the COM app's own tests
-rem    meeting2jira-owa cli   [args]    Python CLI passthrough
+rem    odin-owa                 daily run: export from OWA, push to Jira
+rem    odin-owa preview         same, but create nothing
+rem    odin-owa setup           first-run walkthrough (pip, browser, sign-in, config)
+rem    odin-owa login           re-authenticate when the browser session expires
+rem    odin-owa export          export only, keep the JSON, push nothing
+rem    odin-owa discover        print the calendar API requests OWA makes (diagnosis)
+rem    odin-owa check           verify config, token and Jira access
+rem    odin-owa status          last-run health, then recent sub-tasks
+rem    odin-owa doctor          read-only environment report
+rem    odin-owa schedule        register the weekday scheduled task
+rem    odin-owa unschedule      remove the scheduled task
+rem    odin-owa selftest        mapping tests plus the COM app's own tests
+rem    odin-owa cli   [args]    Python CLI passthrough
 rem
 rem  This is an ADDITIONAL exporter, not a fork. Everything that is not OWA-specific - the whole
 rem  Jira side, config, token storage, state, reporting - is delegated to the COM app's entry point
@@ -43,13 +43,24 @@ set "EXPORTER=%ROOT%\export_owa.py"
 set "TASKPS=%ROOT%\Register-OwaSyncTask.ps1"
 set "PSEXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 rem Odin's files live under Asgard's folder: ASGARD_HOME\odin when set, else %LOCALAPPDATA%\Asgard\odin.
-rem A folder from before (%LOCALAPPDATA%\meeting2jira) moves there the first time, in one rename, so
-rem the DPAPI token files come across unchanged. Odin doesn't need Asgard installed for this.
+rem A folder from before moves there the first time, in one rename, so the DPAPI token files come
+rem across unchanged: %LOCALAPPDATA%\odin (the on-premises install), or %LOCALAPPDATA%\meeting2jira
+rem before that. Two at once is not guessed. Odin doesn't need Asgard installed for this.
 if defined ASGARD_HOME (set "ODINDATA=%ASGARD_HOME%\odin") else (set "ODINDATA=%LOCALAPPDATA%\Asgard\odin")
-if not defined ASGARD_HOME if not exist "%ODINDATA%\" if exist "%LOCALAPPDATA%\meeting2jira\" (
+set "ODINOLD="
+if not defined ASGARD_HOME if not exist "%ODINDATA%\" (
+    if exist "%LOCALAPPDATA%\odin\" set "ODINOLD=%LOCALAPPDATA%\odin"
+    if exist "%LOCALAPPDATA%\meeting2jira\" if defined ODINOLD (
+        echo ERROR: Odin found two of its old folders, "%LOCALAPPDATA%\odin" and "%LOCALAPPDATA%\meeting2jira".
+        echo Move the one with the newest state.db to "%ODINDATA%" yourself, then run this again.
+        exit /b 2
+    )
+    if exist "%LOCALAPPDATA%\meeting2jira\" if not defined ODINOLD set "ODINOLD=%LOCALAPPDATA%\meeting2jira"
+)
+if defined ODINOLD (
     if not exist "%LOCALAPPDATA%\Asgard\" mkdir "%LOCALAPPDATA%\Asgard"
-    move "%LOCALAPPDATA%\meeting2jira" "%ODINDATA%" >nul || (
-        echo ERROR: Odin's files are moving to "%ODINDATA%", but "%LOCALAPPDATA%\meeting2jira" couldn't be moved.
+    move "%ODINOLD%" "%ODINDATA%" >nul || (
+        echo ERROR: Odin's files are moving to "%ODINDATA%", but "%ODINOLD%" couldn't be moved.
         echo Close anything using that folder, then run this again.
         exit /b 2
     )
@@ -112,7 +123,7 @@ goto :usage
 rem ---------------------------------------------------------------------------------------------
 :daily
 rem Defaults to 1 day back, which re-scans yesterday and catches meetings that ended after the
-rem previous run. An optional first argument widens it: "meeting2jira-owa 7". Safe to repeat and
+rem previous run. An optional first argument widens it: "odin-owa 7". Safe to repeat and
 rem safe to widen, because the pipeline dedupes on key or content hash.
 call :requireapp
 if errorlevel 1 exit /b 2
@@ -144,7 +155,7 @@ echo.
 echo Kept: %EXPORTFILE%
 echo It contains calendar data, including meeting subjects. Delete it when you are done.
 echo.
-echo Push it with:  meeting2jira-owa cli daily --input "%EXPORTFILE%" --dry-run
+echo Push it with:  odin-owa cli daily --input "%EXPORTFILE%" --dry-run
 exit /b 0
 
 :login
@@ -176,7 +187,7 @@ exit /b %ERRORLEVEL%
 rem ---------------------------------------------------------------------------------------------
 :setup
 echo.
-echo meeting2jira-owa setup
+echo odin-owa setup
 echo ======================
 echo.
 call :resolvepython
@@ -207,7 +218,7 @@ set "RC=%ERRORLEVEL%"
 popd
 if not "%RC%"=="0" (
     echo.
-    echo Sign-in did not complete. Re-run:  meeting2jira-owa login
+    echo Sign-in did not complete. Re-run:  odin-owa login
     exit /b 2
 )
 echo.
@@ -219,11 +230,11 @@ set "RC=%ERRORLEVEL%"
 echo.
 if "%RC%"=="0" (
     echo Setup complete. Next:
-    echo   meeting2jira-owa preview     see what would be created
-    echo   meeting2jira-owa             do it for real
-    echo   meeting2jira-owa schedule    run it automatically on weekdays
+    echo   odin-owa preview     see what would be created
+    echo   odin-owa             do it for real
+    echo   odin-owa schedule    run it automatically on weekdays
 ) else (
-    echo Jira setup reported problems above. Fix them, then:  meeting2jira-owa check
+    echo Jira setup reported problems above. Fix them, then:  odin-owa check
 )
 exit /b %RC%
 
@@ -285,8 +296,8 @@ set "RC=%ERRORLEVEL%"
 popd
 if not "%RC%"=="0" (
     echo.
-    echo Export failed. If the session expired:  meeting2jira-owa login
-    echo If the calendar API could not be found:  meeting2jira-owa discover
+    echo Export failed. If the session expired:  odin-owa login
+    echo If the calendar API could not be found:  odin-owa discover
     exit /b %RC%
 )
 exit /b 0
@@ -347,7 +358,7 @@ echo ERROR: no working Python 3.8+ found. Candidates tried:
 if defined PYTHONTRIED echo %PYTHONTRIED%
 echo.
 echo Searched PATH, the registry, and the usual install directories.
-echo Install Python 3.8+ from your agency software catalog, then run:  meeting2jira-owa doctor
+echo Install Python 3.8+ from your agency software catalog, then run:  odin-owa doctor
 exit /b 1
 
 :resolvedpython
@@ -375,22 +386,22 @@ if "%PYRC%"=="3" (
 exit /b 1
 
 :usage
-echo meeting2jira-owa - push ended Outlook meetings into Jira, reading the calendar from
+echo odin-owa - push ended Outlook meetings into Jira, reading the calendar from
 echo                    Outlook on the web ^(for "new Outlook", which has no COM^)
 echo.
-echo   meeting2jira-owa                 daily run: export from OWA, push to Jira
-echo   meeting2jira-owa preview         same, but create nothing
-echo   meeting2jira-owa setup           first-run walkthrough
-echo   meeting2jira-owa login           re-authenticate an expired browser session
-echo   meeting2jira-owa export          export only, keep the JSON
-echo   meeting2jira-owa discover        print the calendar API requests OWA makes
-echo   meeting2jira-owa check           verify config, token and Jira access
-echo   meeting2jira-owa status          last-run health, then recent sub-tasks
-echo   meeting2jira-owa doctor          read-only environment report
-echo   meeting2jira-owa schedule        register the weekday scheduled task
-echo   meeting2jira-owa unschedule      remove the scheduled task
-echo   meeting2jira-owa selftest        mapping tests plus the COM app's tests
-echo   meeting2jira-owa cli  [args]     Python CLI passthrough
+echo   odin-owa                 daily run: export from OWA, push to Jira
+echo   odin-owa preview         same, but create nothing
+echo   odin-owa setup           first-run walkthrough
+echo   odin-owa login           re-authenticate an expired browser session
+echo   odin-owa export          export only, keep the JSON
+echo   odin-owa discover        print the calendar API requests OWA makes
+echo   odin-owa check           verify config, token and Jira access
+echo   odin-owa status          last-run health, then recent sub-tasks
+echo   odin-owa doctor          read-only environment report
+echo   odin-owa schedule        register the weekday scheduled task
+echo   odin-owa unschedule      remove the scheduled task
+echo   odin-owa selftest        mapping tests plus the COM app's tests
+echo   odin-owa cli  [args]     Python CLI passthrough
 echo.
 echo Extra flags accepted by the export commands:
 echo   -IncludeOrganizer    include the organizer name ^(extra personal data; off by default^)

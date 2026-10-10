@@ -1083,7 +1083,7 @@ class GuardTests(unittest.TestCase):
         spec.loader.exec_module(self.guard)
 
     def test_switches_and_setup_are_the_persons(self):
-        y = r'py -3 "C:\Users\Brandon Doe\AppData\Local\Asgard\app\apps\ysildir\cli.py"'
+        y = r'py -3 "C:\Users\Dev User\AppData\Local\Asgard\app\apps\ysildir\cli.py"'
         for command in ("ysildir.cmd tools --on baldur_day", "ysildir tools --off muninn_search",
                         "ysildir.cmd tools --on=baldur_review_pack", f"{y} tools --on muninn_issue",
                         f"{y} setup --kiro .", "ysildir.cmd setup --vscode-user --force",

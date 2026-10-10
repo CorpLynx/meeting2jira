@@ -5,7 +5,7 @@
 
 # Asgard toolset evaluation
 
-Oct 2, 2026 · @Brandon
+Oct 2, 2026 · @the owner
 
 Build Asgard as one pure-Python package on the IT-approved python.exe, with Muninn as a local SQLite hub every app shares. Use PowerShell only for Windows plumbing, and give every AI feature a copy-paste fallback so nothing waits on an AI approval.
 
@@ -23,8 +23,8 @@ Rows run in build order: Muninn first, because every other app reads or writes i
 | Baldur (work log) | git log + reflog + PR data, calibrated session model, scikit-learn later | Stdlib `subprocess` + `statistics`, grid-search calibration | No real hours to calibrate against |
 | Loki (BLUFs) | Graph Meeting AI Insights or transcripts API + LLM | Saved Copilot prompt in Teams; paste the recap into Loki | AI Insights API absent in GCC High and DoD |
 | Freya (reviews) | Muninn evidence, two-pass LLM, every claim cites an ID | Evidence pack + prompt to clipboard, run in M365 Copilot Chat | No approved LLM API |
-| Heimdall (SeCcHm) | SeCcHm's API; else Playwright driving installed Edge | Power Automate for desktop, or a fill-assist screen | Edge `RemoteDebuggingAllowed` off blocks every browser driver |
-| Bifrost (BEARs) | openpyxl + Confluence REST + polling | openpyxl + stdlib or `curl.exe` multipart upload | Template needs Excel to recalculate or run macros |
+| Heimdall (security change) | security change's API; else Playwright driving installed Edge | Power Automate for desktop, or a fill-assist screen | Edge `RemoteDebuggingAllowed` off blocks every browser driver |
+| Bifrost (entitlements) | openpyxl + Confluence REST + polling | openpyxl + stdlib or `curl.exe` multipart upload | Template needs Excel to recalculate or run macros |
 | Valkyrie (install) | IT bundle or `winget configure`, then a Python bootstrap | Preflight + catalog requests + per-user Python setup | Venv launchers blocked in your profile |
 | Valhalla (uninstall) | IT-managed uninstall + Valhalla for user data | Replay Valkyrie's install ledger in reverse | Removing IT-managed prerequisites |
 
@@ -197,13 +197,13 @@ Freya is mostly a query, not an agent. Aggregate Muninn's facts with plain code,
 - **Plain text wins.** Appraisal systems take pasted text, so skip python-docx and its compiled lxml dependency.
 - **Zero-code variant.** With Ysildir live, Freya can be an MCP prompt: Copilot pulls the evidence itself and you review the draft.
 
-## Heimdall: SeCcHm submissions
+## Heimdall: security change submissions
 
 Ask the system owner for an API before writing a line of Playwright. If you must drive the browser, one Edge policy decides whether you can at all.
 
 | Layer | Ideal | Least-permission federal |
 | --- | --- | --- |
-| Path | SeCcHm's API or a service account | Power Automate for desktop, or a fill-assist screen in the hub |
+| Path | security change's API or a service account | Power Automate for desktop, or a fill-assist screen in the hub |
 | Browser driver | Playwright for Python with `channel="msedge"` (no browser download), a dedicated profile folder, codegen and tracing | Power Automate's Edge extension, if allowed |
 | PIV sign-in | IT sets Edge's `AutoSelectCertificateForUrls` for the site; you type the PIN | You sign in by hand; the flow continues in that session |
 | Data | Field values from Muninn via `string.Template` | Same |
@@ -216,14 +216,14 @@ Ask the system owner for an API before writing a line of Playwright. If you must
 - **Fill-assist** shows each prepared field with a Copy button: zero permissions, and it still removes the composing work.
 - **Keep a human on Submit.** Security submissions usually carry an attestation in your name.
 
-## Bifrost: BEARs submissions
+## Bifrost: entitlements submissions
 
 Bifrost is the easiest app to keep least-permission: openpyxl is pure Python, and a Confluence attachment is one REST call.
 
 | Layer | Ideal | Least-permission federal |
 | --- | --- | --- |
-| Excel | openpyxl into the BEARs template; `keep_vba=True` for .xlsm | Same |
-| Upload | Confluence REST `POST /rest/api/content/{pageId}/child/attachment` with a PAT and `X-Atlassian-Token: no-check` | Stdlib multipart body, or `curl.exe -F "file=@BEARs.xlsx"` |
+| Excel | openpyxl into the entitlements template; `keep_vba=True` for .xlsm | Same |
+| Upload | Confluence REST `POST /rest/api/content/{pageId}/child/attachment` with a PAT and `X-Atlassian-Token: no-check` | Stdlib multipart body, or `curl.exe -F "file=@entitlements.xlsx"` |
 | Status | Poll page labels, properties or comments with backoff | Same, while the hub is open or from a per-user scheduled task running `pythonw` |
 | Notify | Windows toast | A tkinter dialog |
 
@@ -300,9 +300,9 @@ These read-only checks take about 15 minutes and tell you which column each app 
 - [ ] Are Jira and Confluence on Data Center or Government Cloud, and do PATs pass the proxy?
 - [ ] AppLocker only, or App Control user-mode enforcement too? Decides the pure-Python rule.
 - [ ] Which LLM endpoints are approved for your data: Bedrock GovCloud, Azure Government, or an agency gateway?
-- [ ] Do SeCcHm and BEARs have APIs or service accounts? Decides Heimdall's and Bifrost's ideal path.
+- [ ] Do security change and entitlements have APIs or service accounts? Decides Heimdall's and Bifrost's ideal path.
 - [ ] Is "MCP servers in Copilot" enabled for your org? Decides Ysildir's client.
-- [ ] Who must approve automated submissions to SeCcHm and BEARs: your ISSO, the system owners, or both?
+- [ ] Who must approve automated submissions to security change and entitlements: your ISSO, the system owners, or both?
 
 ## Sources
 

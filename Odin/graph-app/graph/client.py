@@ -3,7 +3,7 @@
 Why urllib and not requests
     msal is the one dependency this folder takes, and it is taken because hand-rolled OAuth is
     genuinely risky. An HTTP GET is not risky. Adding `requests` would double the pip surface for no
-    safety gain, and the project already has a working stdlib HTTP client in app/src/meeting2jira/
+    safety gain, and the project already has a working stdlib HTTP client in Asgard/apps/odin/odin/
     jira.py to match conventions against.
 
 What this inherits from the OWA path
@@ -117,7 +117,7 @@ class GraphClient:
                 if exc.code == 401:
                     raise TokenExpired(
                         "Graph rejected the token (401). The access token has expired or been "
-                        "revoked. Run `meeting2jira-graph login` and retry.") from None
+                        "revoked. Run `odin-graph login` and retry.") from None
                 if exc.code == 403:
                     raise GraphError(
                         "Graph returned 403 Forbidden. The application is authenticated but lacks "

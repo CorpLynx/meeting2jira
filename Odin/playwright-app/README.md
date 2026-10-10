@@ -1,6 +1,6 @@
 # OWA exporter (Playwright)
 
-Reads **your own** calendar out of Outlook on the web and writes meeting2jira's schema-v1 JSON, for
+Reads **your own** calendar out of Outlook on the web and writes Odin's schema-v1 JSON, for
 machines where classic Outlook is unavailable — that is, "new Outlook", which supports neither COM
 automation nor the Import/Export wizard, so it breaks both existing paths.
 
@@ -32,15 +32,15 @@ automation nor the Import/Export wizard, so it breaks both existing paths.
 ## Same commands as the COM app
 
 ```powershell
-.\meeting2jira-owa setup       # pip, browser, sign-in, then Jira config and token
-.\meeting2jira-owa preview     # export from OWA, show what would be created
-.\meeting2jira-owa             # do it for real
-.\meeting2jira-owa schedule    # weekdays, as you, while logged on
+.\odin-owa setup       # pip, browser, sign-in, then Jira config and token
+.\odin-owa preview     # export from OWA, show what would be created
+.\odin-owa             # do it for real
+.\odin-owa schedule    # weekdays, as you, while logged on
 ```
 
 | | |
 |---|---|
-| `meeting2jira-owa [days]` | daily run: export from OWA, push to Jira. Defaults to 1 day back; widening is free because the pipeline dedupes. |
+| `odin-owa [days]` | daily run: export from OWA, push to Jira. Defaults to 1 day back; widening is free because the pipeline dedupes. |
 | `preview [days]` | same, creating nothing |
 | `setup` | first-run walkthrough |
 | `login` | re-authenticate when the browser session expires |
@@ -51,7 +51,7 @@ automation nor the Import/Export wizard, so it breaks both existing paths.
 | `selftest` | mapping tests, then the COM app's own tests |
 
 **It is an additional exporter, not a fork.** Everything that is not OWA-specific — the whole Jira
-side, config, token storage, state, reporting — is delegated to `app\meeting2jira.cmd` rather than
+side, config, token storage, state, reporting — is delegated to `app\odin.cmd` rather than
 duplicated. One config file, one token, one state database, so running both paths cannot create
 duplicate sub-tasks. Set `M2J_APP_DIR` if the COM app is not at `..\app`.
 
@@ -64,7 +64,7 @@ The raw exporter is still there if you want it directly:
 
 ```
 python export_owa.py --days-back 1 --out week.json
-cd ../app && PYTHONPATH=src python -m meeting2jira push --input ../playwright-app/week.json --dry-run
+cd ../app && PYTHONPATH=src odin push --input ../playwright-app/week.json --dry-run
 ```
 
 ## Why this is a separate application
@@ -239,7 +239,7 @@ You have a COM path that is known to work. Export the same window both ways and 
 
 ```bash
 # on a machine with classic Outlook
-.\meeting2jira sync -DaysBack 7 -KeepExport -DryRun
+.\odin sync -DaysBack 7 -KeepExport -DryRun
 python export_owa.py --days-back 7 --out owa.json
 python tools/compare_exports.py com_export.json owa.json
 ```

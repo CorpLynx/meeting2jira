@@ -1,4 +1,4 @@
-"""Turn Microsoft Graph calendar JSON into meeting2jira's schema-v1 export format.
+"""Turn Microsoft Graph calendar JSON into Odin's schema-v1 export format.
 
 *** THIS FILE IS A DUPLICATE of playwright-app/owa/mapping.py. ***
 
@@ -14,7 +14,7 @@
 Position in the flow
     client.py fetches raw event JSON from Graph; this module converts it and export_graph.py writes
     the result. The output is consumed by the existing, unmodified pipeline:
-    `python -m meeting2jira push --input <file>`.
+    `odin push --input <file>`.
 
 Why it maps Graph and OWA with one body of code
     They are the same data model. OWA's own calendar API is an Outlook REST endpoint, and Microsoft

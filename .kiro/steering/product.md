@@ -21,9 +21,9 @@ Jira. Odin:
 |---|---|
 | `m2j-<hash>` dedupe label | Finds an ambiguously created sub-task by exact JQL. Changing it strands every existing sub-task. |
 | `meeting_subtasks` (Muninn v5) | The record of which meetings have sub-tasks. Losing it re-creates every meeting. |
-| `%LOCALAPPDATA%\Asgard\odin` | config, the DPAPI token, `last_run.json`, the journal and lock. Moved from `%LOCALAPPDATA%\meeting2jira` in Oct 2026: every entry point moves the old folder whole, once, and `state.db` is imported into Muninn on the first run. |
+| `%LOCALAPPDATA%\Asgard\odin` | config, the DPAPI token, `last_run.json`, the journal and lock. Odin kept these in `%LOCALAPPDATA%\odin` on the on-premises install, and in `%LOCALAPPDATA%\meeting2jira` before that: every entry point moves whichever it finds, whole, once, and `state.db` is imported into Muninn on the first run. Two at once is refused rather than guessed, because moving the wrong one orphans the history and the next run re-creates every meeting. |
 | `odin.cmd`, task "Asgard Odin daily" | The scheduled task's action points at the script. The old `meeting2jira-daily` task is removed by `odin schedule` and by Valhalla. |
-| `meeting2jira-graph.cmd`, `meeting2jira-owa.cmd` | The exporters' launchers in `Odin/` kept their names; they find Asgard's `odin.cmd`. |
+| `odin-graph.cmd`, `odin-owa.cmd` | The exporters' launchers in `Odin/`; they find Asgard's `odin.cmd`. Renamed from `meeting2jira-*` in Oct 2026, so a scheduled task registered against the old name has to be registered again (`Register-OwaSyncTask.ps1`). |
 
 ## Users and environment
 - A single standard (non-admin) user on a locked-down federal Windows 11 workstation.

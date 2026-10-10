@@ -1,5 +1,5 @@
 <powershell>
-# First-boot setup for the meeting2jira test VM. Runs as SYSTEM under EC2Launch v2.
+# First-boot setup for the Odin test VM. Runs as SYSTEM under EC2Launch v2.
 # Terraform renders this file, so PowerShell's $${name} and %%{...} forms are avoided
 # throughout; plain $name and ForEach-Object are used instead.
 
@@ -96,7 +96,7 @@ try {
     $stopHours = ${auto_stop_hours}
     if ($stopHours -gt 0) {
         Say ('Arming auto-stop ' + $stopHours + 'h after each boot')
-        $action = New-ScheduledTaskAction -Execute 'shutdown.exe' -Argument '/s /t 0 /c "meeting2jira lab auto-stop"'
+        $action = New-ScheduledTaskAction -Execute 'shutdown.exe' -Argument '/s /t 0 /c "Odin lab auto-stop"'
         $trigger = New-ScheduledTaskTrigger -AtStartup
         $trigger.Delay = 'PT' + $stopHours + 'H'
         $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest

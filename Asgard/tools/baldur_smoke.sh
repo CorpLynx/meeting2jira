@@ -13,7 +13,7 @@ REPO="$ASGARD_HOME/src/asgard"
 mkdir -p "$REPO" && cd "$REPO"
 g() { GIT_AUTHOR_DATE="$1" GIT_COMMITTER_DATE="$1" git "${@:2}"; }
 git init -q . && git symbolic-ref HEAD refs/heads/main
-git config user.email brandon@agency.gov && git config user.name Brandon
+git config user.email dev@agency.gov && git config user.name Dev
 echo a > a.txt && git add a.txt
 GIT_AUTHOR_NAME=Sam GIT_AUTHOR_EMAIL=sam@agency.gov g "2026-09-30T15:00:00" commit -qm "initial"
 g "2026-09-30T15:30:00" checkout -qb feature/PROJ-42-retry
@@ -42,7 +42,7 @@ with muninn.Run(con, "odin", cal, "calendar") as run:     # what Odin's calendar
                                          "response": "accepted", "is_cancelled": 0})
 PY
 B="python3 apps/baldur/cli.py"
-$B setup --email brandon@agency.gov --project PROJ --root "$ASGARD_HOME/src"
+$B setup --email dev@agency.gov --project PROJ --root "$ASGARD_HOME/src"
 $B collect
 $B estimate --from 2026-10-01 --to 2026-10-01 --report
 $B days --from 2026-09-29 --to 2026-10-02

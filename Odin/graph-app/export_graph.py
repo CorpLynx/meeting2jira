@@ -1,4 +1,4 @@
-"""Export your own calendar from Microsoft Graph to meeting2jira's schema-v1 JSON.
+"""Export your own calendar from Microsoft Graph to Odin's schema-v1 JSON.
 
 The intended primary calendar source: it works with classic Outlook and "new Outlook" alike, needs
 no COM, no browser automation, and reads only documented APIs. The output is consumed by the
@@ -132,7 +132,7 @@ def do_init(path: Path) -> int:
     log.info("Now fill in client_id, and set cloud if you are not in a commercial tenant.")
     log.info("Ask IT for: a public-client Entra app registration (no secret), redirect URI")
     log.info("http://localhost, delegated %s, and admin consent.", cfgmod.DEFAULT_SCOPE)
-    log.info("Then:  meeting2jira-graph login")
+    log.info("Then:  odin-graph login")
     return 0
 
 
@@ -181,7 +181,7 @@ def main(argv=None) -> int:
         if args.login:
             auth.acquire_token(cfg, interactive_ok=True)
             log.info("Signed in. The token is cached; later runs are silent.")
-            log.info("Next:  meeting2jira-graph check")
+            log.info("Next:  odin-graph check")
             return 0
 
         if args.check:

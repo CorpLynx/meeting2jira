@@ -53,7 +53,7 @@ drift.
 
 ## Modules, and what to use if one isn't on-premises
 
-The rule (Brandon, 2026-10-09): use the best module for each job. Each package Ysildir imports gets
+The rule (decided 2026-10-09): use the best module for each job. Each package Ysildir imports gets
 a section in `Asgard/MODULES.md` with its alternatives, in case it isn't available on-premises
 (dependency policy rule 8; `tests/test_dependencies.py` checks it). This table is the design's
 view. Once the code lands, `MODULES.md` is where it's kept up to date.

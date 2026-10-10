@@ -9,7 +9,7 @@
 
 # Muninn data layer design
 
-Oct 3, 2026 · @Brandon
+Oct 3, 2026 · @the owner
 
 Muninn is one SQLite file of normalized facts, each keyed by its source system's ID, plus an append-only event log. Every app writes through one Python module, so the schema, provenance and migrations live in one place. Jira issue keys join the apps: Baldur records the keys it finds in git, Odin resolves them and is the only app that writes to Jira, and Freya keeps a durable copy of every issue you finish.
 
@@ -113,7 +113,7 @@ Seven shared tables record where every fact came from, when, and which changes e
 | Column | Type | Rules | Notes |
 | --- | --- | --- | --- |
 | `id` | INTEGER | primary key |  |
-| `kind` | TEXT | jira, confluence, git, github, calendar, teams, secchm, manual | `manual` = pasted or file input |
+| `kind` | TEXT | jira, confluence, git, github, calendar, teams, security change, manual | `manual` = pasted or file input |
 | `name` | TEXT | `UNIQUE` | `jira-dc`, `github`, `local-git`, `paste` |
 | `base_url` | TEXT | nullable | NULL for local git and pasted input |
 | `created_at` | ts | defaults to now |  |
@@ -524,7 +524,7 @@ How the guardrail runs:
 
 Heimdall and Bifrost share one `submissions` table with a `system` column, plus a history table that a trigger fills, so no app can forget to log a status change. States run draft → approved → submitted → in\_review → accepted or returned, and withdrawn ends a submission at any point.
 
-**`submissions`**: one row per SeCcHm request or BEARs workbook.
+**`submissions`**: one row per security change request or entitlements workbook.
 
 | Column | Type | Rules | Notes |
 | --- | --- | --- | --- |
@@ -532,10 +532,10 @@ Heimdall and Bifrost share one `submissions` table with a `system` column, plus 
 | `system` | TEXT | secchm, bears |  |
 | `title` | TEXT | not null |  |
 | `state` | TEXT | draft, approved, submitted, in\_review, accepted, returned, withdrawn |  |
-| `external_id` | TEXT | `UNIQUE (system, external_id)` | SeCcHm number, or the Confluence page id for BEARs |
+| `external_id` | TEXT | `UNIQUE (system, external_id)` | security change number, or the Confluence page id for entitlements |
 | `external_url` | TEXT |  |  |
 | `fields` | TEXT | JSON object | The values filled in, by field name |
-| `artifact_path` | TEXT |  | The generated .xlsx for BEARs |
+| `artifact_path` | TEXT |  | The generated .xlsx for entitlements |
 | `attachment_id`, `attachment_version` | TEXT, INTEGER | version ≥ 1 | The Confluence attachment; re-uploads bump the version |
 | `work_item_key` | TEXT |  | Related Jira issue, if any |
 | `created_at`, `approved_at`, `submitted_at` | ts |  |  |
@@ -570,7 +570,7 @@ Insert, update and delete triggers on each table keep the index current. In test
 ```sql
 SELECT kind, rowid >> 4 AS entity_id, title
   FROM search
- WHERE search MATCH 'bears'
+ WHERE search MATCH 'entitlements'
  ORDER BY bm25(search)
  LIMIT 20;
 ```
@@ -804,6 +804,6 @@ Rows are short text, so a year of one engineer's work should stay in the tens of
 - [x] **Database engine.** Decided (Oct 9): stay on SQLite now that pinned packages are allowed. Postgres or SQL Server need a server and admin rights; DuckDB is a native wheel with a single-writer file lock across processes; SQLCipher and apsw are native extensions App Control may block; an ORM such as SQLAlchemy would become every app's dependency, because every app imports `asgard.muninn`. Revisit only for the team view under **Scope**.
 - [ ] **Posting mode.** Odin posts approved worklogs on its next run (proposed, since approving in Baldur is the consent), or waits for a Post button in Odin?
 - [ ] **Which resolutions count as wins.** Proposed: all except Won't Do, Duplicate and Cannot Reproduce, editable in Freya's settings.
-- [x] **Time zone travel.** Decided (Brandon, Oct 9): US time zones only. A day is local to wherever the laptop is when Baldur estimates it and Odin posts it. The rare shift is accepted rather than pinning a zone in `meta`. Baldur's own worklogs count for their approved day whatever the zone; a worklog logged by hand near midnight can fall in the neighbouring day after a move between US zones (at most 6 hours apart).
+- [x] **Time zone travel.** Decided (decided Oct 9): US time zones only. A day is local to wherever the laptop is when Baldur estimates it and Odin posts it. The rare shift is accepted rather than pinning a zone in `meta`. Baldur's own worklogs count for their approved day whatever the zone; a worklog logged by hand near midnight can fall in the neighbouring day after a move between US zones (at most 6 hours apart).
 - [ ] **Encryption beyond BitLocker.** SQLCipher replaces `sqlite3` with a compiled module. That would make Muninn's package depend on a package, which every app and Odin import; the dependency policy keeps it standard library. It would also need IT approval.
 - [ ] **Retention.** Confirm the defaults above against your records schedule.

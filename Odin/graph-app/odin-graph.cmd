@@ -1,23 +1,23 @@
 @echo off
 rem =============================================================================================
-rem  meeting2jira-graph - entry point for the Microsoft Graph path (Path D).
+rem  odin-graph - entry point for the Microsoft Graph path (Path D).
 rem
 rem  The intended primary source: works with classic Outlook and "new Outlook" alike, needs no COM,
 rem  no browser automation, and reads only documented APIs.
 rem
-rem    meeting2jira-graph                 daily run: export from Graph, push to Jira
-rem    meeting2jira-graph preview         same, but create nothing
-rem    meeting2jira-graph setup           first-run walkthrough (pip, config, sign-in, Jira)
-rem    meeting2jira-graph init            write a starter graph.json
-rem    meeting2jira-graph login           authenticate and cache the token
-rem    meeting2jira-graph check           verify config, token, permission, then Jira
-rem    meeting2jira-graph export          export only, keep the JSON, push nothing
-rem    meeting2jira-graph forget-graph    delete the cached Graph token
-rem    meeting2jira-graph status          last-run health, then recent sub-tasks
-rem    meeting2jira-graph doctor          read-only environment report
-rem    meeting2jira-graph schedule        register the weekday scheduled task
-rem    meeting2jira-graph selftest        Graph tests plus the COM app's own tests
-rem    meeting2jira-graph cli   [args]    Python CLI passthrough
+rem    odin-graph                 daily run: export from Graph, push to Jira
+rem    odin-graph preview         same, but create nothing
+rem    odin-graph setup           first-run walkthrough (pip, config, sign-in, Jira)
+rem    odin-graph init            write a starter graph.json
+rem    odin-graph login           authenticate and cache the token
+rem    odin-graph check           verify config, token, permission, then Jira
+rem    odin-graph export          export only, keep the JSON, push nothing
+rem    odin-graph forget-graph    delete the cached Graph token
+rem    odin-graph status          last-run health, then recent sub-tasks
+rem    odin-graph doctor          read-only environment report
+rem    odin-graph schedule        register the weekday scheduled task
+rem    odin-graph selftest        Graph tests plus the COM app's own tests
+rem    odin-graph cli   [args]    Python CLI passthrough
 rem
 rem  This is an ADDITIONAL exporter, not a fork. Everything that is not Graph-specific - the whole
 rem  Jira side, config, token storage, state, reporting - is delegated to the COM app's entry point
@@ -45,13 +45,24 @@ set "EXPORTER=%ROOT%\export_graph.py"
 set "TASKPS=%ROOT%\Register-GraphSyncTask.ps1"
 set "PSEXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 rem Odin's files live under Asgard's folder: ASGARD_HOME\odin when set, else %LOCALAPPDATA%\Asgard\odin.
-rem A folder from before (%LOCALAPPDATA%\meeting2jira) moves there the first time, in one rename, so
-rem the DPAPI token files come across unchanged. Odin doesn't need Asgard installed for this.
+rem A folder from before moves there the first time, in one rename, so the DPAPI token files come
+rem across unchanged: %LOCALAPPDATA%\odin (the on-premises install), or %LOCALAPPDATA%\meeting2jira
+rem before that. Two at once is not guessed. Odin doesn't need Asgard installed for this.
 if defined ASGARD_HOME (set "ODINDATA=%ASGARD_HOME%\odin") else (set "ODINDATA=%LOCALAPPDATA%\Asgard\odin")
-if not defined ASGARD_HOME if not exist "%ODINDATA%\" if exist "%LOCALAPPDATA%\meeting2jira\" (
+set "ODINOLD="
+if not defined ASGARD_HOME if not exist "%ODINDATA%\" (
+    if exist "%LOCALAPPDATA%\odin\" set "ODINOLD=%LOCALAPPDATA%\odin"
+    if exist "%LOCALAPPDATA%\meeting2jira\" if defined ODINOLD (
+        echo ERROR: Odin found two of its old folders, "%LOCALAPPDATA%\odin" and "%LOCALAPPDATA%\meeting2jira".
+        echo Move the one with the newest state.db to "%ODINDATA%" yourself, then run this again.
+        exit /b 2
+    )
+    if exist "%LOCALAPPDATA%\meeting2jira\" if not defined ODINOLD set "ODINOLD=%LOCALAPPDATA%\meeting2jira"
+)
+if defined ODINOLD (
     if not exist "%LOCALAPPDATA%\Asgard\" mkdir "%LOCALAPPDATA%\Asgard"
-    move "%LOCALAPPDATA%\meeting2jira" "%ODINDATA%" >nul || (
-        echo ERROR: Odin's files are moving to "%ODINDATA%", but "%LOCALAPPDATA%\meeting2jira" couldn't be moved.
+    move "%ODINOLD%" "%ODINDATA%" >nul || (
+        echo ERROR: Odin's files are moving to "%ODINDATA%", but "%ODINOLD%" couldn't be moved.
         echo Close anything using that folder, then run this again.
         exit /b 2
     )
@@ -115,7 +126,7 @@ goto :usage
 rem ---------------------------------------------------------------------------------------------
 :daily
 rem Defaults to 1 day back, which re-scans yesterday and catches meetings that ended after the
-rem previous run. An optional first argument widens it: "meeting2jira-graph 7". Safe to repeat and
+rem previous run. An optional first argument widens it: "odin-graph 7". Safe to repeat and
 rem safe to widen, because the pipeline dedupes on key or content hash.
 call :requireapp
 if errorlevel 1 exit /b 2
@@ -147,7 +158,7 @@ echo.
 echo Kept: %EXPORTFILE%
 echo It contains calendar data, including meeting subjects. Delete it when you are done.
 echo.
-echo Push it with:  meeting2jira-graph cli daily --input "%EXPORTFILE%" --dry-run
+echo Push it with:  odin-graph cli daily --input "%EXPORTFILE%" --dry-run
 exit /b 0
 
 :initcfg
@@ -188,7 +199,7 @@ set "RC=%ERRORLEVEL%"
 popd
 if not "%RC%"=="0" (
     echo.
-    echo Graph check failed. If the token expired:  meeting2jira-graph login
+    echo Graph check failed. If the token expired:  odin-graph login
     echo If it is a consent or permission error, the message above says what to ask IT for.
     exit /b %RC%
 )
@@ -204,7 +215,7 @@ if not exist "%TASKPS%" (
     echo Not built yet: Register-GraphSyncTask.ps1
     echo.
     echo Until it exists, register the COM app's task and point it at this exporter, or run:
-    echo   meeting2jira-graph             manually each morning
+    echo   odin-graph             manually each morning
     exit /b 2
 )
 "%PSEXE%" -NoProfile -NonInteractive -File "%TASKPS%"%ARGS%
@@ -221,7 +232,7 @@ exit /b %ERRORLEVEL%
 rem ---------------------------------------------------------------------------------------------
 :setup
 echo.
-echo meeting2jira-graph setup
+echo odin-graph setup
 echo ========================
 echo.
 call :resolvepython
@@ -253,7 +264,7 @@ popd
 if not "%RC%"=="0" (
     echo.
     echo Sign-in did not complete. The message above says what to fix. Then:
-    echo   meeting2jira-graph login
+    echo   odin-graph login
     exit /b 2
 )
 echo.
@@ -265,11 +276,11 @@ set "RC=%ERRORLEVEL%"
 echo.
 if "%RC%"=="0" (
     echo Setup complete. Next:
-    echo   meeting2jira-graph check       prove Graph and Jira both work
-    echo   meeting2jira-graph preview     see what would be created
-    echo   meeting2jira-graph             do it for real
+    echo   odin-graph check       prove Graph and Jira both work
+    echo   odin-graph preview     see what would be created
+    echo   odin-graph             do it for real
 ) else (
-    echo Jira setup reported problems above. Fix them, then:  meeting2jira-graph check
+    echo Jira setup reported problems above. Fix them, then:  odin-graph check
 )
 exit /b %RC%
 
@@ -331,8 +342,8 @@ set "RC=%ERRORLEVEL%"
 popd
 if not "%RC%"=="0" (
     echo.
-    echo Export failed. If the token expired:  meeting2jira-graph login
-    echo To see the configuration and permission in detail:  meeting2jira-graph check
+    echo Export failed. If the token expired:  odin-graph login
+    echo To see the configuration and permission in detail:  odin-graph check
     exit /b %RC%
 )
 exit /b 0
@@ -393,7 +404,7 @@ echo ERROR: no working Python 3.8+ found. Candidates tried:
 if defined PYTHONTRIED echo %PYTHONTRIED%
 echo.
 echo Searched PATH, the registry, and the usual install directories.
-echo Install Python 3.8+ from your agency software catalog, then run:  meeting2jira-graph doctor
+echo Install Python 3.8+ from your agency software catalog, then run:  odin-graph doctor
 exit /b 1
 
 :resolvedpython
@@ -421,22 +432,22 @@ if "%PYRC%"=="3" (
 exit /b 1
 
 :usage
-echo meeting2jira-graph - push ended meetings into Jira, reading the calendar from
+echo odin-graph - push ended meetings into Jira, reading the calendar from
 echo                      Microsoft Graph ^(works with classic and "new" Outlook^)
 echo.
-echo   meeting2jira-graph                 daily run: export from Graph, push to Jira
-echo   meeting2jira-graph preview         same, but create nothing
-echo   meeting2jira-graph setup           first-run walkthrough
-echo   meeting2jira-graph init            write a starter graph.json
-echo   meeting2jira-graph login           authenticate and cache the token
-echo   meeting2jira-graph check           verify Graph, then Jira
-echo   meeting2jira-graph export          export only, keep the JSON
-echo   meeting2jira-graph forget-graph    delete the cached Graph token
-echo   meeting2jira-graph status          last-run health, then recent sub-tasks
-echo   meeting2jira-graph doctor          read-only environment report
-echo   meeting2jira-graph schedule        register the weekday scheduled task
-echo   meeting2jira-graph selftest        Graph tests plus the COM app's tests
-echo   meeting2jira-graph cli  [args]     Python CLI passthrough
+echo   odin-graph                 daily run: export from Graph, push to Jira
+echo   odin-graph preview         same, but create nothing
+echo   odin-graph setup           first-run walkthrough
+echo   odin-graph init            write a starter graph.json
+echo   odin-graph login           authenticate and cache the token
+echo   odin-graph check           verify Graph, then Jira
+echo   odin-graph export          export only, keep the JSON
+echo   odin-graph forget-graph    delete the cached Graph token
+echo   odin-graph status          last-run health, then recent sub-tasks
+echo   odin-graph doctor          read-only environment report
+echo   odin-graph schedule        register the weekday scheduled task
+echo   odin-graph selftest        Graph tests plus the COM app's tests
+echo   odin-graph cli  [args]     Python CLI passthrough
 echo.
 echo Extra flags accepted by the export commands:
 echo   -IncludeOrganizer    include the organizer name ^(extra personal data; off by default^)

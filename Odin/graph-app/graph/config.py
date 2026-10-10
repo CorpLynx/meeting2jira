@@ -3,7 +3,7 @@
 Why a separate config file rather than a section in the app's config.json
     `app/` is the deliverable and nothing may change inside it to accommodate this exporter - that
     is the rule that keeps app/ stdlib-only and its guardrail tests meaningful. Adding a `graph`
-    section would mean editing config.DEFAULTS and validate() in app/src/meeting2jira/config.py.
+    section would mean editing config.DEFAULTS and validate() in Asgard/apps/odin/odin/config.py.
     So Graph settings live in their own file, in the same per-user directory, and the Jira side of
     the configuration is untouched and still owned by the app.
 
@@ -47,7 +47,7 @@ AUTH_MODES = ("broker", "interactive", "device_code")
 DEFAULT_SCOPE = "Calendars.ReadBasic"
 
 DEFAULTS: Dict[str, Any] = {
-    "_comment": "meeting2jira Graph source. Keys starting with _ are comments.",
+    "_comment": "Odin Graph source. Keys starting with _ are comments.",
     "_client_id": "From IT: the Entra application (client) ID. Public client, no secret.",
     "client_id": "",
     "_tenant_id": "Your tenant GUID, or 'organizations'. Avoid 'common' on a work account.",
@@ -72,17 +72,20 @@ class GraphConfigError(Exception):
 def data_dir() -> Path:
     """Odin's files: %LOCALAPPDATA%\\Asgard\\odin (ASGARD_HOME\\odin when set), beside Asgard's.
 
-    The same rule as meeting2jira.config.default_data_dir, kept here so this app stands alone
-    (app/tests/test_guardrails.py checks all three agree). A folder from before
-    (%LOCALAPPDATA%\\meeting2jira) is moved here the first time, in one rename, so the DPAPI files
-    come across unchanged; never under ASGARD_HOME, which tests point at a temporary folder.
+    The same rule as odin.config.default_data_dir, kept here so this app stands alone
+    (Asgard/tests/test_odin_data_dir.py checks all three agree). A folder from before
+    (%LOCALAPPDATA%\\odin on the on-premises install, or %LOCALAPPDATA%\\meeting2jira before that) is
+    moved here the first time, in one rename, so the DPAPI files come across unchanged; never under
+    ASGARD_HOME, which tests point at a temporary folder. Two old folders at once is a question for
+    Odin itself, which says which to keep; here the newer naming wins.
     """
     home = os.environ.get("ASGARD_HOME")
     base = os.environ.get("LOCALAPPDATA")
     asgard = Path(home) if home else (Path(base) / "Asgard" if base else Path.home() / ".local" / "share" / "Asgard")
     target = asgard / "odin"
     if not home and not target.exists():
-        legacy = [Path(base) / "meeting2jira"] if base else [Path.home() / ".meeting2jira", Path.home() / "meeting2jira"]
+        legacy = ([Path(base) / "odin", Path(base) / "meeting2jira"] if base
+                  else [Path.home() / ".meeting2jira", Path.home() / "meeting2jira"])
         for old in legacy:
             if old.is_dir():
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -110,7 +113,7 @@ def load(path: Optional[Path] = None) -> Dict[str, Any]:
     if not path.is_file():
         raise GraphConfigError(
             "No Graph configuration yet at {}.\n"
-            "Create it with:  meeting2jira-graph init\n"
+            "Create it with:  odin-graph init\n"
             "You will need an Entra application (client) ID from IT - see the README.".format(path))
     try:
         raw = json.loads(path.read_text(encoding="utf-8-sig"))

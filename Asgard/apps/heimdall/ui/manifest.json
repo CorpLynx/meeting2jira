@@ -2,7 +2,7 @@
   "_help": "Heimdall's views in Asgard's shared window. See asgard/ui/registry.py for the format.",
   "app": "heimdall",
   "name": "Heimdall",
-  "subtitle": "SeCcHm submissions",
+  "subtitle": "Security change submissions",
   "theme": {
     "light": {"accent": "#5B4B9A"},
     "dark": {"accent": "#A898E6"}

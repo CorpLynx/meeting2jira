@@ -41,4 +41,4 @@ and GitHub tests (18) all ran and passed under Windows Tk.
 - Edge, Outlook, Teams, a real GitHub Enterprise Server, Jira.
 - The notification-area alerts (not built).
 
-These still need Brandon's trial on the real machine (`HANDOFF.md`, "What's next" 1).
+These still need the owner's trial on the real machine (`HANDOFF.md`, "What's next" 1).

@@ -36,14 +36,25 @@ set "DOCTORPS=%ROOT%\windows\Test-Environment.ps1"
 set "CHECKPS=%ROOT%\tools\Invoke-WindowsChecks.ps1"
 set "CLI=%ROOT%\cli.py"
 rem Odin's files live under Asgard's folder: ASGARD_HOME\odin when set, else %LOCALAPPDATA%\Asgard\odin.
-rem A folder from before (%LOCALAPPDATA%\meeting2jira) moves there the first time, in one rename, so
-rem the DPAPI token files come across unchanged.
+rem A folder from before moves there the first time, in one rename, so the DPAPI token files come
+rem across unchanged: %LOCALAPPDATA%\odin (the on-premises install), or %LOCALAPPDATA%\meeting2jira
+rem before that. Two at once is not guessed: Odin says which to keep.
 if defined ASGARD_HOME (set "ASGARDDATA=%ASGARD_HOME%") else (set "ASGARDDATA=%LOCALAPPDATA%\Asgard")
 set "ODINDATA=%ASGARDDATA%\odin"
-if not defined ASGARD_HOME if not exist "%ODINDATA%\" if exist "%LOCALAPPDATA%\meeting2jira\" (
+set "ODINOLD="
+if not defined ASGARD_HOME if not exist "%ODINDATA%\" (
+    if exist "%LOCALAPPDATA%\odin\" set "ODINOLD=%LOCALAPPDATA%\odin"
+    if exist "%LOCALAPPDATA%\meeting2jira\" if defined ODINOLD (
+        echo ERROR: Odin found two of its old folders, "%LOCALAPPDATA%\odin" and "%LOCALAPPDATA%\meeting2jira".
+        echo Move the one with the newest state.db to "%ODINDATA%" yourself, then run this again.
+        exit /b 2
+    )
+    if exist "%LOCALAPPDATA%\meeting2jira\" if not defined ODINOLD set "ODINOLD=%LOCALAPPDATA%\meeting2jira"
+)
+if defined ODINOLD (
     if not exist "%ASGARDDATA%\" mkdir "%ASGARDDATA%"
-    move "%LOCALAPPDATA%\meeting2jira" "%ODINDATA%" >nul || (
-        echo ERROR: Odin's files are moving to "%ODINDATA%", but "%LOCALAPPDATA%\meeting2jira" couldn't be moved.
+    move "%ODINOLD%" "%ODINDATA%" >nul || (
+        echo ERROR: Odin's files are moving to "%ODINDATA%", but "%ODINOLD%" couldn't be moved.
         echo Close anything using that folder, then run this again.
         exit /b 2
     )

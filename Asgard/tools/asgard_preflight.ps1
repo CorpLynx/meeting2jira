@@ -576,7 +576,7 @@ foreach ($k in $edgePaths) {
 if ($asc -gt 0) {
     Add-Result 'Edge' 'AutoSelectCertificateForUrls' 'INFO' ('{0} entries: Edge picks your certificate automatically on listed sites' -f $asc) 'Heimdall'
 } else {
-    Add-Result 'Edge' 'AutoSelectCertificateForUrls' 'INFO' 'Not set: expect a certificate prompt on PIV sites' 'Heimdall' 'Ask IT to list the SeCcHm URL if Heimdall will drive Edge'
+    Add-Result 'Edge' 'AutoSelectCertificateForUrls' 'INFO' 'Not set: expect a certificate prompt on PIV sites' 'Heimdall' 'Ask IT to list the security change URL if Heimdall will drive Edge'
 }
 
 $blockAll = $false

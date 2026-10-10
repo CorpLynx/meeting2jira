@@ -159,7 +159,7 @@
                           "retryPolicy": { "type": "none" }
                         },
                         "metadata": {
-                          "_why": "retryPolicy MUST be none. Power Automate retries failed actions by default; a retried timeout on a create is a duplicate issue, because Jira may have applied the first attempt and lost the response. This is the platform's default actively causing the bug meeting2jira was fixed to avoid.",
+                          "_why": "retryPolicy MUST be none. Power Automate retries failed actions by default; a retried timeout on a create is a duplicate issue, because Jira may have applied the first attempt and lost the response. This is the platform's default actively causing the bug Odin was fixed to avoid.",
                           "_blocking": true
                         }
                       },

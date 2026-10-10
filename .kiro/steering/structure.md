@@ -12,7 +12,7 @@ optional calendar exporters, the Power Platform material and Odin's docs and his
 `Asgard/HANDOFF.md` (state, decisions, what's next) and `Asgard/AGENTS.md` (non-negotiables,
 definition of done). Odin's contract with Muninn, the order of its daily run and what protects Jira
 are in `Asgard/docs/integration/odin.md`. The spec snapshots in `Asgard/docs/` are the current
-specs. `context-docs/` holds inputs Brandon dropped in (the 0.3.0 handoff zip, spec drafts, the
+specs. `context-docs/` holds inputs the owner dropped in (the 0.3.0 handoff zip, spec drafts, the
 archive of the retired `munnin-layer/` and `baldur/`); read them, don't edit them.
 
 ```

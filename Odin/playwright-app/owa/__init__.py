@@ -6,7 +6,7 @@ what made it approvable on a locked-down machine; this one needs Playwright from
 apart means the working COM app is untouched and its guardrails stay strict.
 
 The two meet at the same place any other source does: schema-v1 JSON, consumed by
-`python -m meeting2jira push --input <file>`. Nothing in the core pipeline changes.
+`odin push --input <file>`. Nothing in the core pipeline changes.
 
     capture.py   Playwright. Reuses the existing browser session, learns the calendar endpoint by
                  observing one request, then calls that endpoint directly for the exact window.

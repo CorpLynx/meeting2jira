@@ -27,7 +27,7 @@ ITEM_PATH = "/com.glideapp.servicecatalog_cat_item_view.do"
 
 _AMB = "<script>(function poll(){fetch('/amb').then(poll,poll)})()</script>"
 
-FORM_HTML = """<!doctype html><html><head><title>SeCcHm</title></head><body>%s
+FORM_HTML = """<!doctype html><html><head><title>security change</title></head><body>%s
 <div><label for="sd"><span class="required-marker" aria-label="Mandatory - must be populated before Submit">*</span>
   <span>Short description</span></label><input id="sd"></div>
 <div><label for="desc">Description</label><textarea id="desc"></textarea></div>

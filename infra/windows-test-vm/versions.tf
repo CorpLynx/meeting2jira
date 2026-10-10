@@ -18,7 +18,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project   = "meeting2jira"
+      Project   = "Odin"
       ManagedBy = "terraform"
       Purpose   = "throwaway-windows-test-vm"
     }

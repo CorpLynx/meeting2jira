@@ -3,7 +3,7 @@
     Registers (or removes) a weekday Task Scheduler job that runs the OWA sync as you.
 
 .DESCRIPTION
-    Mirrors the COM app's Register-MeetingSyncTask.ps1, pointed at meeting2jira-owa.cmd instead.
+    Mirrors the COM app's Register-MeetingSyncTask.ps1, pointed at odin-owa.cmd instead.
 
     Runs only while you are logged on, with limited rights. That is not merely copied from the COM
     version: the browser session this path depends on belongs to your interactive profile, so a task
@@ -28,7 +28,7 @@
 param(
     [string]$At,
     [ValidateRange(0, 31)][int]$DaysBack = 1,
-    [string]$TaskName = 'meeting2jira-owa-daily',
+    [string]$TaskName = 'odin-owa-daily',
     [int]$MinutesAfterTour = 30,
     [switch]$Unregister
 )
@@ -42,9 +42,9 @@ if ($Unregister) {
 }
 
 $appRoot = $PSScriptRoot
-$entryPoint = Join-Path $appRoot 'meeting2jira-owa.cmd'
+$entryPoint = Join-Path $appRoot 'odin-owa.cmd'
 if (-not (Test-Path -LiteralPath $entryPoint)) {
-    throw "meeting2jira-owa.cmd not found in $appRoot."
+    throw "odin-owa.cmd not found in $appRoot."
 }
 
 # Odin's files live under Asgard's folder: ASGARD_HOME\odin when set (as in Asgard's own tests),
@@ -91,11 +91,11 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatt
     -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
-    -Description 'meeting2jira: export the OWA calendar and push ended meetings to Jira sub-tasks' -Force | Out-Null
+    -Description 'Odin: export the OWA calendar and push ended meetings to Jira sub-tasks' -Force | Out-Null
 
 Write-Host "Registered '$TaskName': weekdays at $At, running as you while logged on."
 Write-Host "Logs: $(Join-Path $dataDir 'logs')"
 Write-Host "Test it now with: Start-ScheduledTask -TaskName '$TaskName'"
 Write-Host ''
-Write-Host "If the browser session expires the task will fail until you run: .\meeting2jira-owa login"
-Write-Host "Check for that with: .\meeting2jira-owa status"
+Write-Host "If the browser session expires the task will fail until you run: .\odin-owa login"
+Write-Host "Check for that with: .\odin-owa status"

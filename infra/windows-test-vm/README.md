@@ -13,7 +13,7 @@ Verified here:
   execute, and the ciphertext is checked for plaintext leakage.
 - **The PowerShell to Python export handoff**, for 0, 1, and 2 meetings, including whether this
   build wraps arrays as `{"value":[...],"Count":n}`.
-- **The CSV push path end to end**, and the `meeting2jira.cmd` entry point (batch has no
+- **The CSV push path end to end**, and the `odin.cmd` entry point (batch has no
   parse-only mode, so it has to be executed).
 - **`Test-Environment.ps1` at runtime**, including the `last_run.json` health block, checked
   against planted recent, failed, and stale files. This is where a local-vs-UTC mistake in the
@@ -35,8 +35,8 @@ Verified here:
 
 ## Asgard
 
-`./run-checks.sh asgard [--no-suite] [--no-user]` syncs the `Asgard/` folder (not `Odin/app/`) to
-the host and runs `Asgard/tools/windows_checks.py`: the suite in five Windows time zones, then an
+`./run-checks.sh asgard [--no-suite] [--no-user]` syncs the `Asgard/` folder to the host and runs
+`Asgard/tools/windows_checks.py` instead of Odin's PowerShell checks: the suite in five Windows time zones, then an
 install, Baldur run, scheduled task, Credential Manager and uninstall as the standard account (through
 the `m2j-as-user` task the bootstrap registers). The last results are in
 `Asgard/docs/windows-lab-2026-10-06.md`. `./remote.sh '<PowerShell>'` runs one command on the host
@@ -66,8 +66,8 @@ terraform apply                 # ~11 resources
 terraform destroy               # when finished
 ```
 
-`run-checks.sh` waits for the SSM agent, uploads **`Odin/app/`** to S3 (excluding secrets and local
-state), runs `tools/Invoke-WindowsChecks.ps1` under real `powershell.exe`, and prints the output with
+`run-checks.sh` waits for the SSM agent, uploads **`Asgard/`** to S3 (excluding secrets and local
+state), runs `apps/odin/tools/Invoke-WindowsChecks.ps1` under real `powershell.exe`, and prints the output with
 the exit code. It ships only the program folder, and the *working tree* rather than a commit, so the
 loop stays edit → run.
 

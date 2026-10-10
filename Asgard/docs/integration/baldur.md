@@ -73,7 +73,7 @@ so Baldur needs v4.
 
 ## Still to do
 
-- Alerts (Windows notifications) wait on Brandon's choice between notifications and the tile badge
+- Alerts (Windows notifications) wait on the owner's choice between notifications and the tile badge
   alone.
 - PR reviews as loggable time is an open decision in the Baldur spec.
 - An independent review of the GitHub PR-key change is owed (rule: changes to estimates need one).

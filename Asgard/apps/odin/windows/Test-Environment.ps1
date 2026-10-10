@@ -283,10 +283,15 @@ if (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue) {
 # else %LOCALAPPDATA%\Asgard\odin. Odin is an Asgard app; its records are in Muninn beside them.
 $asgardDir = if ($env:ASGARD_HOME) { $env:ASGARD_HOME } else { Join-Path $env:LOCALAPPDATA 'Asgard' }
 $dataDir = Join-Path $asgardDir 'odin'
-$legacyDir = Join-Path $env:LOCALAPPDATA 'meeting2jira'
-if (-not $env:ASGARD_HOME -and -not (Test-Path -LiteralPath $dataDir) -and (Test-Path -LiteralPath $legacyDir)) {
-    Write-Check INFO "Odin's files are still in $legacyDir; the next run moves them to $dataDir"
-    $dataDir = $legacyDir
+$legacyDirs = @((Join-Path $env:LOCALAPPDATA 'odin'), (Join-Path $env:LOCALAPPDATA 'meeting2jira'))
+$legacyFound = @($legacyDirs | Where-Object { Test-Path -LiteralPath $_ })
+if (-not $env:ASGARD_HOME -and -not (Test-Path -LiteralPath $dataDir) -and $legacyFound.Count -gt 0) {
+    if ($legacyFound.Count -gt 1) {
+        Write-Check WARN "Odin has two old folders ($($legacyFound -join ' and ')); move the one with the newest state.db to $dataDir yourself"
+    } else {
+        Write-Check INFO "Odin's files are still in $($legacyFound[0]); the next run moves them to $dataDir"
+    }
+    $dataDir = $legacyFound[0]
 }
 if (Test-Path (Join-Path $asgardDir 'muninn.db')) {
     Write-Check OK "Muninn exists in $asgardDir"

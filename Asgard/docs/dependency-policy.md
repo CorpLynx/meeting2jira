@@ -1,6 +1,6 @@
 # Dependency policy
 
-Oct 6, 2026 · decided by Brandon: standard-library-only is no longer a requirement. Oct 9, 2026: use the best module for each job, and give its alternatives in `MODULES.md` in case it isn't available on-premises.
+Oct 6, 2026 · decided by the owner: standard-library-only is no longer a requirement. Oct 9, 2026: use the best module for each job, and give its alternatives in `MODULES.md` in case it isn't available on-premises.
 
 Python packages are allowed in Asgard and Odin when they are **declared, pinned and justified**. The rule changed from "never" to "deliberately": adding a package is a reviewed decision, never a side effect.
 

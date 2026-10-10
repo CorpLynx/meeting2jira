@@ -3,7 +3,7 @@
     {
       "app": "heimdall",
       "name": "Heimdall",
-      "subtitle": "SeCcHm submissions",
+      "subtitle": "Security change submissions",
       "theme": {"accent": "#5B4B9A"},
       "backend": "heimdall.ui_backend:Backend",
       "views": [

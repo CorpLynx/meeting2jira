@@ -5,7 +5,7 @@
 **Audience: an AI coding agent running on the on-prem workstation, with the Odin tree in front of
 it.** You have no access to the conversation that produced this file. Everything you need is here.
 
-**Why this exists.** The off-prem repo (`meeting2jira`) and the on-prem program (`Odin`) have
+**Why this exists.** The off-prem repo (`Odin`) and the on-prem program (`Odin`) have
 diverged. Odin was renamed and gained a Tkinter frontend that ties the `.cmd` and `.ps1` entry
 points into a GUI. The off-prem repo's always-on steering still describes the pre-GUI layout, and
 its guardrail tests scan paths that may no longer be where the code lives. Nobody off-prem knows
@@ -105,7 +105,7 @@ exact failure this spec exists to prevent.
 ### 2.1 Layout and the decisive structural question
 1. Print the directory tree, excluding `.git`, `__pycache__`, `node_modules`, `.venv`, test output.
 2. **Is there still a self-contained deliverable folder** (the pre-GUI layout called it `app/`, with
-   `src/meeting2jira/` and `src/windows/`)? Which of these is true?
+   `apps/odin/odin/` and `src/windows/`)? Which of these is true?
    - **(A) Wrapper** — the old deliverable survives intact and the GUI sits beside/above it, calling
      its documented entry points.
    - **(B) Absorbed** — the GUI moved inside the deliverable folder, or the folder was renamed and

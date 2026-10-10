@@ -109,7 +109,7 @@ class BrowserTests(unittest.TestCase):
     def test_fills_every_kind_and_attaches(self):
         self.fake.catalog_hits = 2
         form = make_form(self.fake)
-        attachment = Path(self.tmp.name) / "secchm.xlsx"
+        attachment = Path(self.tmp.name) / "security-change.xlsx"
         attachment.write_bytes(b"x")
         plan = self.plan(form, {"Short description": "Scan $today", "Description": "Monthly",
                                 "Category": "Hardware", "Requested for": "Jane Example",
@@ -124,7 +124,7 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(value("#cat"), "hw")            # matched " Hardware " by its trimmed label
         self.assertEqual(value("#sys_display\\.rf"), "Jane Example")
         self.assertFalse(frame.locator("#ok").is_checked())
-        self.assertEqual(frame.locator("#files").inner_text(), "secchm.xlsx")
+        self.assertEqual(frame.locator("#files").inner_text(), "security-change.xlsx")
         self.assertNotEqual(self.page.title(), "SUBMITTED", "Heimdall must never click Submit")
 
     def test_short_label_never_lands_on_a_longer_one(self):

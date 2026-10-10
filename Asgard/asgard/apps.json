@@ -39,7 +39,7 @@
     {
       "id": "heimdall",
       "name": "Heimdall",
-      "description": "SeCcHm submissions",
+      "description": "Security change submissions",
       "monogram": "Hd",
       "color": "#5B4B9A",
       "status": "available",
@@ -48,7 +48,7 @@
     {
       "id": "bifrost",
       "name": "Bifrost",
-      "description": "BEARs workbooks and Confluence uploads",
+      "description": "Entitlements workbooks and Confluence uploads",
       "monogram": "Bf",
       "color": "#0B7285",
       "status": "coming_soon"

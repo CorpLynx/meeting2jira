@@ -21,9 +21,9 @@ objective is to retire the custom script, this does not do that — see [../clou
 
 1. Open **Power Automate** from the Start menu and sign in. If prompted for an environment, pick your
    organisation's.
-2. **New flow** → name it `meeting2jira daily`.
+2. **New flow** → name it `Odin daily`.
 3. Add one action: **Run PowerShell script**. Paste the contents of
-   [`run-meeting2jira.ps1`](run-meeting2jira.ps1), editing `$AppPath` to where you put `app/`.
+   [`run-odin.ps1`](run-odin.ps1), editing `$AppPath` to where you put `app/`.
 4. Set the action's **Output variable** to `PsOutput` and the error output to `PsError`, so failures
    surface in the run history rather than vanishing.
 5. Add **If** → `PsError` is not empty → **Display an infobar**, or send yourself a message. Without
@@ -40,7 +40,7 @@ conversation.
 
 ```powershell
 cd path\to\app
-.\meeting2jira schedule
+.\odin schedule
 ```
 
 That registers a per-user weekday task, deriving the run time from your tour of duty if configured.
@@ -62,4 +62,4 @@ rules that disagree. The flow should pass arguments and read the exit code, noth
 | 2 | config, usage, or credential problem |
 | 130 | interrupted |
 
-`run-meeting2jira.ps1` already turns these into a message worth showing.
+`run-odin.ps1` already turns these into a message worth showing.

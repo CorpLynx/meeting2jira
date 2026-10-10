@@ -2,7 +2,7 @@
 
 Identity `bifrost` · not built yet · module to add: `asgard.muninn.submissions` (shared with Heimdall)
 
-Bifrost fills the BEARs workbook from Muninn, uploads it to Confluence as an attachment, and watches the page for its review status.
+Bifrost fills the entitlements workbook from Muninn, uploads it to Confluence as an attachment, and watches the page for its review status.
 
 ## Tables
 

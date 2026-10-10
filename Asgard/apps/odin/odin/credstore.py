@@ -65,7 +65,7 @@ if sys.platform == "win32":
     def _protect(data: bytes) -> bytes:
         blob_in, _keepalive = _to_blob(data)
         blob_out = _Blob()
-        if not _crypt32.CryptProtectData(ctypes.byref(blob_in), "meeting2jira", None, None, None,
+        if not _crypt32.CryptProtectData(ctypes.byref(blob_in), "Odin", None, None, None,
                                          _CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(blob_out)):
             raise ctypes.WinError(ctypes.get_last_error())
         return _take(blob_out)
@@ -95,7 +95,7 @@ def load_token(data_dir: Path) -> Tuple[str, str]:
         return env.strip(), f"environment variable {ENV_VAR}"
     path = Path(data_dir) / TOKEN_FILE
     if not path.is_file():
-        raise CredentialError("No Jira token stored yet. Run: python -m meeting2jira set-token")
+        raise CredentialError("No Jira token stored yet. Run: odin set-token")
     if sys.platform != "win32":
         raise CredentialError(f"{path} is DPAPI-encrypted and can only be read on Windows. Set {ENV_VAR} instead.")
     try:

@@ -1,4 +1,4 @@
-"""Drive Edge to fill the SeCcHm form from a Plan, then stop for you to review and Submit.
+"""Drive Edge to fill the security change form from a Plan, then stop for you to review and Submit.
 
 Rules it keeps:
 - Real browser, normal UI, normal SSO sign-in. It never reads, copies or stores tokens, cookies

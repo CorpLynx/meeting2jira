@@ -1,6 +1,6 @@
 # Baldur spec: work-time estimates from git
 
-Oct 3, 2026 · @Brandon
+Oct 3, 2026 · @the owner
 
 Baldur turns your git activity and calendar into per-ticket time proposals that you review and approve. It never writes hours on its own, every number carries the evidence behind it, and every rounding goes down.
 
@@ -26,7 +26,7 @@ The old spec's model holds up. These changes move it into Asgard, fix three logi
 
 | Area | Old spec | This spec | Why |
 | --- | --- | --- | --- |
-| Home | `meeting2jira/gitwork.py` inside Odin | Asgard app in `apps/baldur/`, porting that module and its 34 tests | Odin stays focused on Jira; Baldur gets its own tile |
+| Home | `Odin/gitwork.py` inside Odin | Asgard app in `apps/baldur/`, porting that module and its 34 tests | Odin stays focused on Jira; Baldur gets its own tile |
 | State | `git_worklogs` table in Odin's `state.db` | Muninn tables shared with Freya and Loki | Freya cites the same commits and confirmed hours |
 | Authors | `authors` list in config | Muninn `identities`, which every app uses for `is_mine`; empty is still refused | One definition of "me" across Asgard |
 | Collection | Scan repos on every run | Incremental sync into Muninn, collected weekly at minimum | Git expires reflog entries after 90 days |

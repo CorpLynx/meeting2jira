@@ -1,4 +1,4 @@
-# A Power Platform version of meeting2jira
+# A Power Platform version of Odin
 
 ## First, a terminology correction that changes what you ask IT for
 
@@ -6,7 +6,7 @@
 
 | Product | What it is | Role here |
 |---|---|---|
-| **Power Automate** | Workflow automation (formerly Flow) | This is the one that could replace meeting2jira: read the calendar on a schedule, create Jira sub-tasks. |
+| **Power Automate** | Workflow automation (formerly Flow) | This is the one that could replace Odin: read the calendar on a schedule, create Jira sub-tasks. |
 | **Power Automate for desktop** | Local RPA, preinstalled on Windows 11 | The most realistic option on a locked-down machine. See [power-automate-desktop/](power-automate-desktop/). |
 | **Power BI** | Analytics and dashboards | Cannot create Jira issues. It *is* the right tool for reporting on the time once it's recorded. See [power-bi/](power-bi/). |
 
@@ -85,7 +85,7 @@ premise. Worth stating plainly as the baseline the others have to beat.
 
 ## The one thing a no-code rewrite usually gets wrong
 
-meeting2jira is careful about exactly one hard problem: **never create a duplicate sub-task.** It
+Odin is careful about exactly one hard problem: **never create a duplicate sub-task.** It
 solves that with a sqlite database recording what it has pushed, matched on either a source-specific
 key or a source-independent content hash.
 

@@ -10,7 +10,7 @@ One sentence: **the browser is used as an authenticated session, not as a screen
 ```mermaid
 flowchart TD
     subgraph entry["playwright-app/ — the OWA exporter"]
-        CMD["<b>meeting2jira-owa.cmd</b><br/>entry point<br/><i>delegates everything non-OWA</i>"]
+        CMD["<b>odin-owa.cmd</b><br/>entry point<br/><i>delegates everything non-OWA</i>"]
         EXPORT["<b>export_owa.py</b><br/>CLI: window, flags, breadcrumb"]
         CAPTURE["<b>owa/capture.py</b><br/>Playwright<br/><i>the only file needing pip</i>"]
         MAPPING["<b>owa/mapping.py</b><br/>OWA JSON → schema v1<br/><i>stdlib only, so testable anywhere</i>"]
@@ -25,7 +25,7 @@ flowchart TD
     CONTRACT[/"<b>schema-v1 JSON</b><br/>the same contract the<br/>COM exporter produces"/]
 
     subgraph app["app/ — unchanged, stdlib only"]
-        APPCMD["<b>meeting2jira.cmd</b>"]
+        APPCMD["<b>odin.cmd</b>"]
         PIPELINE["<b>sources → rules → sync</b><br/>filters, tour of duty, routing,<br/>dedupe, worklog retry"]
         STATE[("<b>state.db</b><br/>one database,<br/>shared with the COM path")]
         CONFIG[("config.json<br/>jira_token.dpapi")]
@@ -170,7 +170,7 @@ did not, which pushes private and declined meetings to Jira and reports success.
 Microsoft [deprecated in 2020 and began decommissioning on 31 March 2024](https://devblogs.microsoft.com/microsoft365dev/final-reminder-outlook-rest-api-v2-0-and-beta-endpoints-decommissioning/),
 with a carve-out for Outlook add-ins. So it is corroboration of the *shape*, not evidence that OWA's
 own client still calls that host. Whatever OWA actually uses is what discovery will find, which is
-precisely why the endpoint is observed rather than hard-coded — and why `meeting2jira-owa discover`
+precisely why the endpoint is observed rather than hard-coded — and why `odin-owa discover`
 on the target machine is still a required step.
 
 ## Performance, in the order it matters
@@ -207,11 +207,11 @@ where the COM exporter has to match on the location string.
 
 | Failure | How it surfaces | What to do |
 |---|---|---|
-| Browser session expired | Export fails; `_looks_like_sign_in` catches the redirect | `meeting2jira-owa login` |
-| Microsoft changed the endpoint | "never saw a request returning events" | `meeting2jira-owa discover`, then `--endpoint` |
+| Browser session expired | Export fails; `_looks_like_sign_in` catches the redirect | `odin-owa login` |
+| Microsoft changed the endpoint | "never saw a request returning events" | `odin-owa discover`, then `--endpoint` |
 | Endpoint is a POST (`service.svc` shape) | Reported explicitly, then falls back to the events discovery already captured | Window is whatever the view showed; check `discover` for a GET-shaped endpoint |
 | Endpoint ignored the UTC preference | `mapping.py` **refuses** rather than guessing an offset | Nothing silently shifts; fix the Prefer header |
-| Playwright missing or broken | Recorded in `last_export.json` | `meeting2jira-owa setup` |
+| Playwright missing or broken | Recorded in `last_export.json` | `odin-owa setup` |
 
 That fourth row is deliberate. Guessing a timezone offset would shift every meeting and look
 plausible; Windows has no timezone database without the `tzdata` package, so the mapping refuses a
@@ -224,7 +224,7 @@ keeps yesterday's success and `status` looks healthy while meetings quietly stop
 until the staleness warning notices.
 
 So `export_owa.py` always writes `last_export.json`, on every path including "Playwright isn't
-installed", and `meeting2jira-owa status` prints it *before* delegating to the main app's status.
+installed", and `odin-owa status` prints it *before* delegating to the main app's status.
 
 ## This is the fallback, not the destination
 

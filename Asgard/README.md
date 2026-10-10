@@ -160,7 +160,7 @@ Odin is the only app that writes to Jira. Every weekday it turns the meetings yo
 
 Other commands: `odin status` (the last run, recent sub-tasks, what waits), `odin sync` (Jira into Muninn only), `odin post` (approved Baldur days only; `post --dry-run` lists them), `odin csv FILE` (from an Outlook CSV export instead of Outlook), `odin report` (every sub-task as a CSV for Power BI), `odin doctor` (what this computer allows), `odin cli forget PROJ-123` (push that meeting again: delete the sub-task in Jira first, or the next run finds it and records it again). A hidden run that fails leaves `ATTENTION-Odin.txt` on your Desktop until a run works again.
 
-Moving from meeting2jira: your config, token and logs move from `%LOCALAPPDATA%\meeting2jira` to `%LOCALAPPDATA%\Asgard\odin` the first time Odin runs, and its record of which meetings have sub-tasks (`state.db`) moves into Muninn on the first real run, so nothing is created again. `odin schedule` replaces the old `meeting2jira-daily` task. How it works, and what protects Jira: [docs/integration/odin.md](docs/integration/odin.md).
+Moving from an older Odin: your config, token and logs move from `%LOCALAPPDATA%\odin` (or `%LOCALAPPDATA%\meeting2jira`, if you go back that far) to `%LOCALAPPDATA%\Asgard\odin` the first time Odin runs, and its record of which meetings have sub-tasks (`state.db`) moves into Muninn on the first real run, so nothing is created again. `odin schedule` replaces the old `meeting2jira-daily` task. How it works, and what protects Jira: [docs/integration/odin.md](docs/integration/odin.md).
 
 ## Ysildir: Asgard for your AI client
 
@@ -178,7 +178,7 @@ Each tool's data flow needs your ISSO's approval, so each has a switch in `%LOCA
 
 ## Heimdall from the command line
 
-Heimdall fills a SeCcHm request in Edge from a saved template, then stops so you can review it and click **Submit** yourself. Its tile opens Heimdall's window (see below), which does everything these commands do; the commands also work on their own:
+Heimdall fills a security change request in Edge from a saved template, then stops so you can review it and click **Submit** yourself. Its tile opens Heimdall's window (see below), which does everything these commands do; the commands also work on their own:
 
 ```
 cd /d "%LOCALAPPDATA%\Asgard\app\apps\heimdall"
@@ -189,7 +189,7 @@ heimdall.cmd fill -t "Monthly scan" --dry-run
 heimdall.cmd fill -t "Monthly scan"
 ```
 
-- `init` creates the form file, `%LOCALAPPDATA%\Asgard\settings\heimdall.json`, from the example. Edit it once to match the SeCcHm form: `instance_url`, the catalog item's `catalog_sys_id` (the 32 characters after `sysparm_id=` or `sys_id=` in its address), and one entry per field with its label exactly as the form shows it and its `kind`: `text`, `select`, `reference` or `checkbox`. A field can also have `"required": true`, a `default`, or a `selector` when its label isn't enough to find it. `fields` shows what Heimdall read.
+- `init` creates the form file, `%LOCALAPPDATA%\Asgard\settings\heimdall.json`, from the example. Edit it once to match the security change form: `instance_url`, the catalog item's `catalog_sys_id` (the 32 characters after `sysparm_id=` or `sys_id=` in its address), and one entry per field with its label exactly as the form shows it and its `kind`: `text`, `select`, `reference` or `checkbox`. A field can also have `"required": true`, a `default`, or a `selector` when its label isn't enough to find it. `fields` shows what Heimdall read.
 - **Templates** are saved combinations of values for those fields. `template save NAME --set "LABEL=VALUE"` creates one; `template list`, `show`, `edit` (`--set`, `--unset`, `--attachment`, `--no-attachment`, `--rename`) and `delete` manage them. Names and labels ignore capitals. Checkboxes take `true` or `false`. Values may use `$today` (2026-10-04) or `$today_us` (10/04/2026); write `$$` for a dollar sign. In PowerShell, put such values in single quotes, or PowerShell replaces `$today` before Heimdall sees it.
 - `fill` uses, for each field, the form's default, then the template's value, then any `--set` you add for this run. A field with no value anywhere is left as it is. `--attachment` or `--no-attachment` changes the attachment for this run only, and `--dry-run` shows the plan without opening Edge.
 - **What a fill does.** Heimdall opens Edge with its own profile and signs in the normal way: pick your certificate and enter your PIN if Edge asks. After the first time, the profile usually keeps you signed in. It opens the catalog item, fills each field, checks that each value took, attaches the file, and brings Edge to the front. Review the form, click **Submit**, then close the window.
@@ -295,7 +295,7 @@ Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > 
 | `%LOCALAPPDATA%\Asgard\settings\baldur.json` | Baldur's settings |
 | `%LOCALAPPDATA%\Asgard\settings\ysildir.json` | Which Ysildir tools your AI client may use (`ysildir.cmd tools`). No file means the defaults; a file Ysildir can't read leaves only `asgard_guide` on |
 | `%LOCALAPPDATA%\Asgard\settings\ui.json` | Your choices for the shared window: mode, text size, colours |
-| `%LOCALAPPDATA%\Asgard\settings\heimdall.json` | Heimdall's form file: the SeCcHm catalog item and its fields |
+| `%LOCALAPPDATA%\Asgard\settings\heimdall.json` | Heimdall's form file: the security change catalog item and its fields |
 | `%LOCALAPPDATA%\Asgard\settings\heimdall-templates.json` | Your Heimdall templates. Heimdall won't overwrite this file if it can't read it |
 | `%LOCALAPPDATA%\Asgard\odin` | Odin's files: `config.json`, its DPAPI-protected Jira token, logs, calendar exports, `last_run.json`; its records are in Muninn. Odin moves its old `%LOCALAPPDATA%\meeting2jira` here the first time it runs, and keeps the old `state.db` as `state.db.migrated-DATE` for 30 days |
 | `%LOCALAPPDATA%\Asgard\heimdall\edge-profile` | The Edge profile Heimdall signs in with; delete it to sign out. Traces from `--trace` go in `heimdall\traces` |

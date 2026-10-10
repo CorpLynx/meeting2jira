@@ -9,7 +9,7 @@ Options: --desktop adds a desktop shortcut; --no-launch skips opening Asgard.
 
 The packaged build (docs/packaging.md) runs this through asgard-cli.exe, and installs the same way:
 the whole build (its programs, Python and Asgard's code) is copied to %LOCALAPPDATA%\\Asgard\\app,
-beside Asgard's data (Brandon, Oct 10). The folder you extracted can go afterwards.
+beside Asgard's data (decided Oct 10). The folder you extracted can go afterwards.
 """
 from __future__ import annotations
 

@@ -159,7 +159,7 @@ class FrozenProcessTests(Home):
 
 
 class FrozenSetupTests(Home):
-    """Setup copies the whole packaged build into %LOCALAPPDATA%\\Asgard\\app (Brandon, Oct 10)."""
+    """Setup copies the whole packaged build into %LOCALAPPDATA%\\Asgard\\app (decided Oct 10)."""
 
     def fake_build(self) -> Path:
         """A packaged build's folder: its programs, a DLL, the payload and a checked-hash .pyc."""

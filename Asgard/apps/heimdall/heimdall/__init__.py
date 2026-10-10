@@ -1,4 +1,4 @@
-"""Heimdall: fill a SeCcHm (ServiceNow) catalog item in Edge from a saved template, then stop.
+"""Heimdall: fill a security change (ServiceNow) catalog item in Edge from a saved template, then stop.
 
     form       the form description: instance, catalog item, and the fields on it (stdlib)
     templates  saved combinations of values for those fields (stdlib)

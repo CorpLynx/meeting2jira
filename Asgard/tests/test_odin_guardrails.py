@@ -190,7 +190,7 @@ class PowerShellGuardrails(unittest.TestCase):
         """The packaged build runs scripts by path and has no -m, so nothing may use python -m odin."""
         for path in sorted(APP.rglob("*.ps1")) + sorted(APP.glob("*.cmd")):
             with self.subTest(script=path.name):
-                self.assertNotRegex(path.read_text(encoding="ascii"), r"-m['\"]?,?\s*['\"]?(odin|meeting2jira)\b")
+                self.assertNotRegex(path.read_text(encoding="ascii"), r"-m['\"]?,?\s*['\"]?(odin|Odin)\b")
 
     def test_no_execution_policy_bypass(self):
         pattern = re.compile(r"ExecutionPolicy\s+(Bypass|Unrestricted)|Set-ExecutionPolicy", re.IGNORECASE)

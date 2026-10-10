@@ -83,7 +83,7 @@ past meeting by `meeting_key` or `content_hash`, and a value the current code ca
 would never match, so loosening hides the problem. Instead:
 
 - Count such rows in `inspect`.
-- If there are any, tell Brandon before changing code. The options are to import them with the
+- If there are any, tell the owner before changing code. The options are to import them with the
   hash recomputed from `summary` and times (only if the summary template can be reversed and
   verified), or to leave them in `state.db` and let `Legacy` keep answering for them. The second
   is already how it works.
@@ -127,7 +127,7 @@ fake Jira sees only GET requests from this code; `muninn.integrity.check()` is c
 Needs target-machine verification until it has run there (the real `state.db`, Asgard's Python,
 Jira Data Center):
 
-1. `odin history inspect`; compare with the layout in `Odin/app/src/meeting2jira/state.py`.
+1. `odin history inspect`; compare with the layout in `Odin/Asgard/apps/odin/odin/state.py`.
 2. `odin preview`: the number of meetings it would create must be what you expect (usually 0 for
    anything already synced). A nonzero number for old meetings means `Legacy` isn't matching.
 3. A real daily run; the log line "Moved N sub-task record(s) from state.db into Muninn" and no

@@ -11,20 +11,17 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-# Odin (default): only Odin/app/ is shipped: it is the whole program, and it is exactly what an operator
-# would copy to a workstation. Terraform, steering files and docs have no business on the test host.
-# Asgard (`./run-checks.sh asgard [args]`): the Asgard/ folder, the same tree its release zip holds, and
-# Asgard/tools/windows_checks.py instead of the PowerShell checks.
+# Both targets ship the Asgard/ folder, the same tree its release zip holds: since Oct 2026 Odin is an
+# Asgard app (Asgard/apps/odin) and imports asgard.muninn, so it can't be shipped on its own. Terraform,
+# steering files and docs have no business on the test host.
+#   Odin (default):                  Asgard/apps/odin/tools/Invoke-WindowsChecks.ps1 under 5.1
+#   Asgard (`run-checks.sh asgard`): Asgard/tools/windows_checks.py
 TARGET="odin"
 if [ "${1:-}" = "asgard" ]; then
   TARGET="asgard"
   shift
 fi
-if [ "$TARGET" = "asgard" ]; then
-  APP_DIR="$(cd ../../Asgard && pwd)"
-else
-  APP_DIR="$(cd ../../Odin/app && pwd)"
-fi
+APP_DIR="$(cd ../../Asgard && pwd)"
 
 INSTANCE_ID="$(terraform output -raw instance_id)"
 BUCKET="$(terraform output -raw bucket)"
@@ -52,7 +49,7 @@ fi
 
 # ---- 2. Push the checkout up ----------------------------------------------------------------
 # Secrets and local state stay here: the token file, the sqlite state and real calendar exports are
-# excluded. Terraform state (which holds the lab password) is outside Odin/app/ and never in scope.
+# excluded. Terraform state (which holds the lab password) is outside Asgard/ and never in scope.
 echo "==> syncing $APP_DIR to s3://$BUCKET/$TARGET"
 aws s3 sync "$APP_DIR" "s3://$BUCKET/$TARGET" \
   --region "$REGION" \
@@ -80,7 +77,8 @@ import sys
 params_file, bucket, aws_exe, extra_args, target = sys.argv[1:6]
 local = "C:\\m2j\\repo" if target == "odin" else "C:\\m2j\\asgard"
 if target == "odin":
-    run = "powershell.exe -NoProfile -File C:\\m2j\\repo\\tools\\Invoke-WindowsChecks.ps1 %s" % extra_args
+    run = ("powershell.exe -NoProfile -File "
+           "C:\\m2j\\repo\\apps\\odin\\tools\\Invoke-WindowsChecks.ps1 %s" % extra_args)
 else:
     # py.exe is the all-users launcher in C:\Windows, so it is on the SSM agent's PATH even though the
     # agent started before Python was installed. -X utf8 keeps the transcript readable in S3.

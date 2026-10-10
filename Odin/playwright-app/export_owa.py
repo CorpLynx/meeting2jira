@@ -1,4 +1,4 @@
-"""Export your own Outlook on the web calendar to meeting2jira's schema-v1 JSON.
+"""Export your own Outlook on the web calendar to Odin's schema-v1 JSON.
 
 For machines where classic Outlook (and therefore COM) is unavailable - that is, "new Outlook".
 The output is consumed by the existing, unmodified pipeline:
@@ -65,17 +65,20 @@ def build_parser() -> argparse.ArgumentParser:
 def data_dir() -> Path:
     """Odin's files: %LOCALAPPDATA%\\Asgard\\odin (ASGARD_HOME\\odin when set), beside Asgard's.
 
-    The same rule as meeting2jira.config.default_data_dir, kept here so this app stands alone
-    (app/tests/test_guardrails.py checks all three agree). A folder from before
-    (%LOCALAPPDATA%\\meeting2jira) is moved here the first time, in one rename, so the DPAPI files
-    come across unchanged; never under ASGARD_HOME, which tests point at a temporary folder.
+    The same rule as odin.config.default_data_dir, kept here so this app stands alone
+    (Asgard/tests/test_odin_data_dir.py checks all three agree). A folder from before
+    (%LOCALAPPDATA%\\odin on the on-premises install, or %LOCALAPPDATA%\\meeting2jira before that) is
+    moved here the first time, in one rename, so the DPAPI files come across unchanged; never under
+    ASGARD_HOME, which tests point at a temporary folder. Two old folders at once is a question for
+    Odin itself, which says which to keep; here the newer naming wins.
     """
     home = os.environ.get("ASGARD_HOME")
     base = os.environ.get("LOCALAPPDATA")
     asgard = Path(home) if home else (Path(base) / "Asgard" if base else Path.home() / ".local" / "share" / "Asgard")
     target = asgard / "odin"
     if not home and not target.exists():
-        legacy = [Path(base) / "meeting2jira"] if base else [Path.home() / ".meeting2jira", Path.home() / "meeting2jira"]
+        legacy = ([Path(base) / "odin", Path(base) / "meeting2jira"] if base
+                  else [Path.home() / ".meeting2jira", Path.home() / "meeting2jira"])
         for old in legacy:
             if old.is_dir():
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +133,7 @@ def write_last_export(ok: bool, detail: str, captured: int = 0, exported: int = 
     Without this there is a silent-failure hole. The push writes last_run.json, but if the *export*
     fails the push never runs, so last_run.json keeps yesterday's success and `status` looks healthy.
     A scheduled run with an expired browser session would lose meetings for days before the staleness
-    warning noticed. `meeting2jira-owa status` reads this first.
+    warning noticed. `odin-owa status` reads this first.
 
     Best effort: failing to write a breadcrumb must never change the exit code.
     """
