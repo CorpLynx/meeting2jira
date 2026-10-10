@@ -38,6 +38,13 @@ def token(name="automation", days_from_now=None):
 
 
 class TokenExpiryTests(unittest.TestCase):
+    def test_jiras_compact_offset_is_read_on_every_supported_python(self):
+        """fromisoformat reads '+0000' only from Python 3.11; the warning went quiet on 3.9 and 3.10."""
+        from odin.models import parse_utc
+        for text in ("2026-10-01T09:20:00.000+0000", "2026-10-01T05:20:00.000-0400", "2026-10-01T09:20:00Z"):
+            with self.subTest(text=text):
+                self.assertEqual(parse_utc(text).strftime("%Y-%m-%dT%H:%M"), "2026-10-01T09:20")
+
     def test_silent_when_the_endpoint_is_unavailable(self):
         """Older Data Center versions have no such endpoint; that is not a problem to report."""
         self.assertIsNone(token_expiry_warning(None, 14, now=NOW))

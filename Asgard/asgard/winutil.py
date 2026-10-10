@@ -17,6 +17,27 @@ IS_WINDOWS = os.name == "nt"
 
 
 # --------------------------------------------------------------------------
+# Child processes
+# --------------------------------------------------------------------------
+
+CREATE_NO_WINDOW = 0x08000000
+
+
+def kill_tree(pid: int) -> bool:
+    """End a process and everything it started (taskkill /T). Killing only the parent leaves its
+    children running: Stop on Odin's daily run would end PowerShell and leave Python posting.
+    Windows only; True when taskkill reported success."""
+    if not IS_WINDOWS or pid <= 0:
+        return False
+    try:
+        done = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15,
+                              creationflags=CREATE_NO_WINDOW if os.name == "nt" else 0)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+# --------------------------------------------------------------------------
 # Window appearance
 # --------------------------------------------------------------------------
 

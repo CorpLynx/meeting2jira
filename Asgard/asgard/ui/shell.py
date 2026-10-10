@@ -33,7 +33,7 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine, QQmlPropertyMap
 from PySide6.QtQuickControls2 import QQuickStyle
 
-from asgard import paths
+from asgard import paths, winutil
 
 from . import prefs as prefs_mod
 from . import registry, theme
@@ -272,6 +272,9 @@ class Bridge(QObject):
     @Slot()
     def stop(self) -> None:
         if self._proc is not None and self._proc.state() != QProcess.ProcessState.NotRunning:
+            # The whole tree: a script's children (Odin's daily run is PowerShell running Python)
+            # would otherwise carry on after the window says it stopped.
+            winutil.kill_tree(int(self._proc.processId()))
             self._proc.kill()
 
     def _read(self) -> None:

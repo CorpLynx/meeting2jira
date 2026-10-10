@@ -155,6 +155,9 @@ class Outcome:
         out = list(self.errors)
         if self.push:
             out += self.push.errors
+        if self.push:
+            out += [f"meeting worklog refused by Jira: {line}" for line in self.push.posts.failed]
+        out += [f"meeting worklog refused by Jira: {line}" for line in self.retries.failed]
         if self.posts:
             out += [f"approved day refused by Jira: {line}" for line in self.posts.failed]
         return out
@@ -163,7 +166,7 @@ class Outcome:
         out = list(self.warnings)
         if self.push:
             out += self.push.warnings
-        out += [f"meeting worklog: {line}" for line in self.retries.failed + self.retries.unknown]
+        out += [f"meeting worklog: {line}" for line in self.retries.unknown]
         if self.settle.unsettled:
             out.append(f"{self.settle.unsettled} interrupted post(s) couldn't be checked; checked next run")
         if self.collected:
@@ -189,7 +192,10 @@ def _meetings(args: argparse.Namespace, cfg: Dict[str, Any]):
 def _run(args: argparse.Namespace, command: str, meetings_wanted: bool, collect_wanted: bool,
          post_wanted: bool) -> int:
     cfg = load_config(args.config)
-    data_dir = Path(cfg["data_dir"])
+    data_dir = Path(cfg["data_dir"])            # the config's folder: the token, last_run.json, logs
+    # What goes with Muninn rather than with a config file: the run lock, the journal and state.db.
+    # Muninn is one per Asgard, so a run with --config elsewhere must still find them.
+    work_dir = default_data_dir()
     if getattr(args, "max", None) is not None:
         cfg["jira"]["max_creates_per_run"] = args.max
     if getattr(args, "max_posts", None) is not None:
@@ -211,12 +217,14 @@ def _run(args: argparse.Namespace, command: str, meetings_wanted: bool, collect_
         raise
     try:
         if dry_run:
-            return _preview(cfg, con, data_dir, meetings, meetings_wanted, post_wanted)
-        with store.RunLock(data_dir):
+            return _preview(cfg, con, work_dir, meetings, meetings_wanted, post_wanted)
+        with store.RunLock(work_dir):
             try:
-                _live(cfg, con, data_dir, outcome, meetings, export_source, window, meetings_wanted,
+                _live(cfg, con, data_dir, work_dir, outcome, meetings, export_source, window, meetings_wanted,
                       collect_wanted, post_wanted)
-            except (JiraError, CredentialError, muninn.MuninnError, history.HistoryError, sqlite3.DatabaseError) as exc:
+            except BaseException as exc:
+                # Whatever stopped it (an expired token, a full disk, Ctrl+C, a bug), a scheduled run's
+                # failure must show in last_run.json and on the Desktop, not leave the last "OK".
                 _record_failure(cfg, data_dir, outcome, exc)
                 raise
     finally:
@@ -224,8 +232,8 @@ def _run(args: argparse.Namespace, command: str, meetings_wanted: bool, collect_
     return _finish(cfg, data_dir, outcome)
 
 
-def _live(cfg: Dict[str, Any], con: sqlite3.Connection, data_dir: Path, out: Outcome, meetings: list,
-          export_source: Optional[str], window: Any, meetings_wanted: bool, collect_wanted: bool,
+def _live(cfg: Dict[str, Any], con: sqlite3.Connection, data_dir: Path, work_dir: Path, out: Outcome,
+          meetings: list, export_source: Optional[str], window: Any, meetings_wanted: bool, collect_wanted: bool,
           post_wanted: bool) -> None:
     j, settings = cfg["jira"], cfg["muninn"]
     token, _ = load_token(data_dir)
@@ -236,11 +244,11 @@ def _live(cfg: Dict[str, Any], con: sqlite3.Connection, data_dir: Path, out: Out
     store.remember_me(con, jira_sid, me)
 
     # 1. What only Odin knew: the journal, then state.db, once.
-    out.replayed = store.Journal(data_dir).replay(con)
+    out.replayed = store.Journal(work_dir).replay(con)
     if out.replayed:
         log.info("Recorded %d sub-task(s) an earlier run kept in its journal.", out.replayed)
-    out.imported = history.import_state_db(con, data_dir)
-    legacy = history.Legacy.open(data_dir)        # only if some rows couldn't move
+    out.imported = history.import_state_db(con, work_dir)
+    legacy = history.Legacy.open(work_dir)        # only if some rows couldn't move
     ctx = collect.context(con, client, jira_sid)
 
     # 2. Posts an earlier run never heard back about.
@@ -253,7 +261,7 @@ def _live(cfg: Dict[str, Any], con: sqlite3.Connection, data_dir: Path, out: Out
         if j.get("log_work"):
             posting.retry_meetings(con, client, jira_sid, ctx,
                                    lambda run_, key, ctx_: collect.collect_issue(run_, key, ctx_, client), out.retries)
-        out.push = run(meetings, cfg, con, client, data_dir=data_dir, event_ids=event_ids, ctx=ctx, me=me,
+        out.push = run(meetings, cfg, con, client, data_dir=work_dir, event_ids=event_ids, ctx=ctx, me=me,
                        seen_before=legacy.find if legacy else None)
         out.push.worklogs_retried = len(out.retries.posted)
 
@@ -271,10 +279,16 @@ def _live(cfg: Dict[str, Any], con: sqlite3.Connection, data_dir: Path, out: Out
             collect.sync_worklogs(con, client, ctx, days, limit, got)
             _classify_old_meeting_worklogs(con, cfg)
 
-    # 6. Approved Baldur days, only once Muninn knows what Jira already holds.
+    # 6. Approved Baldur days, only once Muninn knows what Jira already holds (and each issue's
+    #    worklogs are read again just before its time goes).
     if post_wanted and (out.command == "post" or settings["post_approved"]):
         if out.collected is not None and out.collected.worklogs_ok:
-            out.posts = posting.post_approved(con, client, int(settings["max_posts_per_run"]))
+            with muninn.Run(con, store.APP, jira_sid, "post-check") as check:
+                out.posts = posting.post_approved(con, client, int(settings["max_posts_per_run"]), run=check, ctx=ctx)
+        elif out.collected is not None and out.collected.worklogs_left and not out.collected.problems:
+            out.warnings.append("Approved Baldur days wait: the worklog sync is still catching up (it reads at most "
+                                f"{settings['max_issues_per_run']} issues a run), so Odin can't yet tell what Jira "
+                                "already holds. They're posted once it has read everything.")
         else:
             out.errors.append("Approved Baldur days weren't posted: the worklog sync didn't finish, so Odin can't "
                               "tell what Jira already holds. Fix what the sync reported; the days wait for the next run.")
@@ -308,15 +322,15 @@ def _warn_token_expiry(client: JiraClient, j: Dict[str, Any]) -> None:
         log.debug("Token expiry check skipped: %s", exc)
 
 
-def _preview(cfg: Dict[str, Any], con: sqlite3.Connection, data_dir: Path, meetings: list,
+def _preview(cfg: Dict[str, Any], con: sqlite3.Connection, work_dir: Path, meetings: list,
              meetings_wanted: bool, post_wanted: bool) -> int:
     """A dry run: reads Muninn (and state.db, if it hasn't moved in yet), writes nothing anywhere."""
-    legacy = history.Legacy.open(data_dir)
+    legacy = history.Legacy.open(work_dir)
     if legacy is not None:
         log.info("state.db holds %d sub-task record(s); the first real run moves them into Muninn.", len(legacy))
     errors = 0
     if meetings_wanted:
-        result = run(meetings, cfg, con, None, data_dir=data_dir, dry_run=True,
+        result = run(meetings, cfg, con, None, data_dir=work_dir, dry_run=True,
                      seen_before=legacy.find if legacy else None)
         skipped = sum(result.skipped.values())
         log.info("\nWould create %d, already synced %d, skipped %d.", result.planned, result.existing, skipped)
@@ -405,10 +419,12 @@ def _record_failure(cfg: Dict[str, Any], data_dir: Path, out: Outcome, exc: Base
     _write_last_run(data_dir, {
         "finished_utc": iso_utc(datetime.now(timezone.utc)), "exit_code": 2, "command": out.command,
         "source": out.source, "created": 0, "recovered": 0, "existing": 0, "skipped": 0, "errors": 1,
-        "warnings": 0, "consecutive_failures": streak, "first_error": str(exc)[:1000],
+        "warnings": 0, "consecutive_failures": streak,
+        "first_error": ("stopped before it finished" if isinstance(exc, KeyboardInterrupt) else str(exc) or type(exc).__name__)[:1000],
     })
+    detail = "stopped by Ctrl+C or a stop request" if isinstance(exc, KeyboardInterrupt) else (str(exc) or type(exc).__name__)
     write_alert(cfg, data_dir, summary=f"The last Odin run ({out.command}) stopped before it finished.",
-                detail=str(exc), consecutive_failures=streak)
+                detail=detail, consecutive_failures=streak)
 
 
 def cmd_daily(args: argparse.Namespace) -> int:
@@ -736,13 +752,15 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_forget(args: argparse.Namespace) -> int:
-    data_dir = _data_dir(args)
-    con = store.open_muninn()
-    try:
-        removed = store.forget(con, args.issue_key)
-    finally:
-        con.close()
-    removed += history.forget_legacy(data_dir, args.issue_key)
+    work_dir = default_data_dir()
+    with store.RunLock(work_dir):          # never while a run might be recording that sub-task
+        con = store.open_muninn()
+        try:
+            removed = store.forget(con, args.issue_key)
+        finally:
+            con.close()
+        removed += store.Journal(work_dir).forget(args.issue_key)
+        removed += history.forget_legacy(work_dir, args.issue_key)
     log.info("Removed %d record(s) for %s. Its meeting is pushed again on the next run; time already logged "
              "for that meeting isn't logged a second time.", removed, args.issue_key)
     return 0
@@ -882,6 +900,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
     except KeyboardInterrupt:
         return 130
+    except Exception as exc:  # noqa: BLE001 - the last resort: a message and the log, never a traceback
+        log.debug("Unexpected failure", exc_info=True)
+        log.error("ERROR: Odin stopped unexpectedly (%s: %s). The details are in odin.log; nothing was "
+                  "posted twice, and the next run picks up where this one stopped.", type(exc).__name__, exc)
+        return 2
 
 
 if __name__ == "__main__":

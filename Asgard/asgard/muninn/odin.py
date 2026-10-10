@@ -91,13 +91,16 @@ def jira_time(ts: str) -> str:
     return from_ts(ts).astimezone().strftime("%Y-%m-%dT%H:%M:%S.000%z")
 
 
-def jql_time(ts: str, overlap_minutes: int = 2) -> str:
-    """A cursor as a JQL date ('2026/10/01 09:18'), a little early.
+# Jira reads a JQL date in the Jira profile's time zone, which needn't be this computer's: a
+# laptop in Berlin with a New York profile would otherwise skip six hours of updates every run.
+# Zones are at most 26 hours apart (UTC-12 to UTC+14), and Windows has no time-zone database
+# to convert with, so the cursor is simply read back that far. Re-reads write nothing twice.
+JQL_OVERLAP_MINUTES = 26 * 60
 
-    JQL compares to the minute in the Jira user's time zone (taken to be this
-    computer's), so the overlap makes sure nothing updated in the cursor's
-    own minute is missed. Re-reading a few issues writes nothing twice.
-    """
+
+def jql_time(ts: str, overlap_minutes: int = JQL_OVERLAP_MINUTES) -> str:
+    """A cursor as a JQL date ('2026/09/30 11:05'), early enough for any Jira profile's time zone,
+    the fall-back hour, and JQL's whole minutes."""
     return (from_ts(ts) - dt.timedelta(minutes=overlap_minutes)).astimezone().strftime("%Y/%m/%d %H:%M")
 
 

@@ -22,9 +22,11 @@ Worklogs
 
 Cursors
     Each stream keeps Muninn's cursor (the newest `updated` it stored). A run asks for
-    `updated >= cursor` (two minutes early, odin.jql_time) in updated order, so a run that stops at
-    its limit (muninn.max_issues_per_run, never inside a burst of updates) carries on where it left
-    off next time. The first run reaches back muninn.history_days (365).
+    `updated >= cursor` (26 hours early, odin.jql_time, because Jira reads the date in the Jira
+    profile's time zone) in updated order, so a run that stops at its limit (muninn.max_issues_per_run,
+    never inside a burst of updates) carries on where it left off next time. The first run reaches
+    back muninn.history_days (365). A worklog sync that stopped at its limit hasn't read your newest
+    issues, so it doesn't count as finished: approved days wait (CollectResult.worklogs_ok).
 """
 from __future__ import annotations
 
@@ -58,7 +60,8 @@ class CollectResult:
     worklogs: int = 0
     worklogs_removed: int = 0
     problems: List[str] = field(default_factory=list)
-    worklogs_ok: bool = False        # the worklog sync finished without problems (posting needs it)
+    worklogs_ok: bool = False        # the worklog sync read everything, without problems (posting needs it)
+    worklogs_left: bool = False      # it stopped at max_issues_per_run; the rest comes next run
 
     def add(self, run: muninn.Run) -> None:
         self.problems.extend(f"{run.stream}: {p}" for p in run.problems)
@@ -90,20 +93,22 @@ def _since(cursor: Optional[str], history_days: int, field_name: str = "updated"
 class _Limit:
     """A per-run limit that never stops inside a burst of updates.
 
-    The next run re-reads from two minutes before the cursor (odin.jql_time), so stopping in the
-    middle of, say, 600 issues bulk-edited in the same minute would re-read the same ones every run
-    and never get past them. Once the limit is reached, reading goes on until updates are more than
-    GAP apart, so each run always ends past a burst. Issues at or before the cursor (the overlap
-    re-read) don't count toward the limit.
+    The next run re-reads from before the cursor (odin.jql_time), so stopping in the middle of,
+    say, 600 issues bulk-edited in the same minute would re-read the same ones every run and never
+    get past them. Once the limit is reached, reading goes on until updates are more than GAP
+    apart, so each run always ends past a burst. Issues at or before the cursor (the overlap
+    re-read) don't count toward the limit. stopped says whether it cut the list short.
     """
     GAP = timedelta(minutes=3)
 
     def __init__(self, limit: int, after: Optional[str] = None):
         self.limit, self.count, self.until, self.after = max(1, int(limit)), 0, None, after
+        self.stopped = False
 
     def stop_before(self, raw: Dict[str, Any]) -> bool:
         updated = mo.parse_time((raw.get("fields") or {}).get("updated"))
         if self.until is not None and updated is not None and muninn.from_ts(updated) > self.until:
+            self.stopped = True
             return True
         if self.after is not None and updated is not None and updated <= self.after:
             return False
@@ -114,9 +119,9 @@ class _Limit:
 
 
 def _issues(pages: Iterable[List[Dict[str, Any]]], limit: int,
-            after: Optional[str] = None) -> Iterable[List[Dict[str, Any]]]:
+            after: Optional[str] = None, cap: Optional[_Limit] = None) -> Iterable[List[Dict[str, Any]]]:
     """The search's pages, cut off by _Limit."""
-    cap = _Limit(limit, after)
+    cap = cap or _Limit(limit, after)
     for page in pages:
         kept = []
         for raw in page:
@@ -250,21 +255,32 @@ def sync_worklogs(con: sqlite3.Connection, client: JiraClient, ctx: mo.JiraConte
     clean = True
     with muninn.Run(con, store.APP, ctx.source_id, "worklogs") as run:
         jql = f"worklogAuthor = currentUser() AND {_since(run.cursor, history_days, 'worklogDate')} ORDER BY updated ASC"
+        cap = _Limit(limit, run.cursor)
         try:
-            for page in _issues(client.search(jql, extra, changelog=True), limit, run.cursor):
+            for page in _issues(client.search(jql, extra, changelog=True), limit, cap=cap):
                 for raw in page:
                     try:
                         _issue_worklogs(run, client, ctx, raw, result)
                     except JiraError as exc:
+                        if exc.status == 404:      # gone, or no longer yours to see, since the search
+                            log.info("Skipped %s: Jira no longer shows it (%s)", raw.get("key", "?"), exc)
+                        else:
+                            run.problem(f"{raw.get('key', '?')}: {exc}")
+                            continue
+                    except (ValueError, KeyError, TypeError, sqlite3.IntegrityError) as exc:
                         run.problem(f"{raw.get('key', '?')}: {exc}")
                         continue
                     run.advance_cursor(mo.parse_time((raw.get("fields") or {}).get("updated")))
         except JiraError as exc:
             run.problem(str(exc))
         clean = not run.problems
+        result.worklogs_left = cap.stopped
+        if cap.stopped:
+            log.info("The worklog sync stopped at muninn.max_issues_per_run=%d; the rest is read next run, "
+                     "and approved days wait until it's done.", limit)
     result.add(run)
     clean = _deleted_worklogs(con, client, ctx, history_days, result, now) and clean
-    result.worklogs_ok = clean
+    result.worklogs_ok = clean and not cap.stopped
 
 
 def _issue_worklogs(run: muninn.Run, client: JiraClient, ctx: mo.JiraContext, raw: Dict[str, Any],

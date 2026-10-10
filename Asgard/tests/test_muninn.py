@@ -431,8 +431,17 @@ class IssueTests(Base):
     def test_jql_time_overlaps_the_cursor(self):
         jql = odin.jql_time("2026-10-01T13:05:30Z")
         self.assertRegex(jql, r"^\d{4}/\d\d/\d\d \d\d:\d\d$")
-        local = muninn.from_ts("2026-10-01T13:03:30Z").astimezone().strftime("%Y/%m/%d %H:%M")
+        local = muninn.from_ts("2026-09-30T11:05:30Z").astimezone().strftime("%Y/%m/%d %H:%M")
         self.assertEqual(jql, local)
+
+    def test_jql_time_reaches_back_past_any_profile_time_zone(self):
+        """Review 2026-10-10 #3: Jira reads the date in the Jira profile's zone, not this computer's.
+        Read in the zone furthest behind (UTC-12), where a wall-clock time is latest, it must still
+        be at or before the cursor, whatever zone this computer is in (at most UTC+14)."""
+        cursor = muninn.from_ts("2026-10-01T13:05:30Z").replace(tzinfo=None)
+        wall = dt.datetime.strptime(odin.jql_time("2026-10-01T13:05:30Z"), "%Y/%m/%d %H:%M")
+        read_in_utc_minus_12 = wall + dt.timedelta(hours=12)
+        self.assertLessEqual(read_in_utc_minus_12, cursor)
 
     def test_mine_sticks_after_reassignment(self):
         sid, ctx = self.jira()

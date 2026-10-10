@@ -87,7 +87,7 @@ The config file is `%LOCALAPPDATA%\Asgard\odin\config.json`. It's JSON, and any 
 | `log_work` | `false` | Adds a worklog equal to the meeting's length, dated at the meeting's start. |
 | `transition_to` | `null` | e.g. `"Done"`. Matches either the transition name or the target status. |
 | `warn_token_expiry_days` | `14` | Warn this many days before the personal access token expires, so the first sign is not a run of 401s. Reads `/rest/pat/latest/tokens`; older Data Center versions do not expose it, in which case the check quietly does nothing. `0` disables. |
-| `dedupe_label` | `true` | Adds a deterministic `m2j-<hash>` label to every sub-task. It is what lets a create that failed ambiguously be resolved with an exact JQL lookup instead of a guess. Turning it off means an ambiguous create is reported for you to sort out by hand. |
+| `dedupe_label` | `true` | Adds a deterministic `m2j-<hash>` label to every sub-task. Before each create Odin looks for it on issues you created, so a sub-task Jira made but Odin couldn't record (an answer lost, a run stopped halfway) is found instead of made again. Turn it off only if your project refuses labels: then an ambiguous create is reported for you to sort out by hand, and a run stopped mid-create may make that sub-task again. |
 | `extra_fields` | `{}` | Merged into the create payload for required custom fields, e.g. `{"customfield_10010": {"value": "Overhead"}}`. |
 | `max_creates_per_run` | `40` | Safety cap per run. Must be at least 1: there is no setting for "unlimited", because the cap is what stops a misconfigured first run from filling Jira. For a one-off backfill pass a large `--max`. |
 | `ca_bundle` | `null` | PEM file of extra CAs. The Windows store is always used as well. |
@@ -256,7 +256,7 @@ A summary to share with your ISSO:
 ## Known limitations and roadmap
 
 - **Edited past meetings**: only ended meetings are pushed, so this only happens when a past meeting is edited afterwards. On Path A, a changed time creates a second sub-task; on Path B, even a changed subject does. See HANDOFF.md P2-A.
-- **Ambiguous create failures**: if creating an issue times out or gets a 502/504, Odin searches for the sub-task's `m2j-<hash>` label: exactly one match is recorded, anything else is reported for you to check in Jira.
+- **Ambiguous create failures**: before each create, and right after one that times out or gets a 5xx, Odin searches for the sub-task's `m2j-<hash>` label on issues you created: exactly one match is recorded, several (or a search that fails) are reported for you to check in Jira, and nothing is created.
 - **Teams detection** is a heuristic based on the Location field, because reading the body would trigger Outlook's guard. It's only used by `teams_only` and `is_teams` rules.
 - **CSV path**: no response status; English column headers expected; the `Show time as` numbering should be verified against your own export.
 - **Worklog retries**: a meeting worklog Jira refused is retried by the next runs for 14 days, at most three times; one whose answer was lost is checked against Jira by its marker first.

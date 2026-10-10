@@ -24,16 +24,22 @@ Also here
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 
+_COMPACT_OFFSET = re.compile(r"([+-]\d\d)(\d\d)$")
+
+
 def parse_utc(value: str) -> datetime:
-    """Parse an ISO-8601 timestamp ('...Z' accepted on Python < 3.11) into aware UTC."""
+    """Parse an ISO-8601 timestamp into aware UTC. Before Python 3.11 fromisoformat reads neither
+    '...Z' nor Jira's '+0000' offsets, so both are rewritten as '+00:00' first."""
     text = value.strip()
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
+    text = _COMPACT_OFFSET.sub(r"\1:\2", text)
     dt = datetime.fromisoformat(text)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)

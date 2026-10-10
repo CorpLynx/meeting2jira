@@ -16,6 +16,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fake_jira import FIXTURES, FakeJira, LandsThenFails, OdinTestCase  # noqa: E402
 
+from asgard import muninn  # noqa: E402
 from asgard.muninn import baldur as approvals  # noqa: E402
 from asgard.muninn import odin as mo  # noqa: E402
 from odin import collect, posting, store  # noqa: E402
@@ -54,10 +55,32 @@ class PostingCase(OdinTestCase):
         collect.sync_worklogs(self.con, self.jira, ctx, 365, 500, got)
         return got
 
-    def post(self, cap=20):
+    def post(self, cap=20, prepared=True):
         settled = posting.settle_stuck(self.con, self.jira)
-        self.assertTrue(self.prepare().worklogs_ok)
-        return settled, posting.post_approved(self.con, self.jira, cap)
+        if prepared:
+            self.assertTrue(self.prepare().worklogs_ok)
+        ctx = collect.context(self.con, self.jira, self.sid)
+        with muninn.Run(self.con, store.APP, self.sid, "post-check") as run:
+            return settled, posting.post_approved(self.con, self.jira, cap, run=run, ctx=ctx)
+
+    def run_cli(self, *argv, jira=None, settings=None):
+        cfg = {"jira": {"base_url": "https://jira.example.gov", "default_parent": "PROJ-123", "assign_to_me": True,
+                        "log_work": True},
+               "filters": {"only_ended": False}, "notify": {"desktop_alert": False}}
+        if settings:
+            cfg["muninn"] = settings
+        path = self.data / "config.json"
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        buffer = io.StringIO()
+        with mock.patch("odin.cli.load_token", return_value=("t", "env")), \
+                mock.patch("odin.cli.JiraClient.from_config", return_value=jira or self.jira), \
+                contextlib.redirect_stdout(buffer):
+            code = main([argv[0], "--config", str(path), *argv[1:]])
+        self.output = buffer.getvalue()
+        return code
+
+    def last_run(self):
+        return json.loads((self.data / "last_run.json").read_text(encoding="utf-8"))
 
 
 class ApprovedDayTests(PostingCase):
@@ -123,6 +146,59 @@ class ApprovedDayTests(PostingCase):
         _, rest = self.post(cap=2)
         self.assertEqual(len(rest.posted), 1)
 
+    def test_a_worklog_sync_cut_short_by_its_limit_doesnt_count_as_finished(self):
+        """Review 2026-10-10 #1: the sync reads issues oldest first, so stopping at the limit leaves
+        out the newest, which hold this week's time logged by hand."""
+        for n in range(3):
+            self.jira.add_issue(f"OLD-{n}", "older work", assignee="jdoe")
+            self.jira.add_jira_worklog(f"OLD-{n}", 600, "2026-09-01T15:00:00.000+0000")
+        self.jira.add_jira_worklog("XYZ-5", 7200, "2026-10-01T16:00:00.000+0000", "logged by hand")
+        self.approve(120)
+        ctx = collect.context(self.con, self.jira, self.sid)
+        got = collect.CollectResult()
+        collect.sync_worklogs(self.con, self.jira, ctx, 365, 1, got)
+        self.assertEqual((got.worklogs_ok, got.worklogs_left), (False, True))
+        code = self.run_cli("post", jira=self.jira, settings={"max_issues_per_run": 1})
+        self.assertEqual(self.jira.posted, [], "Jira already holds the 2h")
+        self.assertEqual(code, 0, "catching up is a warning, not a failure")
+
+    def test_time_logged_by_hand_after_the_sync_isnt_posted_again(self):
+        """Review #1: each issue's worklogs are read again just before its time is posted."""
+        self.approve(120)
+        self.prepare()
+        self.jira.add_jira_worklog("XYZ-5", 7200, "2026-10-01T16:00:00.000+0000", "logged by hand")
+        _, result = self.post(prepared=False)
+        self.assertEqual((result.posted, self.jira.posted), ([], []))
+        self.assertTrue(any("no longer due" in s for s in result.skipped))
+
+    def test_an_issue_whose_worklogs_cant_be_read_isnt_posted(self):
+        self.approve(120)
+        self.prepare()
+        self.jira.fail("issue_worklogs", JiraError("GET worklog -> HTTP 503: busy", 503))
+        _, result = self.post(prepared=False)
+        self.assertEqual(self.jira.posted, [])
+        self.assertTrue(any("couldn't read its worklogs" in s for s in result.skipped))
+        self.assertEqual(len(mo.posts_due(self.con)), 1, "still due next run")
+
+    def test_posting_without_reading_worklogs_first_is_refused(self):
+        with self.assertRaises(ValueError):
+            posting.post_approved(self.con, self.jira, 20)
+
+    def test_a_404_while_settling_an_interrupted_post_leaves_it_in_doubt(self):
+        """Review #5: Jira also answers 404 when you've lost access for now; offering the time again
+        could post it twice once access returns."""
+        self.jira = LandsThenFails()
+        self.jira.add_issue("XYZ-5", "Retry with backoff", assignee="jdoe")
+        self.jira.lose_answers = 1
+        self.approve()
+        self.post()
+        self.peek().execute("UPDATE worklogs SET created_at = '2026-10-01T00:00:00Z'")
+        self.jira.fail("issue_worklogs", JiraError("GET worklog -> HTTP 404: not found", 404))
+        settled = posting.settle_stuck(self.con, self.jira)
+        self.assertEqual((settled.settled, settled.unsettled), (0, 1))
+        self.assertEqual(self.peek().execute("SELECT state FROM worklogs").fetchone()[0], "sending")
+        self.assertEqual(mo.posts_due(self.con), [])
+
     def test_a_dry_run_lists_and_posts_nothing(self):
         self.approve()
         self.prepare()
@@ -132,25 +208,6 @@ class ApprovedDayTests(PostingCase):
 
 
 class CommandTests(PostingCase):
-    def run_cli(self, *argv, jira=None, settings=None):
-        cfg = {"jira": {"base_url": "https://jira.example.gov", "default_parent": "PROJ-123", "assign_to_me": True,
-                        "log_work": True},
-               "filters": {"only_ended": False}, "notify": {"desktop_alert": False}}
-        if settings:
-            cfg["muninn"] = settings
-        path = self.data / "config.json"
-        path.write_text(json.dumps(cfg), encoding="utf-8")
-        buffer = io.StringIO()
-        with mock.patch("odin.cli.load_token", return_value=("t", "env")), \
-                mock.patch("odin.cli.JiraClient.from_config", return_value=jira or self.jira), \
-                contextlib.redirect_stdout(buffer):
-            code = main([argv[0], "--config", str(path), *argv[1:]])
-        self.output = buffer.getvalue()
-        return code
-
-    def last_run(self):
-        return json.loads((self.data / "last_run.json").read_text(encoding="utf-8"))
-
     def test_post_needs_a_finished_worklog_sync(self):
         self.approve()
         self.jira.fail("search", JiraError("GET search -> HTTP 503: try later", 503), times=5)
@@ -198,6 +255,42 @@ class CommandTests(PostingCase):
         settings = {"post_approved": False}
         self.assertEqual(self.run_cli("daily", "--csv", str(FIXTURES / "sample_outlook.csv"), settings=settings), 0)
         self.assertEqual([p for p in self.jira.posted if "[asgard:b-" in p[3]], [])
+
+    def test_any_failure_leaves_its_breadcrumb_and_no_traceback(self):
+        """Review 2026-10-10 #4: only five kinds of error used to reach last_run.json and the alert."""
+        self.run_cli("post")                                    # an "OK" to overwrite
+        self.assertEqual(self.last_run()["exit_code"], 0)
+        err = io.StringIO()
+        with mock.patch("odin.cli.collect.sync_worklogs", side_effect=KeyError("worklogs")), \
+                contextlib.redirect_stderr(err):
+            code = self.run_cli("post")
+        self.assertEqual(code, 2)
+        self.assertEqual((self.last_run()["exit_code"], self.last_run()["consecutive_failures"]), (2, 1))
+        self.assertIn("worklogs", self.last_run()["first_error"])
+        self.assertIn("stopped unexpectedly", self.output)
+        self.assertNotIn("Traceback", self.output + err.getvalue())
+
+    def test_a_meeting_worklog_jira_refuses_fails_the_run(self):
+        """Review #8: it used to be a warning, while a refused approved day failed the run."""
+        self.jira.add_issue("PROJ-123", "Meetings", assignee="pat")
+        self.jira.fail("add_worklog", JiraError("POST worklog -> HTTP 400: closed issue", 400))
+        code = self.run_cli("push", "--csv", str(FIXTURES / "sample_outlook.csv"))
+        self.assertEqual(code, 1)
+        self.assertIn("meeting worklog refused by Jira", self.last_run()["first_error"])
+
+    def test_the_lock_and_journal_go_with_muninn_whatever_config_is_used(self):
+        """Review #7: a run with --config elsewhere used to get its own lock and journal."""
+        elsewhere = self.home / "elsewhere"
+        elsewhere.mkdir()
+        cfg = {"jira": {"base_url": "https://jira.example.gov", "default_parent": "PROJ-123"}}
+        (elsewhere / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+        with store.RunLock(self.data):                           # the scheduled run, with the usual config
+            with mock.patch("odin.cli.load_token", return_value=("t", "env")), \
+                    mock.patch("odin.cli.JiraClient.from_config", return_value=self.jira), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                code = main(["post", "--config", str(elsewhere / "config.json")])
+        self.assertEqual(code, 2)
+        self.assertIn("another odin run", out.getvalue().lower())
 
     def test_status_shows_what_waits(self):
         self.approve()

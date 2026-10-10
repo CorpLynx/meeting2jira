@@ -16,8 +16,11 @@ The protocol, which is a correctness matter
 
 Baldur's approved days
     Odin posts only what you approved in Baldur, and only what Jira is missing: v_worklogs_to_post
-    subtracts what Jira already holds, which is why the worklog sync must run first in the same
-    run. posts_due() is capped per run (muninn.max_posts_per_run).
+    subtracts what Jira already holds, which is why the worklog sync must finish first in the same
+    run. Even then, each issue's worklogs are read from Jira again just before its time is posted,
+    because the sync reads issues oldest first and may have stopped at its limit, and begin_post()
+    re-checks the view in its own transaction. An issue whose worklogs can't be read isn't posted.
+    posts_due() is capped per run (muninn.max_posts_per_run).
 """
 from __future__ import annotations
 
@@ -100,11 +103,12 @@ def settle_stuck(con: sqlite3.Connection, client: JiraClient, timeout: float = 3
         try:
             found = client.find_worklog(stuck["key"], stuck["marker"])
         except JiraError as exc:
-            if exc.status != 404:          # 404: the issue is gone, so the worklog can't be there
-                result.unsettled += 1
-                log.warning("  could not check %s for an interrupted post: %s", stuck["key"], exc)
-                continue
-            found = None
+            # A 404 may be a deleted issue, or browse permission lost for now: offering the time
+            # again could post it twice once access returns. It stays 'sending' and blocks nothing
+            # else; a deleted issue has nothing due anyway once the sync marks it deleted.
+            result.unsettled += 1
+            log.warning("  could not check %s for an interrupted post: %s", stuck["key"], exc)
+            continue
         mo.resolve_stuck(con, stuck["worklog_id"], str(found["id"]) if found else None, searched=True)
         result.settled += 1
         log.info("  SETTLED  %-14s %s", stuck["key"],
@@ -189,10 +193,18 @@ def retry_meetings(con: sqlite3.Connection, client: JiraClient, jira_sid: int, c
 # --------------------------------------------------------------------------
 
 def post_approved(con: sqlite3.Connection, client: Optional[JiraClient], cap: int,
-                  dry_run: bool = False) -> PostResult:
-    """Post the time you approved in Baldur that Jira is missing, oldest day first."""
+                  dry_run: bool = False, run: Optional[muninn.Run] = None,
+                  ctx: Optional[mo.JiraContext] = None) -> PostResult:
+    """Post the time you approved in Baldur that Jira is missing, oldest day first.
+
+    run and ctx (needed unless dry_run) store each issue's worklogs, read from Jira just before its
+    time is posted, so what was logged by hand since the sync counts.
+    """
+    if not dry_run and client is not None and (run is None or ctx is None):
+        raise ValueError("Posting reads each issue's worklogs first: pass a sync run and Muninn's Jira context")
     result = PostResult()
     due = mo.posts_due(con)
+    checked: dict = {}                       # key -> None if read, else why not
     for row in due[:max(0, cap)]:
         line = f"{row['key']} {row['local_date']} {_hm(int(row['minutes_to_post']) * 60)}"
         if dry_run or client is None:
@@ -200,9 +212,15 @@ def post_approved(con: sqlite3.Connection, client: Optional[JiraClient], cap: in
             log.info("  WOULD    %-14s log %s for %s (approved in Baldur)", row["key"],
                      _hm(int(row["minutes_to_post"]) * 60), row["local_date"])
             continue
+        if row["key"] not in checked:
+            checked[row["key"]] = _read_worklogs(client, run, ctx, row["key"])
+        if checked[row["key"]]:
+            result.skipped.append(f"{line}: {checked[row['key']]}; tried again next run")
+            log.warning("  WAIT     %-14s %s", row["key"], checked[row["key"]])
+            continue
         post = mo.begin_post(con, row["proposal_id"])
         if post is None:
-            result.skipped.append(f"{line}: no longer due")
+            result.skipped.append(f"{line}: no longer due (Jira already holds it)")
             continue
         status, detail = send(con, client, post)
         _tally(result, post, status, detail)
@@ -210,3 +228,18 @@ def post_approved(con: sqlite3.Connection, client: Optional[JiraClient], cap: in
         log.warning("Posted %d approved day(s); %d more wait for the next run (muninn.max_posts_per_run).",
                     cap, len(due) - cap)
     return result
+
+
+def _read_worklogs(client: JiraClient, run: muninn.Run, ctx: mo.JiraContext, key: str) -> Optional[str]:
+    """Store one issue's worklogs as Jira has them now. None when done, else why it couldn't be."""
+    try:
+        worklogs = client.issue_worklogs(key)          # before any write: no lock across the call
+    except JiraError as exc:
+        return f"couldn't read its worklogs from Jira ({exc})"
+    try:
+        with run.batch():
+            for raw in worklogs:
+                mo.upsert_worklog(run, raw, ctx)
+    except (ValueError, KeyError, TypeError, sqlite3.DatabaseError, muninn.MuninnError) as exc:
+        return f"couldn't store its worklogs ({exc})"
+    return None

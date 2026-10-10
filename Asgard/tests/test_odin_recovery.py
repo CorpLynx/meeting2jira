@@ -1,8 +1,10 @@
-"""Recovery from an ambiguous issue-create failure (HANDOFF backlog P1-A).
+"""A sub-task Jira made is recorded once, however the create went (HANDOFF backlog P1-A; review
+2026-10-10 #2).
 
-A POST that times out or returns 502/503/504 may have been applied by Jira anyway. Retrying
-blindly duplicates the sub-task; giving up duplicates it on the *next* run. So the create is
-followed by an exact lookup for a deterministic marker label.
+A POST that times out or returns a 5xx may have been applied by Jira anyway, and a run can stop
+between the create and the record. Retrying blindly duplicates the sub-task; giving up duplicates it
+on the *next* run. So each create is preceded, and an ambiguous one followed, by an exact lookup for
+a deterministic marker label on issues you created.
 """
 import sys
 import unittest
@@ -36,7 +38,8 @@ def config(**jira_overrides):
 
 
 class AmbiguousCreateJira(FakeJira):
-    """Fails create with an ambiguous error (after it landed, if landed is set), then answers the search."""
+    """Fails create with an ambiguous error (after it landed, if landed is set). The search finds
+    nothing before the create and search_result after it, as when the create landed."""
 
     def __init__(self, search_result, search_raises=False, landed=None):
         super().__init__()
@@ -52,9 +55,31 @@ class AmbiguousCreateJira(FakeJira):
 
     def search_issue_keys(self, jql, max_results=5):
         self.searches.append(jql)
-        if self.search_raises:
+        if self.search_raises and self.create_calls:
             raise JiraError("GET /rest/api/2/search -> HTTP 403: forbidden", 403)
-        return list(self.search_result)
+        return list(self.search_result) if self.create_calls else []
+
+
+class LandsThenStops(FakeJira):
+    """The create lands in Jira, then what follows goes wrong: `then` is raised instead of the
+    answer, and searches fail while `outage` is set (from the create on, with outage_after)."""
+
+    def __init__(self, then, outage_after=False):
+        super().__init__()
+        self.then, self.outage, self.outage_after = then, False, outage_after
+
+    def create_issue(self, fields):
+        super().create_issue(fields)
+        self.outage = self.outage or self.outage_after
+        if self.then is not None:
+            exc, self.then = self.then, None
+            raise exc
+        return self.issues[list(self.issues)[-1]]["key"]
+
+    def search_issue_keys(self, jql, max_results=5):
+        if self.outage:
+            raise JiraError("GET /rest/api/2/search -> HTTP 504: gateway timeout", 504)
+        return super().search_issue_keys(jql, max_results)
 
 
 class RecoveryTests(OdinTestCase):
@@ -96,7 +121,7 @@ class RecoveryTests(OdinTestCase):
 
         self.assertEqual(result.recovered, [])
         self.assertEqual(len(result.errors), 1)
-        self.assertIn("ambiguous", result.errors[0])
+        self.assertIn("the next run looks for its label", result.errors[0])
         self.assertEqual(self.recorded(), [])        # nothing recorded, so it retries later
 
     def test_ambiguous_search_result_is_reported_and_left_alone(self):
@@ -125,7 +150,7 @@ class RecoveryTests(OdinTestCase):
 
         jira = RejectingJira(search_result=["PROJ-777"])
         result = self.push(self.meetings, config(), jira, now=NOW)
-        self.assertEqual(jira.searches, [])
+        self.assertEqual(len(jira.searches), 1, "only the look before creating")
         self.assertEqual(result.recovered, [])
         self.assertEqual(len(result.errors), 1)
         self.assertNotIn("ambiguous", result.errors[0])
@@ -144,6 +169,89 @@ class RecoveryTests(OdinTestCase):
         self.assertEqual(jira.posted[0][0], "PROJ-777")
         self.assertEqual(jira.posted[0][1], 3600)   # the meeting's real duration
         self.assertEqual(store.recent(self.peek())[0]["worklog_state"], "posted")
+
+
+class LookBeforeCreatingTests(OdinTestCase):
+    """Review 2026-10-10 #2: every way a sub-task can land in Jira without a record."""
+
+    def setUp(self):
+        super().setUp()
+        self.meetings = one_meeting()
+
+    def twice(self, jira, **cfg):
+        first = self.push(self.meetings, config(**cfg), jira, now=NOW)
+        jira.then, jira.outage, jira.outage_after = None, False, False
+        second = self.push(self.meetings, config(**cfg), jira, now=NOW)
+        return first, second
+
+    def test_a_failed_search_after_an_ambiguous_create_doesnt_duplicate_it_next_run(self):
+        jira = LandsThenStops(JiraError("POST /rest/api/2/issue -> HTTP 504: gateway timeout", 504, ambiguous=True),
+                              outage_after=True)
+        first, second = self.twice(jira)
+        self.assertEqual(len(first.errors), 1)
+        self.assertEqual(len(jira.created), 1, "made once")
+        self.assertEqual(second.recovered, ["PROJ-901"])
+        self.assertEqual([r["issue_key"] for r in store.recent(self.peek())], ["PROJ-901"])
+
+    def test_a_create_whose_answer_was_cut_off_isnt_made_again(self):
+        """An http.client error used to escape the run with nothing recorded."""
+        jira = LandsThenStops(JiraError("POST /rest/api/2/issue failed: the answer was cut off (IncompleteRead)",
+                                        ambiguous=True), outage_after=True)     # the search right after fails too
+        first, second = self.twice(jira)
+        self.assertEqual(first.created + first.recovered, [])
+        self.assertEqual(len(jira.created), 1)
+        self.assertEqual(second.recovered, ["PROJ-901"])
+
+    def test_a_run_stopped_between_the_create_and_the_record_isnt_made_again(self):
+        jira = LandsThenStops(KeyboardInterrupt())
+        with self.assertRaises(KeyboardInterrupt):
+            self.push(self.meetings, config(), jira, now=NOW)
+        self.assertEqual([r["issue_key"] for r in store.recent(self.peek())], [])
+        second = self.push(self.meetings, config(), jira, now=NOW)
+        self.assertEqual(len(jira.created), 1)
+        self.assertEqual(second.recovered, ["PROJ-901"])
+
+    def test_a_record_neither_muninn_nor_the_journal_could_take_is_found_next_run(self):
+        """A full disk holds Muninn and the journal alike."""
+        from unittest import mock
+        jira = FakeJira()
+        with mock.patch.object(store, "_insert", side_effect=__import__("sqlite3").OperationalError("disk full")), \
+                mock.patch.object(store.Journal, "append", side_effect=OSError(28, "No space left on device")):
+            first = self.push(self.meetings, config(), jira, now=NOW)
+        self.assertTrue(any("next run finds it in Jira by its label" in e for e in first.errors), first.errors)
+        second = self.push(self.meetings, config(), jira, now=NOW)
+        self.assertEqual(len(jira.created), 1)
+        self.assertEqual(second.recovered, ["PROJ-901"])
+
+    def test_a_colleagues_sub_task_for_the_same_meeting_isnt_adopted(self):
+        """Their Odin labels the meeting the same way; only what you created is yours."""
+        jira = FakeJira()
+        jira.add_issue("PROJ-500", "Meeting: Sprint Planning", parent="PROJ-9", subtask=True,
+                       labels=[dedupe_label(self.meetings[0])], creator="colleague")
+        result = self.push(self.meetings, config(), jira, now=NOW)
+        self.assertEqual((result.created, result.recovered), (["PROJ-901"], []))
+
+    def test_found_in_another_project_after_a_rule_moved_the_parent(self):
+        jira = LandsThenStops(KeyboardInterrupt())
+        with self.assertRaises(KeyboardInterrupt):
+            self.push(self.meetings, config(), jira, now=NOW)
+        second = self.push(self.meetings, config(default_parent="OTHER-3"), jira, now=NOW)
+        self.assertEqual((second.created, second.recovered), ([], ["PROJ-901"]))
+
+    def test_when_jira_cant_be_searched_nothing_is_created(self):
+        jira = LandsThenStops(None)
+        jira.outage = True
+        result = self.push(self.meetings, config(), jira, now=NOW)
+        self.assertEqual(jira.created, [])
+        self.assertIn("nothing was created", result.errors[0])
+
+    def test_time_logged_by_hand_on_a_found_sub_task_isnt_logged_again(self):
+        jira = LandsThenStops(KeyboardInterrupt())
+        with self.assertRaises(KeyboardInterrupt):
+            self.push(self.meetings, config(log_work=True), jira, now=NOW)
+        jira.add_jira_worklog("PROJ-901", 3600, self.meetings[0].start_utc, "logged by hand")
+        self.push(self.meetings, config(log_work=True), jira, now=NOW)
+        self.assertEqual(jira.posted, [], "the found sub-task's worklogs were read first")
 
 
 class AmbiguityClassificationTests(unittest.TestCase):

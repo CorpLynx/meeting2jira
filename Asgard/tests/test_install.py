@@ -131,5 +131,21 @@ class ValhallaTaskTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[0].args[0][:4], ["schtasks", "/Delete", "/F", "/TN"])
 
 
+class KillTreeTests(unittest.TestCase):
+    def test_stop_ends_the_whole_tree(self):
+        """Review 2026-10-10 #10: Stop on Odin's daily run killed PowerShell and left Python running."""
+        from asgard import winutil
+        with mock.patch.object(winutil, "IS_WINDOWS", True), mock.patch.object(winutil.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=0)
+            self.assertTrue(winutil.kill_tree(4242))
+        self.assertEqual(run.call_args.args[0], ["taskkill", "/PID", "4242", "/T", "/F"])
+        self.assertFalse(winutil.kill_tree(0))
+
+    def test_the_window_stops_the_tree_before_the_process(self):
+        shell = (ROOT / "asgard" / "ui" / "shell.py").read_text(encoding="utf-8")
+        stop = shell[shell.index("    def stop(self)"):shell.index("    def _read(self)")]
+        self.assertLess(stop.index("winutil.kill_tree("), stop.index("self._proc.kill()"))
+
+
 if __name__ == "__main__":
     unittest.main()

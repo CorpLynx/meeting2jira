@@ -76,7 +76,7 @@ flowchart TD
     SYNCPY --> RULES
     SYNCPY --> STORE
     SYNCPY --> POSTING
-    SYNCPY -->|"create, transition,<br/>search on ambiguous failure"| JIRA
+    SYNCPY -->|"label search, create,<br/>transition"| JIRA
     COLLECT --> STORE
     COLLECT -->|"search, issue, worklogs"| JIRA
     POSTING --> STORE
@@ -136,10 +136,13 @@ flowchart TD
     CAP -->|no| CAPPED["left for the next run"]
     CAP -->|yes| DRY{"dry run?"}
     DRY -->|yes| WOULD["WOULD<br/><i>creates nothing</i>"]
-    DRY -->|no| CREATE["POST the sub-task<br/><i>with the m2j-hash label</i>"]
+    DRY -->|no| LOOK{"your issue with the<br/>m2j-hash label in Jira?"}
+    LOOK -->|"exactly one<br/><i>an earlier run made it</i>"| RECORD
+    LOOK -->|"several, or the<br/>search failed"| ERROR
+    LOOK -->|none| CREATE["POST the sub-task<br/><i>with the m2j-hash label</i>"]
 
     CREATE -->|created| RECORD["record in meeting_subtasks<br/><b>immediately</b><br/><i>or the journal, and stop creating</i>"]
-    CREATE -->|"ambiguous failure:<br/>timeout or 502/503/504"| RECOVER{"JQL search<br/>for the label"}
+    CREATE -->|"ambiguous failure:<br/>timeout, 5xx, cut off"| RECOVER{"JQL search<br/>for the label"}
     CREATE -->|"rejected outright"| ERROR["ERROR<br/><i>reported, retried next run</i>"]
 
     RECOVER -->|"exactly one match"| RECORD
@@ -167,7 +170,7 @@ flowchart TD
 The things that keep repeated runs safe:
 
 1. **The record is written the instant Jira accepts the create**, before the worklog and the transition, so a failure in either can never produce a duplicate sub-task. If Muninn can't take it, it goes to `unrecorded.jsonl` and the run stops creating.
-2. **An ambiguous create is never blindly retried.** It may already have succeeded, so the deterministic `m2j-<hash>` label is looked up first. Anything less than exactly one match is reported for a person.
+2. **Jira is asked before every create.** A sub-task an earlier run made but couldn't record (an answer lost or cut off, a run stopped halfway, a full disk) carries the meeting's deterministic `m2j-<hash>` label, so the next run finds it instead of making it again; an ambiguous create is looked up at once. Several matches, or a search that fails, are reported for a person and nothing is created.
 3. **Every worklog goes through a `sending` row with a marker**, committed before the call, so time is never logged twice; a lost answer is settled by searching for the marker.
 
 Because of those, the scan window is not a correctness mechanism: widening `-DaysBack` is always safe.

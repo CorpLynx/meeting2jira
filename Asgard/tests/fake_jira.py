@@ -68,14 +68,16 @@ class FakeJira:
 
     def add_issue(self, key: str, summary: str = "An issue", status: str = "To Do", category: str = "new",
                   issuetype: str = "Task", parent: Optional[str] = None, assignee: Optional[str] = None,
-                  labels: Optional[List[str]] = None, subtask: bool = False) -> Dict[str, Any]:
+                  labels: Optional[List[str]] = None, subtask: bool = False,
+                  creator: Optional[str] = None) -> Dict[str, Any]:
         self._next_issue += 1
         now = self.tick()
         fields = {
             "summary": summary, "status": {"name": status, "statusCategory": {"key": category}},
             "issuetype": {"name": issuetype, "subtask": subtask}, "project": {"key": key.rsplit("-", 1)[0]},
             "parent": {"key": parent} if parent else None, "assignee": {"name": assignee} if assignee else None,
-            "reporter": {"name": self.user}, "labels": list(labels or []), "components": [], "created": now,
+            "reporter": {"name": self.user}, "creator": {"name": creator or self.user}, "labels": list(labels or []),
+            "components": [], "created": now,
             "updated": now, "resolution": None, "resolutiondate": None, "priority": {"name": "Medium"},
             "duedate": None,
         }
@@ -175,6 +177,8 @@ class FakeJira:
                 out = [i for i in out if i["fields"]["project"]["key"] == m.group(1)]
             elif m := re.match(r'^labels = "([^"]+)"$', clause):
                 out = [i for i in out if m.group(1) in i["fields"]["labels"]]
+            elif clause == "creator = currentUser()":
+                out = [i for i in out if (i["fields"].get("creator") or {}).get("name") == self.user]
             elif m := re.match(r"^updated >= '(\d{4}/\d\d/\d\d \d\d:\d\d)'$", clause):
                 since = dt.datetime.strptime(m.group(1), "%Y/%m/%d %H:%M").astimezone(dt.timezone.utc)
                 out = [i for i in out if muninn.from_ts(muninn.odin.parse_time(i["fields"]["updated"])) >= since]

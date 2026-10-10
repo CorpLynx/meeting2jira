@@ -27,9 +27,9 @@ from __future__ import annotations
 
 import json
 import os
+import logging
 import re
 import sqlite3
-import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -40,6 +40,8 @@ from asgard.muninn import odin as mo
 
 from .models import Meeting, iso_utc, parse_utc
 
+log = logging.getLogger(__name__)
+
 APP = "odin"
 SCHEMA = (5, 5)            # 5: meeting_subtasks, which replaced state.db
 JIRA_SOURCE = "jira-dc"
@@ -49,7 +51,6 @@ RETRY_DAYS = 14            # a meeting worklog that didn't land is retried for t
 MAX_WORKLOG_ATTEMPTS = 3   # ...and at most this many refusals
 JOURNAL = "unrecorded.jsonl"
 LOCK = "odin.lock"
-LOCK_STALE_SECONDS = 2 * 3600
 
 _SHOW_AS = {"free": "free", "tentative": "tentative", "busy": "busy", "oof": "oof", "elsewhere": "free"}
 _RESPONSE = {"organizer": "organizer", "accepted": "accepted", "tentative": "tentative", "declined": "declined"}
@@ -226,19 +227,27 @@ def _insert(con: sqlite3.Connection, rec: SubtaskRecord) -> bool:
     return True
 
 
-def record_subtask(con: sqlite3.Connection, rec: SubtaskRecord, data_dir: Path) -> bool:
-    """Record a sub-task Jira just created. True if Muninn has it; False if it went to the journal.
+def record_subtask(con: sqlite3.Connection, rec: SubtaskRecord, data_dir: Path) -> Optional[str]:
+    """Record a sub-task Jira just created. None when Muninn has it; otherwise where it went instead.
 
-    Never raises for a database problem: the sub-task exists in Jira, so losing this record would
-    re-create it next run. The journal is written instead and the caller stops creating.
+    Never raises: the sub-task exists in Jira, so losing this record would re-create it next run.
+    The journal is written instead and the caller stops creating. If even the journal can't be
+    written (a full disk holds both), the next run still finds the sub-task by its label before
+    creating anything (sync.find_created_issue).
     """
     try:
         with muninn.transaction(con):
             _insert(con, rec)
-        return True
+        return None
     except (sqlite3.DatabaseError, muninn.MuninnError) as exc:
-        Journal(data_dir).append(rec, str(exc))
-        return False
+        journal = Journal(data_dir)
+        try:
+            journal.append(rec, str(exc))
+        except OSError as lost:
+            log.error("%s: neither Muninn (%s) nor %s could take its record (%s)", rec.issue_key, exc, journal.path, lost)
+            return (f"neither Muninn nor {journal.path} could take its record ({lost}); the next run finds it "
+                    "in Jira by its label before creating anything")
+        return f"Muninn couldn't record it ({exc}), so it was kept in {journal.path}; the next run records it first"
 
 
 def link_event(con: sqlite3.Connection, record_id: int, event_id: int, issue_key: str) -> bool:
@@ -323,8 +332,10 @@ class Journal:
 
     def __init__(self, data_dir: Path):
         self.path = Path(data_dir) / JOURNAL
+        self._held: Optional[List[SubtaskRecord]] = None     # records(), read once for holds()
 
     def append(self, rec: SubtaskRecord, why: str) -> None:
+        self._held = None
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(dict(asdict(rec), why=why[:300])) + "\n")
@@ -353,11 +364,32 @@ class Journal:
         with muninn.transaction(con):
             for rec in records:
                 added += 1 if _insert(con, rec) else 0
-        self.path.unlink()
+        self._held = None
+        try:
+            self.path.unlink()
+        except OSError as exc:      # Muninn has them all; replaying again adds nothing
+            log.warning("Recorded the journal's sub-tasks, but %s couldn't be removed: %s", self.path, exc)
         return added
 
+    def forget(self, issue_key: str) -> int:
+        """Drop the records for one sub-task. Returns how many there were."""
+        records = self.records()
+        keep = [r for r in records if muninn.normalize_key(r.issue_key) != muninn.normalize_key(issue_key)]
+        if len(keep) == len(records):
+            return 0
+        self._held = None
+        if keep:
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text("".join(json.dumps(dict(asdict(r), why="kept")) + "\n" for r in keep), encoding="utf-8")
+            os.replace(tmp, self.path)
+        else:
+            self.path.unlink()
+        return len(records) - len(keep)
+
     def holds(self, m: Meeting) -> Optional[SubtaskRecord]:
-        return next((r for r in self.records() if r.meeting_key == m.key or r.content_hash == m.content_hash), None)
+        if self._held is None:
+            self._held = self.records()
+        return next((r for r in self._held if r.meeting_key == m.key or r.content_hash == m.content_hash), None)
 
 
 # --------------------------------------------------------------------------
@@ -365,81 +397,70 @@ class Journal:
 # --------------------------------------------------------------------------
 
 class RunLock:
-    """odin.lock in Odin's folder, held while a run may write to Jira.
+    """odin.lock beside Muninn, locked by the operating system while a run may write to Jira.
 
-    Created exclusively, so a second run (a manual sync while the scheduled task is going) stops
-    with a message instead of creating the same meeting's sub-task twice. The lock names its
-    process: one whose process has gone (a run stopped from Odin's window, or a crash) is taken
-    over at once, and one older than two hours is taken over whatever it says.
+    A second run (a manual sync while the scheduled task is going) stops with a message instead of
+    creating the same meeting's sub-task twice. The lock is an OS file lock (msvcrt on Windows,
+    flock elsewhere), so it goes when its process does, however that ends: a crash or a run stopped
+    from Odin's window never leaves it behind, and two runs starting together can't both take it.
+    The file stays where it is (deleting it would let a waiting run lock a file nobody else sees)
+    and names the run holding it, for the message.
     """
 
     def __init__(self, data_dir: Path):
         self.path = Path(data_dir) / LOCK
-        self.held = False
+        self._fd: Optional[int] = None
 
     def __enter__(self) -> "RunLock":
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        for _ in range(2):
+        fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            _lock(fd)
+        except OSError:
+            os.close(fd)
             try:
-                fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                try:
-                    age = time.time() - self.path.stat().st_mtime
-                    holder = self.path.read_text(encoding="utf-8").split()
-                except OSError:
-                    continue
-                pid = int(holder[0]) if holder and holder[0].isdigit() else 0
-                if age > LOCK_STALE_SECONDS or (pid and not _alive(pid)):
-                    try:
-                        self.path.unlink()
-                    except OSError:
-                        pass
-                    continue
-                raise StoreError(f"Another Odin run is in progress (it started {int(age // 60)} minute(s) ago). "
-                                 "Wait for it to finish, then try again. If none is running, delete "
-                                 f"{self.path}.") from None
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(f"{os.getpid()} {iso_utc(datetime.now(timezone.utc))}\n")
-            self.held = True
-            return self
-        raise StoreError(f"Couldn't take Odin's run lock at {self.path}.")
+                holder = self.path.read_text(encoding="utf-8").split()
+            except OSError:
+                holder = []
+            since = f" (process {holder[0]}, started {holder[1]})" if len(holder) >= 2 else ""
+            raise StoreError(f"Another Odin run is in progress{since}. Wait for it to finish, then try again.") from None
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, f"{os.getpid()} {iso_utc(datetime.now(timezone.utc))}\n".encode("ascii"))
+        self._fd = fd
+        return self
 
     def __exit__(self, *exc: Any) -> None:
-        if self.held:
+        if self._fd is not None:
             try:
-                self.path.unlink()
+                _unlock(self._fd)
             except OSError:
                 pass
-            self.held = False
+            os.close(self._fd)
+            self._fd = None
 
 
-def _alive(pid: int) -> bool:
-    """Whether a process with this id is still running (the run that holds the lock)."""
-    if pid <= 0:
-        return False
+# Windows locks byte ranges, and a locked byte can't be read by anyone else, so the lock sits well
+# past the holder's details at the start of the file (locking past the end is allowed).
+_LOCK_BYTE = 1 << 20
+
+
+def _lock(fd: int) -> None:
+    """Take the lock without waiting; OSError if another process holds it."""
     if os.name == "nt":
-        import ctypes
-        from ctypes import wintypes
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel32.OpenProcess.restype = wintypes.HANDLE
-        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-        handle = kernel32.OpenProcess(0x1000, False, pid)      # PROCESS_QUERY_LIMITED_INFORMATION
-        if not handle:
-            return ctypes.get_last_error() == 5                 # access denied: it exists
-        try:
-            code = wintypes.DWORD()
-            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-                return True
-            return code.value == 259                            # STILL_ACTIVE
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)                                         # signal 0 checks; it sends nothing
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+        import msvcrt
+        os.lseek(fd, _LOCK_BYTE, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+        os.lseek(fd, _LOCK_BYTE, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_UN)

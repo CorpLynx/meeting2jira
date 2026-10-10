@@ -183,6 +183,26 @@ class WorklogTests(CollectCase):
         self.assertFalse(result.worklogs_ok)
         self.assertTrue(result.problems)
 
+    def test_one_bad_worklog_doesnt_stop_the_others(self):
+        """Review 2026-10-10 #6: a ValueError from one odd worklog used to stop the stream every run."""
+        self.jira.add_issue("PROJ-2", "Odd one", assignee="jdoe")
+        self.jira.add_jira_worklog("PROJ-2", 600, "not a time")
+        good = self.jira.add_jira_worklog("PROJ-1", 3600, "2026-10-01T14:00:00.000+0000")
+        result = self.sync()
+        self.assertIn((good["id"], "jira", "posted", 3600), self.stored())
+        self.assertTrue(any("PROJ-2" in p for p in result.problems), result.problems)
+        self.assertFalse(result.worklogs_ok, "posting still waits while one issue can't be read")
+
+    def test_an_issue_gone_since_the_search_is_skipped_quietly(self):
+        self.jira.add_jira_worklog("PROJ-1", 3600, "2026-10-01T14:00:00.000+0000")
+        self.jira.add_issue("PROJ-2", "Later", assignee="jdoe")
+        later = self.jira.add_jira_worklog("PROJ-2", 600, "2026-10-02T14:00:00.000+0000")
+        self.jira.fail("issue_worklogs", JiraError("GET worklog PROJ-1 -> HTTP 404", 404))
+        result = self.sync()
+        self.assertEqual(result.problems, [])
+        self.assertTrue(result.worklogs_ok)
+        self.assertIn(later["id"], [w for w, _, _, _ in self.stored()])
+
     def test_the_first_sync_reaches_back_history_days_then_reads_only_changes(self):
         self.jira.add_jira_worklog("PROJ-1", 3600, "2026-10-01T14:00:00.000+0000")
         self.sync()

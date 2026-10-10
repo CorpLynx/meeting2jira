@@ -12,18 +12,21 @@ Order of operations, and why
     3. store.find_subtask short-circuits anything already pushed (and, before the one-time import,
        anything state.db or the journal knows).
     4. Honour max_creates_per_run, counting created + recovered + planned.
-    5. Create, then record in Muninn *immediately*, then fetch the new sub-task into Muninn, then
-       log the meeting's time, then transition. A failure in the last three is a warning, not an
-       error, because the sub-task already exists and is recorded; its worklog is retried by the
-       next run (posting.retry_meetings).
+    5. Look in Jira for this meeting's label, then create, then record in Muninn *immediately*,
+       then fetch the new sub-task into Muninn, then log the meeting's time, then transition. A
+       failure in the last three is a warning, not an error, because the sub-task already exists
+       and is recorded; its worklog is retried by the next run (posting.retry_meetings).
 
 The failure case that shapes this file
-    A create that fails ambiguously (proxy timeout, 502/503/504) may have been applied anyway.
-    Retrying blindly duplicates the sub-task; giving up duplicates it on the next run. So every
-    sub-task carries a deterministic `m2j-<hash>` label and `recover_created_issue` does an exact
-    JQL lookup. Exactly one match is adopted; zero, several, or a failed search are reported for a
-    human, never guessed at. If Muninn can't take a record, it goes to the journal and the run stops
-    creating (store.record_subtask).
+    Jira can make a sub-task that Odin never records: the answer is lost (a proxy timeout, a 5xx,
+    an answer cut off), the run is stopped or killed between the create and the record, or the
+    disk is full. Retrying blindly duplicates it, and so would the next run. So every sub-task
+    carries a deterministic `m2j-<hash>` label, and before each create `find_created_issue` looks
+    for one you made with an exact JQL lookup (again right after an ambiguous failure). Exactly one
+    match is adopted; several, or a failed search, are reported for a person and nothing is
+    created. If Muninn can't take a record, it goes to the journal and the run stops creating
+    (store.record_subtask). With jira.dedupe_label off none of this can look, so a run stopped
+    mid-create may make that sub-task again.
 
 Returns a RunResult, never raises for per-item problems: one bad meeting must not abandon the rest.
 Only a configuration fault (a bad template) aborts the run.
@@ -37,7 +40,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from asgard import muninn
 from asgard.muninn import odin as mo
@@ -64,7 +67,8 @@ class RunResult:
     skipped: Counter = field(default_factory=Counter)
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
-    recovered: List[str] = field(default_factory=list)   # created despite an ambiguous failure
+    recovered: List[str] = field(default_factory=list)   # found in Jira after an ambiguous failure, or made by
+                                                         # an earlier run that couldn't record it
     worklogs_retried: int = 0
     posts: posting.PostResult = field(default_factory=posting.PostResult)
 
@@ -135,26 +139,22 @@ def build_fields(cfg: Dict[str, Any], parent: str, summary: str, description: st
     return fields
 
 
-def recover_created_issue(client: JiraClient, parent: str, marker: str) -> Optional[str]:
-    """After an ambiguous create, find out whether the sub-task exists after all.
+def find_created_issue(client: JiraClient, marker: str) -> Tuple[Optional[str], Optional[str]]:
+    """The sub-task carrying this meeting's label that you created, if Jira has one.
 
-    Returns the issue key on an unambiguous single match. Returns None when the issue is absent
-    (safe to create next run), when several issues carry the marker (a human should look), or
-    when the search itself fails. Raises nothing: every outcome is "leave it for later".
+    Returns (key, None) for exactly one, (None, None) for none (safe to create), and (None, why)
+    when it can't tell: several issues carry the label, or the search failed. Searched across every
+    project (a rule may have moved the meeting's parent since), and only what you created, because
+    a colleague's Odin gives the same meeting the same label. Raises nothing.
     """
-    project = parent.rsplit("-", 1)[0]
-    jql = f'project = "{project}" AND labels = "{marker}" ORDER BY created DESC'
+    jql = f'labels = "{marker}" AND creator = currentUser() ORDER BY created DESC'
     try:
         keys = client.search_issue_keys(jql)
     except JiraError as exc:
-        log.warning("           could not search for %s after an ambiguous create: %s", marker, exc)
-        return None
-    if len(keys) == 1:
-        return keys[0]
+        return None, f"couldn't look in Jira for {marker} first, so nothing was created: {exc}"
     if len(keys) > 1:
-        log.warning("           %s matches several issues (%s); not recording any of them",
-                    marker, ", ".join(keys))
-    return None
+        return None, f"{marker} is on several of your issues ({', '.join(keys)}); none was recorded or created"
+    return (keys[0] if keys else None), None
 
 
 def run(meetings: Iterable[Meeting], cfg: Dict[str, Any], con: sqlite3.Connection, client: Optional[JiraClient],
@@ -237,7 +237,7 @@ def _push(meetings: Iterable[Meeting], cfg: Dict[str, Any], con: sqlite3.Connect
             continue
 
         # Recovered issues count against the cap too: they are sub-tasks this run is responsible
-        # for, and each one costs a create attempt plus a search.
+        # for, and each one costs a search.
         if cap and (len(result.created) + len(result.recovered) + result.planned) >= cap:
             result.capped += 1
             continue
@@ -263,33 +263,46 @@ def _push(meetings: Iterable[Meeting], cfg: Dict[str, Any], con: sqlite3.Connect
         marker = dedupe_label(m) if j.get("dedupe_label") else None
         tod_labels = ([router.tod.label] if decision.tod_status == OUTSIDE
                       and router.tod.action == "label" else [])
-        recovered = False
-        try:
-            issue_key = client.create_issue(
-                build_fields(cfg, parent, summary, description, assignee, marker, tod_labels))
-        except JiraError as exc:
-            # An ambiguous failure may still have created the sub-task. Creating it again next
-            # run would duplicate it, so look for the marker before giving up.
-            issue_key = None
-            if exc.ambiguous and marker:
-                issue_key = recover_created_issue(client, parent, marker)
-            if issue_key is None:
-                detail = f"{exc} [ambiguous: verify in Jira before the next run]" if exc.ambiguous else str(exc)
-                result.errors.append(f"{label}: {detail}")
-                log.error("  FAILED   %-14s %s  %s", parent, label, detail)
-                continue
-            recovered = True
+        issue_key, why = find_created_issue(client, marker) if marker else (None, None)
+        if why:
+            result.errors.append(f"{label}: {why}")
+            log.error("  FAILED   %-14s %s  %s", parent, label, why)
+            continue
+        recovered = issue_key is not None
+        if recovered:
             result.recovered.append(issue_key)
-            log.warning("  RECOVERED %-13s %s  (create reported failure but the issue exists)",
-                        issue_key, label)
+            log.warning("  FOUND    %-14s %s  (an earlier run made it but couldn't record it)", issue_key, label)
+        else:
+            try:
+                issue_key = client.create_issue(
+                    build_fields(cfg, parent, summary, description, assignee, marker, tod_labels))
+            except JiraError as exc:
+                # An ambiguous failure may still have created the sub-task. Look for the marker
+                # before giving up; the next run looks again before creating.
+                if exc.ambiguous and marker:
+                    issue_key, why = find_created_issue(client, marker)
+                if issue_key is None:
+                    detail = str(exc)
+                    if exc.ambiguous:
+                        detail += (" [it may exist: the next run looks for its label before creating]" if marker
+                                   else " [ambiguous: verify in Jira before the next run]")
+                    if why:
+                        detail += f"; {why}"
+                    result.errors.append(f"{label}: {detail}")
+                    log.error("  FAILED   %-14s %s  %s", parent, label, detail)
+                    continue
+                recovered = True
+                result.recovered.append(issue_key)
+                log.warning("  RECOVERED %-13s %s  (create reported failure but the issue exists)",
+                            issue_key, label)
 
         # Record first, with the rendered worklog comment, so a worklog failure can be retried on
         # a later run without re-deriving it from the calendar.
         record = store.SubtaskRecord.for_meeting(m, issue_key, parent, summary, event_ids.get(m.key),
                                                  wants_worklog, worklog_comment)
-        if not store.record_subtask(con, record, data_dir):
-            msg = (f"{issue_key}: created, but Muninn couldn't record it, so it was kept in "
-                   f"{journal.path} and this run stopped creating. The next run records it first.")
+        kept = store.record_subtask(con, record, data_dir)
+        if kept:
+            msg = f"{issue_key}: created, but {kept}. This run stopped creating."
             result.errors.append(msg)
             log.error("  FAILED   %-14s %s", issue_key, msg)
             if not recovered:
@@ -309,11 +322,14 @@ def _push(meetings: Iterable[Meeting], cfg: Dict[str, Any], con: sqlite3.Connect
 
         if wants_worklog:
             row = con.execute("SELECT * FROM meeting_subtasks WHERE meeting_key = ?", (m.key,)).fetchone()
-            posts = result.posts
-            before = (len(posts.failed), len(posts.unknown), len(posts.skipped))
+            posts = result.posts          # a refusal stays in posts.failed: the run reports it as an error
+            before = (len(posts.unknown), len(posts.skipped))
             if row is not None:
-                posting.log_meeting(con, client, row, posts)
-            for lines, n in zip((posts.failed, posts.unknown, posts.skipped), before):
+                # A sub-task an earlier run made may have had its time logged by hand since: read
+                # its worklogs first, as a retry does.
+                posting.log_meeting(con, client, row, posts, run=subtasks if recovered else None,
+                                    ctx=ctx if recovered else None)
+            for lines, n in zip((posts.unknown, posts.skipped), before):
                 result.warnings.extend(f"worklog {line}" for line in lines[n:])
 
         if j.get("transition_to"):

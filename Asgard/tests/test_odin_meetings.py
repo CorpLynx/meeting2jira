@@ -7,7 +7,6 @@ holding the meeting's time exactly once, or not at all; never twice.
 import os
 import sqlite3
 import sys
-import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -141,6 +140,16 @@ class RecordTests(MeetingCase):
         self.assertEqual((again.existing, len(again.created)), (1, 1))
         self.assertEqual(len(jira.created), 2, "the first meeting is never created twice")
 
+    def test_forget_drops_a_sub_task_from_the_journal_too(self):
+        journal = store.Journal(self.data)
+        journal.append(store.SubtaskRecord.for_meeting(meeting(), "PROJ-5", "PROJ-9", "s", None, False, None), "x")
+        journal.append(store.SubtaskRecord.for_meeting(meeting(key="GID-2|x", day=22), "PROJ-6", "PROJ-9", "s", None,
+                                                       False, None), "x")
+        self.assertEqual(journal.forget("proj-5"), 1)
+        self.assertEqual([r.issue_key for r in journal.records()], ["PROJ-6"])
+        self.assertEqual(journal.forget("PROJ-6"), 1)
+        self.assertFalse(journal.path.exists())
+
     def test_a_half_written_journal_line_doesnt_hide_the_others(self):
         journal = store.Journal(self.data)
         journal.append(store.SubtaskRecord.for_meeting(meeting(), "PROJ-5", "PROJ-9", "s", None, False, None), "x")
@@ -153,17 +162,25 @@ class RecordTests(MeetingCase):
         self.push([meeting()], config(), jira, now=NOW)
         self.assertEqual(store.forget(self.open(), "proj-901"), 1)
         self.assertIsNone(self.peek().execute("SELECT logged_as_key FROM calendar_events").fetchone()[0])
+        del jira.issues["PROJ-901"]                  # deleted in Jira, which is why it was forgotten
         again = self.push([meeting()], config(), jira, now=NOW)
         self.assertEqual(again.created, ["PROJ-902"])
         self.assertEqual(len(jira.posted), 1, "the meeting's time is already in Jira")
         self.assertTrue(any("already logged" in w for w in again.warnings))
+
+    def test_a_forgotten_sub_task_still_in_jira_is_found_again_not_duplicated(self):
+        jira = FakeJira()
+        self.push([meeting()], config(), jira, now=NOW)
+        store.forget(self.open(), "PROJ-901")
+        again = self.push([meeting()], config(), jira, now=NOW)
+        self.assertEqual((again.created, again.recovered), ([], ["PROJ-901"]))
 
     def test_history_without_a_calendar_event_is_linked_when_the_meeting_shows_up(self):
         con = self.open()
         m = meeting()
         rec = store.SubtaskRecord.for_meeting(m, "PROJ-500", "PROJ-9", "Meeting: Sprint Planning", None, False, None)
         rec.origin = "state_db"
-        self.assertTrue(store.record_subtask(con, rec, self.data))
+        self.assertIsNone(store.record_subtask(con, rec, self.data))
         result = self.push([m], config(), FakeJira(), now=NOW)
         self.assertEqual(result.existing, 1)
         row = self.peek().execute("SELECT ms.calendar_event_id IS NOT NULL, e.logged_as_key FROM meeting_subtasks ms "
@@ -172,6 +189,25 @@ class RecordTests(MeetingCase):
 
 
 class LockTests(OdinTestCase):
+    """odin.lock is an OS file lock (review 2026-10-10 #7): released when its process ends, however
+    it ends, and never held by two runs at once."""
+
+    HOLD = ("import sys, time; sys.path[:0] = [{root!r}, {app!r}]\n"
+            "from odin import store\n"
+            "with store.RunLock({data!r}):\n"
+            "    print('held', flush=True)\n"
+            "    {then}\n")
+
+    def child(self, then):
+        import subprocess
+        from fake_jira import APP, ROOT
+        code = self.HOLD.format(root=str(ROOT), app=str(APP), data=str(self.data), then=then)
+        proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(proc.kill)
+        self.addCleanup(proc.stdout.close)
+        self.assertEqual(proc.stdout.readline().strip(), "held")
+        return proc
+
     def test_one_run_at_a_time(self):
         with store.RunLock(self.data):
             with self.assertRaisesRegex(store.StoreError, "Another Odin run is in progress"):
@@ -180,27 +216,24 @@ class LockTests(OdinTestCase):
         with store.RunLock(self.data):
             pass                                # released on the way out
 
-    def test_a_lock_whose_process_has_gone_is_taken_over_at_once(self):
-        """Stop in Odin's window kills the run; the next one mustn't wait two hours for it."""
-        lock = self.data / store.LOCK
-        lock.write_text("999999999 2026-09-24T00:00:00Z\n", encoding="utf-8")
-        with store.RunLock(self.data):
-            self.assertIn(str(os.getpid()), lock.read_text(encoding="utf-8"))
-
-    def test_a_lock_held_by_a_running_process_is_respected(self):
-        (self.data / store.LOCK).write_text(f"{os.getpid()} 2026-09-24T00:00:00Z\n", encoding="utf-8")
-        with self.assertRaises(store.StoreError):
+    def test_another_process_holding_it_is_respected_and_named(self):
+        proc = self.child("time.sleep(60)")
+        with self.assertRaisesRegex(store.StoreError, f"process {proc.pid}"):
             with store.RunLock(self.data):
                 pass
 
-    def test_a_lock_left_by_a_run_that_died_is_taken_over(self):
-        lock = self.data / store.LOCK
-        lock.write_text("4242 2026-09-24T00:00:00Z\n", encoding="utf-8")
-        old = time.time() - store.LOCK_STALE_SECONDS - 60
-        os.utime(lock, (old, old))
+    def test_a_run_that_was_killed_leaves_nothing_to_take_over(self):
+        """Stop in Odin's window, a crash, or the task's time limit: the next run goes straight in."""
+        proc = self.child("time.sleep(60)")
+        proc.kill()
+        proc.wait(10)
         with store.RunLock(self.data):
-            self.assertIn(str(os.getpid()), lock.read_text(encoding="utf-8"))
-        self.assertFalse(lock.exists())
+            self.assertIn(str(os.getpid()), (self.data / store.LOCK).read_text(encoding="utf-8"))
+
+    def test_an_old_lock_file_alone_doesnt_block(self):
+        (self.data / store.LOCK).write_text("4242 2026-09-24T00:00:00Z\n", encoding="utf-8")
+        with store.RunLock(self.data):
+            pass
 
 
 class MeetingWorklogTests(MeetingCase):
@@ -218,7 +251,8 @@ class MeetingWorklogTests(MeetingCase):
         jira = FakeJira()
         jira.fail("add_worklog", JiraError("POST worklog -> HTTP 400: closed issue", 400))
         result = self.push([meeting()], config(), jira, now=NOW)
-        self.assertTrue(any("closed issue" in w for w in result.warnings))
+        self.assertTrue(any("closed issue" in f for f in result.posts.failed), "a refusal is an error (review #8)")
+        self.assertFalse(any("closed issue" in w for w in result.warnings))
         self.assertEqual(self.worklogs(), [("meeting", "failed", 3600)])
         _, retried = self.retry(jira)
         self.assertEqual(len(retried.posted), 1)

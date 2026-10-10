@@ -222,7 +222,7 @@ so the two paths will not duplicate each other.
 | `No config found` | Click the Odin tile and **Create settings**, or run `odin setup`. |
 | `Muninn isn't set up yet` | Open Asgard once; it creates Muninn. |
 | `no Python that can run Odin was found` | Odin needs the Python Asgard runs on (3.11 or newer on Windows, for Muninn's SQLite). The message lists every candidate tried and why each was rejected. Run Odin from Asgard's folder, or pass `odin run -Python "C:\path\to\python.exe"`. |
-| `Another Odin run is in progress` | The scheduled task is running, or the window is. Wait for it; a lock left by a run that died is taken over by itself. |
+| `Another Odin run is in progress` | The scheduled task is running, or the window is. Wait for it. Windows lets go of the lock the moment a run ends, however it ended, so this only appears while one really is running. |
 | Scripts won't run at all | `odin doctor` reports execution policy and the internet-zone mark. Use `Unblock-File`, never `-ExecutionPolicy Bypass`. |
 | `...returned 'text/html' instead of JSON` | An SSO or proxy page is intercepting the API. Ask the Jira admins which URL accepts token-authenticated REST calls. |
 | Certificate errors | Export your agency CA chain as PEM and set `jira.ca_bundle`. Never disable verification. |

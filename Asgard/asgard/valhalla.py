@@ -132,7 +132,7 @@ def remove_after_exit(folder: Path, pid: Optional[int] = None) -> List[str]:
 # The scheduled tasks Asgard's apps register (baldur.cli.TASK_NAME, Odin's Register-MeetingSyncTask.ps1,
 # and Odin's name from before it moved into Asgard). Once the code is gone they would fail every day.
 SCHEDULED_TASKS = ("Asgard Baldur collect", "Asgard Odin daily", "meeting2jira-daily")
-CREATE_NO_WINDOW = 0x08000000
+CREATE_NO_WINDOW = winutil.CREATE_NO_WINDOW
 
 
 def remove_scheduled_tasks() -> List[str]:
