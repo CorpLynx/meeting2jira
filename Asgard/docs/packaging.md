@@ -84,5 +84,5 @@ In order:
 - [ ] **Signing.** Unsigned programs need App Control rules by path or hash. If the agency signs, add a signing step after the build, before `payload.sha256`.
 - [ ] **App Control's rule for `%LOCALAPPDATA%\Asgard\app`**: by path, by hash (every release changes it), or signing.
 - [ ] **Updates** ([updates.md](updates.md)): the build already writes `payload.sha256`; the updater that checks it isn't built.
-- [x] **The first Windows run** of the workflow: green on Oct 10 (run 4 on this branch).
+- [x] **The first Windows run** of the workflow: green on Oct 10 (run 8 on this branch also checks setup copying the build into `app\` and its self-test there).
 - [ ] **The self-test on the workstation**, under App Control: `asgard-cli.exe --self-test`.
