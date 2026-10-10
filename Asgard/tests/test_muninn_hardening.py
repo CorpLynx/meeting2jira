@@ -319,6 +319,24 @@ class DamageAndRestoreTests(Base):
             muninn.open_app("odin", supported=(1, muninn.SCHEMA_VERSION), path=self.path)
         self.assertTrue(self.path.exists(), "nothing is moved until you ask")
 
+    def test_a_file_that_fails_to_open_isnt_left_open(self):
+        """Windows locks an open file: a leaked handle would stop a restore from replacing it."""
+        closed = []
+
+        class Refusing:
+            row_factory = None
+
+            def execute(self, sql):
+                raise sqlite3.DatabaseError("file is not a database")
+
+            def close(self):
+                closed.append(True)
+
+        with mock.patch.object(sqlite3, "connect", return_value=Refusing()):
+            with self.assertRaises(sqlite3.DatabaseError):
+                muninn.connect(self.dir / "other.db")
+        self.assertEqual(closed, [True])
+
     def test_a_damaged_file_with_no_backup_says_so(self):
         self.damage()
         with self.assertRaisesRegex(muninn.CorruptError, "no backup"):

@@ -24,6 +24,7 @@ except Exception:
 class InstallTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         self.home = Path(self.tmp.name) / "Asgard"
         self._saved = {k: os.environ.get(k) for k in ("ASGARD_HOME", "APPDATA")}
         os.environ["ASGARD_HOME"] = str(self.home)
@@ -37,7 +38,6 @@ class InstallTests(unittest.TestCase):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
-        self.tmp.cleanup()
 
     def run_setup(self) -> int:
         with contextlib.redirect_stdout(io.StringIO()):

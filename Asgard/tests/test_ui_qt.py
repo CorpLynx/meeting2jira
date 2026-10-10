@@ -66,6 +66,7 @@ class WindowTests(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         self.dir = Path(self.tmp.name).resolve()
         self._home = os.environ.get("ASGARD_HOME")
         os.environ["ASGARD_HOME"] = str(self.dir)
@@ -78,7 +79,6 @@ class WindowTests(unittest.TestCase):
             os.environ.pop("ASGARD_HOME", None)
         else:
             os.environ["ASGARD_HOME"] = self._home
-        self.tmp.cleanup()
 
     def open(self, **kwargs):
         s = shell.Shell(**kwargs)

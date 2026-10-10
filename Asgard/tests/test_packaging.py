@@ -43,6 +43,7 @@ build = load("build")
 class Home(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         self.dir = Path(self.tmp.name)
         self._saved = {k: os.environ.get(k) for k in ("ASGARD_HOME", "APPDATA")}
         os.environ["ASGARD_HOME"] = str(self.dir / "home")
@@ -56,7 +57,6 @@ class Home(unittest.TestCase):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
-        self.tmp.cleanup()
 
 
 class EntryPointTests(unittest.TestCase):

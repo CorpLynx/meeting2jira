@@ -24,6 +24,7 @@ from heimdall.ui_backend import Backend  # noqa: E402
 class Home(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         self.dir = Path(self.tmp.name).resolve()
         self._home = os.environ.get("ASGARD_HOME")
         os.environ["ASGARD_HOME"] = str(self.dir)
@@ -33,7 +34,6 @@ class Home(unittest.TestCase):
             os.environ.pop("ASGARD_HOME", None)
         else:
             os.environ["ASGARD_HOME"] = self._home
-        self.tmp.cleanup()
 
 
 class ThemeTests(unittest.TestCase):
@@ -142,10 +142,9 @@ class PrefsTests(Home):
 class RegistryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         self.root = Path(self.tmp.name).resolve()
 
-    def tearDown(self):
-        self.tmp.cleanup()
 
     def app(self, app_id, manifest, files=("View.qml",)):
         ui = self.root / "apps" / app_id / "ui"

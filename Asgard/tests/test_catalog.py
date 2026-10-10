@@ -24,6 +24,7 @@ def contrast(a: str, b: str) -> float:
 class CatalogTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         self.home = Path(self.tmp.name)
         self._saved = os.environ.get("ASGARD_HOME")
         os.environ["ASGARD_HOME"] = str(self.home)
@@ -34,7 +35,6 @@ class CatalogTests(unittest.TestCase):
             os.environ.pop("ASGARD_HOME", None)
         else:
             os.environ["ASGARD_HOME"] = self._saved
-        self.tmp.cleanup()
 
     def write_local(self, data: dict) -> None:
         self.local.write_text(json.dumps(data), encoding="utf-8")

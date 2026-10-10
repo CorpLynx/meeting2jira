@@ -241,10 +241,9 @@ class ProtocolTests(YsildirCase):
 class SwitchTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         self.path = Path(self.tmp.name) / "settings" / "ysildir.json"
 
-    def tearDown(self):
-        self.tmp.cleanup()
 
     def test_no_file_means_the_defaults(self):
         found = config.load(self.path)
@@ -850,13 +849,12 @@ class SetupTests(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         self.dir = Path(self.tmp.name).resolve()
         self.ws = self.dir / "ws"
         self.ws.mkdir()
         self.config = config.Config(config.defaults(), self.dir / "ysildir.json")
 
-    def tearDown(self):
-        self.tmp.cleanup()
 
     def setup(self, **kwargs):
         return clients.setup(self.config, self.read_only, **kwargs)

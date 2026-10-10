@@ -18,12 +18,12 @@ class FakeBlocked(OSError):
 class RunnerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         self.dir = Path(self.tmp.name)
         self.runner = Runner(self.dir / "logs")
 
     def tearDown(self) -> None:
         self.runner.close()
-        self.tmp.cleanup()
 
     def script(self, body: str) -> LaunchSpec:
         path = self.dir / "app.py"
