@@ -14,6 +14,7 @@ rem    meeting2jira-graph check           verify config, token, permission, then
 rem    meeting2jira-graph export          export only, keep the JSON, push nothing
 rem    meeting2jira-graph forget-graph    delete the cached Graph token
 rem    meeting2jira-graph status          last-run health, then recent sub-tasks
+rem    meeting2jira-graph settle [ID]     posts in doubt, and settling one (delegated)
 rem    meeting2jira-graph doctor          read-only environment report
 rem    meeting2jira-graph schedule        register the weekday scheduled task
 rem    meeting2jira-graph selftest        Graph tests plus the COM app's own tests
@@ -101,6 +102,7 @@ if /i "%ACTION%"=="report"        goto :delegate
 if /i "%ACTION%"=="status"        goto :delegate
 if /i "%ACTION%"=="doctor"        goto :delegate
 if /i "%ACTION%"=="forget"        goto :delegate
+if /i "%ACTION%"=="settle"        goto :delegate
 if /i "%ACTION%"=="set-token"     goto :delegate
 if /i "%ACTION%"=="csv"           goto :delegate
 if /i "%ACTION%"=="cli"           goto :delegate
@@ -433,6 +435,7 @@ echo   meeting2jira-graph check           verify Graph, then Jira
 echo   meeting2jira-graph export          export only, keep the JSON
 echo   meeting2jira-graph forget-graph    delete the cached Graph token
 echo   meeting2jira-graph status          last-run health, then recent sub-tasks
+echo   meeting2jira-graph settle [ID]     posts in doubt, and settling one
 echo   meeting2jira-graph doctor          read-only environment report
 echo   meeting2jira-graph schedule        register the weekday scheduled task
 echo   meeting2jira-graph selftest        Graph tests plus the COM app's tests

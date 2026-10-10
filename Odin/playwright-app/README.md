@@ -46,7 +46,7 @@ automation nor the Import/Export wizard, so it breaks both existing paths.
 | `login` | re-authenticate when the browser session expires |
 | `export [days]` | export only, keep the JSON (defaults to 7 days, for diffing against a COM export) |
 | `discover` | print the calendar API requests OWA makes — diagnosis |
-| `check` / `status` / `doctor` / `forget` / `set-token` / `cli` | delegated to the COM app |
+| `check` / `status` / `doctor` / `forget` / `settle` / `set-token` / `cli` | delegated to the COM app |
 | `schedule` / `unschedule` | the weekday scheduled task |
 | `selftest` | mapping tests, then the COM app's own tests |
 
