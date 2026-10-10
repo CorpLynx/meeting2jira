@@ -54,7 +54,7 @@ The design reads `/rest/api/2/worklog/updated`, which lists every worklog in the
 
 ## state.db, imported once
 
-Each row of `synced` becomes a `meeting_subtasks` row with origin `state_db` and its own creation time. A worklog still owed (wanted, not logged, under three attempts) is carried as `worklog_wanted = 1`; everything else as 0, so nothing already in Jira is sent again. Then `state.db` becomes `state.db.migrated-YYYYMMDD`, deleted after 30 days. If any row can't be imported, `state.db` stays and Odin keeps consulting it, so none of its meetings is made again. When an imported meeting shows up in an export, its record is linked to the calendar event. Meeting worklogs from before Muninn are marked as meeting time by `classify_meeting_worklogs()` with the comment template's prefix (`Meeting: %`), strictly.
+Each row of `synced` becomes a `meeting_subtasks` row with origin `state_db` and its own creation time. A worklog still owed (wanted, not logged, under three attempts) is carried as `worklog_wanted = 1`; everything else as 0, so nothing already in Jira is sent again. Then `state.db` becomes `state.db.migrated-YYYYMMDD`, deleted after 30 days. If any row can't be imported, `state.db` stays and Odin keeps consulting it, so none of its meetings is made again. When an imported meeting shows up in an export, its record is linked to the calendar event. Meeting worklogs from before Muninn are marked as meeting time by `classify_meeting_worklogs()` with the comment template's prefix (`Meeting: %`), strictly. The on-prem `state.db` may differ from this repo's; what to check and extend is in [Odin/MUNINN-MIGRATION.md](../../../Odin/MUNINN-MIGRATION.md).
 
 ## Settings (`config.json`, section `muninn`)
 

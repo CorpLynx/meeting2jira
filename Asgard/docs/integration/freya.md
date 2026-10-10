@@ -1,6 +1,6 @@
 # Freya and Muninn
 
-Identity `freya` · not built yet · module to add: `asgard.muninn.freya` (rules) and `asgard.muninn.citations` (shared with Loki)
+Identity `freya` · not built yet · module to add: `asgard.muninn.freya` (rules) and `asgard.muninn.citations` (shared with Loki) · the full design is [../freya-spec.md](../freya-spec.md) (work in progress), which supersedes this page where they differ
 
 Freya keeps a durable record of every issue you finish and drafts your yearly review from it. Freya is mostly queries: code groups the facts, then one or two model passes (through Mímir) write the text, and every claim must cite an ID that resolves to a real row.
 
