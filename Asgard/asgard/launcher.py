@@ -2,6 +2,10 @@
 
 Click a tile to open its app. Right-click (or the Menu key) for more.
 Type to search, arrow keys to move, Enter to open, F5 to reload tiles.
+
+main() opens the PySide6 + QML window (asgard/ui, the Apps page) when PySide6 loads on this computer,
+and this tkinter window when it doesn't, so a Python install without IT's PySide6 still gets a launcher.
+Set ASGARD_UI=tk to force the tkinter window.
 """
 from __future__ import annotations
 
@@ -835,6 +839,31 @@ def write_launcher_log(text: str) -> None:
         pass
 
 
+def qt_available() -> bool:
+    """Whether the Qt window can open here: PySide6 loads (a blocked DLL counts as not), and it wasn't switched off."""
+    if os.environ.get("ASGARD_UI", "").strip().lower() in ("tk", "tkinter"):
+        return False
+    from . import ui                      # imports no package itself; ui.available() tries PySide6
+    ok, why = ui.available()
+    if not ok:
+        write_launcher_log(f"The Qt window isn't available ({why}); using the tkinter window.")
+    return ok
+
+
+def run_qt() -> Optional[int]:
+    """The Qt window's exit code, or None if it couldn't be built so the tkinter window can take over."""
+    try:
+        from . import ui
+        code = ui.run(home=True)
+    except Exception:  # last resort: a launcher that opens beats one that doesn't
+        write_launcher_log("The Qt window failed:\n" + traceback.format_exc())
+        return None
+    if code == 0:
+        return 0
+    write_launcher_log(f"The Qt window ended with exit code {code}; using the tkinter window instead.")
+    return None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if "--uninstall" in args:
@@ -843,16 +872,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args[:1] == ["--muninn"]:              # console commands; no window, no tkinter needed
         from .muninn import cli as muninn_cli
         return muninn_cli.main(args[1:])
-    if tk is None:
-        message = "Asgard needs Python with Tcl/Tk (tkinter). Ask IT for a Python install that includes Tcl/Tk."
-        write_launcher_log(message)
-        print(message, file=sys.stderr)
-        return 2
     try:
         paths.data_dir().mkdir(parents=True, exist_ok=True)
         os.chdir(paths.data_dir())  # never hold the app folder open, so upgrades can replace it
     except OSError:
         pass
+    if qt_available():
+        code = run_qt()
+        if code is not None:
+            return code
+    if tk is None:
+        message = ("Asgard needs PySide6 (the modern window) or Python with Tcl/Tk (tkinter). "
+                   "Ask IT for a Python install that includes Tcl/Tk.")
+        write_launcher_log(message)
+        print(message, file=sys.stderr)
+        return 2
     winutil.enable_dpi_awareness()
     try:
         root = tk.Tk()

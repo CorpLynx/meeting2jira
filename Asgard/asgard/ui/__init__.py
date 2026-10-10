@@ -8,20 +8,38 @@
 
 Start it with run(): every app with views (python -m asgard.ui), or one app on its own
 (python -m asgard.ui --app heimdall, which is what apps/heimdall/heimdall.pyw does).
+run(home=True) adds the Apps page, Asgard's own launcher (asgard/launcher.py starts it that way).
+    home      what the Apps page does, with no Qt: tiles, starting apps, Muninn's start-up (stdlib)
 
 PySide6 is imported only inside run(), so the launcher, Muninn and the CLIs never need it.
 """
 from __future__ import annotations
 
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 MISSING_QT = ("This window needs PySide6, which isn't installed for this Python ({python}). "
               "Ask IT to install the approved PySide6-Essentials package (see Asgard's requirements.txt). "
               "The command-line tools work without it.")
 
 
-def run(app: Optional[str] = None, argv: Optional[List[str]] = None) -> int:
+def available() -> Tuple[bool, str]:
+    """Whether the Qt window can open on this computer: (True, "") or (False, why).
+
+    Loads PySide6's QML parts, which loads their DLLs, so a blocked or missing one shows up here and not
+    half-way through opening the window. The launcher asks this before choosing between the Qt window and
+    the tkinter one (launcher.py itself imports no package).
+    """
+    try:
+        import PySide6.QtGui  # noqa: F401
+        import PySide6.QtQml  # noqa: F401
+        import PySide6.QtQuickControls2  # noqa: F401
+    except (ImportError, OSError) as exc:
+        return False, str(exc)
+    return True, ""
+
+
+def run(app: Optional[str] = None, argv: Optional[List[str]] = None, home: bool = False) -> int:
     try:
         from . import shell
     except ImportError as exc:
@@ -29,7 +47,7 @@ def run(app: Optional[str] = None, argv: Optional[List[str]] = None) -> int:
             raise
         _tell(MISSING_QT.format(python=sys.executable))
         return 2
-    return shell.run(app=app, argv=argv)
+    return shell.run(app=app, argv=argv, home=home)
 
 
 def _tell(message: str) -> None:

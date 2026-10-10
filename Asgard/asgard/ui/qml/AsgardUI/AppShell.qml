@@ -45,11 +45,6 @@ ApplicationWindow {
             Layout.preferredWidth: theme.sidebarWidth
         }
 
-        Rectangle {
-            Layout.fillHeight: true
-            Layout.preferredWidth: 1
-            color: theme.borderSoft
-        }
 
         Item {
             Layout.fillWidth: true
@@ -78,6 +73,11 @@ ApplicationWindow {
                 detail: "Its QML has a problem. The log in Asgard's logs folder says which line."
             }
         }
+    }
+
+    onActiveChanged: {
+        if (active && pageLoader.item && typeof pageLoader.item.refresh === "function")
+            pageLoader.item.refresh()
     }
 
     // For tests and diagnostics: read the page without Python holding a reference to it.

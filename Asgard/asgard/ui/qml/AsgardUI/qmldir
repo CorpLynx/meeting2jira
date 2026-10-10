@@ -10,3 +10,11 @@ ToastHost 1.0 ToastHost.qml
 PageHeader 1.0 PageHeader.qml
 ScrollPage 1.0 ScrollPage.qml
 Pill 1.0 Pill.qml
+Icon 1.0 Icon.qml
+Elevation 1.0 Elevation.qml
+AppSearchField 1.0 AppSearchField.qml
+AppMenu 1.0 AppMenu.qml
+AppMenuItem 1.0 AppMenuItem.qml
+AppMenuSeparator 1.0 AppMenuSeparator.qml
+AppDialog 1.0 AppDialog.qml
+AppTile 1.0 AppTile.qml

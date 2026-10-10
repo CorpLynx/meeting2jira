@@ -1,4 +1,5 @@
 // One sidebar entry. Keyboard: Tab to reach it, Enter or Space to open it.
+// iconText is either the name of a line icon (apps, dashboard, settings) or up to two letters.
 import QtQuick
 import QtQuick.Layouts
 
@@ -9,14 +10,15 @@ Rectangle {
     property string iconText: ""
     property bool selected: false
     property color accentColor: theme.accentInk
+    readonly property bool lineIcon: ["apps", "home", "dashboard", "settings"].indexOf(iconText) >= 0
+    readonly property color ink: selected ? theme.accentInk : theme.textMuted
 
-    implicitHeight: 40
-    radius: theme.radiusSmall
-    color: selected ? theme.accentSoft : (mouse.containsMouse ? theme.surfaceHigh : "transparent")
+    implicitHeight: 42
+    radius: theme.radiusSmall + 2
+    color: selected ? theme.accentSoft : (mouse.pressed ? theme.borderSoft : (mouse.containsMouse ? theme.surfaceHigh : "transparent"))
     border.width: activeFocus ? 2 : 0
     border.color: theme.focus
     activeFocusOnTab: true
-
     Accessible.role: Accessible.Button
     Accessible.name: label
     Accessible.description: selected ? "Current page" : ""
@@ -24,31 +26,27 @@ Rectangle {
     Keys.onReturnPressed: root.clicked()
     Keys.onEnterPressed: root.clicked()
     Keys.onSpacePressed: root.clicked()
-
     Behavior on color { ColorAnimation { duration: 90 } }
-
-    Rectangle {
-        visible: root.selected
-        width: 3
-        height: parent.height - 14
-        radius: 2
-        color: root.accentColor
-        anchors.left: parent.left
-        anchors.verticalCenter: parent.verticalCenter
-    }
 
     RowLayout {
         anchors.fill: parent
         anchors.leftMargin: 12
         anchors.rightMargin: 12
-        spacing: 10
-
+        spacing: 12
+        Icon {
+            visible: root.lineIcon
+            name: root.iconText
+            size: 20
+            color: root.ink
+            Layout.alignment: Qt.AlignVCenter
+        }
         Rectangle {
-            visible: root.iconText.length > 0
+            visible: !root.lineIcon && root.iconText.length > 0
             Layout.preferredWidth: 24
             Layout.preferredHeight: 24
-            radius: 5
-            color: root.selected ? theme.accent : theme.surfaceHigh
+            radius: 7
+            color: root.selected ? theme.accent : Qt.alpha(root.accentColor, 0.14)
+            Accessible.ignored: true
             Text {
                 anchors.centerIn: parent
                 text: root.iconText
@@ -58,7 +56,6 @@ Rectangle {
                 font.weight: Font.Bold
             }
         }
-
         Text {
             text: root.label
             color: root.selected ? theme.text : theme.textMuted
@@ -69,7 +66,6 @@ Rectangle {
             Layout.fillWidth: true
         }
     }
-
     MouseArea {
         id: mouse
         anchors.fill: parent

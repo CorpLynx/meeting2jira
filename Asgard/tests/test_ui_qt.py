@@ -51,6 +51,29 @@ DEMO_BACKEND = """class Backend:
 """
 
 
+class QuietHome:
+    """Builds a HomeBackend over a tiny tile list and a fake runner, and never starts Muninn's thread."""
+
+    @staticmethod
+    def make(folder):
+        from asgard.ui import home
+        from test_ui_home import FakeRunner
+        script = Path(folder) / "alpha.pyw"
+        script.write_text("print('hi')\n", encoding="utf-8")
+        defaults = Path(folder) / "tiles.json"
+        defaults.write_text(json.dumps({"version": 1, "apps": [
+            {"id": "alpha", "name": "Alpha", "description": "The first app", "monogram": "Al", "color": "#2B5797",
+             "status": "available", "launch": {"type": "python", "target": str(script)}},
+            {"id": "soon", "name": "Soon", "description": "Not built yet", "monogram": "So", "color": "#A4376D",
+             "status": "coming_soon"}]}), encoding="utf-8")
+
+        class Backend(home.HomeBackend):
+            def start_muninn(self):
+                pass
+
+        return Backend(defaults=defaults, local=Path(folder) / "local.json", runner=FakeRunner())
+
+
 def pump(seconds=0.3):
     end = time.monotonic() + seconds
     while time.monotonic() < end:
@@ -166,6 +189,48 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.page_value(s, "greeting"), "Hello Odin")
         groups = s.dashboard.collect()
         self.assertEqual(groups[0]["cards"][0]["target"], "odin:tasks")
+
+    # ------------------------------------------------------------ the Apps page (the launcher)
+    def open_home(self, **kwargs):
+        return self.open(home=True, home_backend=QuietHome.make(self.dir), **kwargs)
+
+    def test_apps_page_is_first_and_every_page_loads_cleanly(self):
+        s = self.open_home(root=self.demo_root())
+        self.assertEqual(s.navigation.currentKey, "home")
+        self.assertEqual([i["key"] for i in s.navigation.items if i["kind"] == "page"],
+                         ["home", "dashboard", "odin:tasks"])
+        self.assertEqual(s.shell.subtitle, "Apps and tools")
+        self.visit_all(s)
+
+    def test_apps_page_has_a_tile_for_each_app_and_search_narrows_them(self):
+        s = self.open_home()
+        self.assertEqual(self.page_value(s, "tileCount"), 2)
+        s.home.setQuery("alp")
+        pump()
+        self.assertEqual([t["id"] for t in s.home.tiles], ["alpha"])
+        self.assertEqual(self.page_value(s, "tileCount"), 1)
+        s.home.setQuery("zzz")
+        pump()
+        self.assertEqual(self.page_value(s, "tileCount"), 0)
+        self.assertEqual(s.qml_warnings, [])
+
+    def test_opening_a_tile_starts_the_app_and_says_so(self):
+        s = self.open_home()
+        toasts = []
+        s.shell.toastRequested.connect(lambda text, kind: toasts.append((text, kind)))
+        reply = s.home.activate("alpha")
+        self.assertEqual(reply["result"], "launched")
+        self.assertIn(("Opening Alpha...", "info"), toasts)
+        self.assertEqual(s.home.backend.runner.started[0][0], "alpha")
+        pump()
+        self.assertEqual(next(t for t in s.home.tiles if t["id"] == "alpha")["pill"], "Running")
+        self.assertEqual(s.home.activate("soon")["result"], "coming_soon")
+        self.assertEqual(s.qml_warnings, [])
+
+    def test_apps_page_is_off_for_a_single_app_window(self):
+        s = self.open(app="heimdall", home=True)
+        self.assertIsNone(s.home)
+        self.assertNotIn("home", s.navigation.pages)
 
     def test_unknown_app_is_refused(self):
         from asgard.ui import registry

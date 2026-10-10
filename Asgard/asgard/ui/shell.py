@@ -8,6 +8,7 @@ Objects the QML sees (root context properties):
     navigation  the sidebar items, the page on screen, bridgeFor(app)
     dashboard   cards from each app's backend.dashboard() and Muninn's tile counts
     prefs       Settings page: mode, per-app accents, text size, settings files
+    home        the Apps page (Asgard's own launcher), only when the window is opened with home=True
 
 Rules it keeps:
 - Backends never see Qt. A Bridge calls them and turns results into plain dicts and lists; an
@@ -27,14 +28,15 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import (Property, QCoreApplication, QEvent, QObject, QProcess, QRunnable, QThreadPool, QUrl,
-                            Signal, Slot)
+from PySide6.QtCore import (Property, QCoreApplication, QEvent, QObject, QProcess, QRunnable, QThreadPool, QTimer,
+                            QUrl, Signal, Slot)
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine, QQmlPropertyMap
 from PySide6.QtQuickControls2 import QQuickStyle
 
 from asgard import paths, winutil
 
+from . import home as home_mod
 from . import prefs as prefs_mod
 from . import registry, theme
 
@@ -102,6 +104,7 @@ class ThemeController(QObject):
         self.current_app = home_app
         self.tokens = QQmlPropertyMap(self)
         self._accents: Dict[str, str] = {}
+        self._frame_scheme: Optional[str] = None
         self.warnings: List[str] = []
         hints = QGuiApplication.styleHints()
         if hasattr(hints, "colorSchemeChanged"):
@@ -131,7 +134,22 @@ class ThemeController(QObject):
     def resolve(self, app_id: str):
         return theme.resolve(self.mode(), *self.layers(app_id))
 
+    def _match_frame(self) -> None:
+        """Make the title bar and native dialogs follow the mode you chose, not only Windows' setting."""
+        wanted = self.prefs.mode if self.prefs.mode in theme.MODES else "system"
+        if wanted == self._frame_scheme:
+            return
+        try:
+            from PySide6.QtCore import Qt
+            hints = QGuiApplication.styleHints()
+            scheme = {"light": Qt.ColorScheme.Light, "dark": Qt.ColorScheme.Dark}.get(wanted, Qt.ColorScheme.Unknown)
+            hints.setColorScheme(scheme)          # Qt 6.8+; older Qt keeps Windows' setting
+        except (AttributeError, TypeError):
+            pass
+        self._frame_scheme = wanted
+
     def apply(self) -> None:
+        self._match_frame()
         tokens, warnings = self.resolve(self.current_app)
         for key, value in tokens.items():
             self.tokens.insert(key, value)
@@ -324,32 +342,219 @@ def _windowless(program: str) -> str:
     return program
 
 
+# ------------------------------------------------------------------ the Apps page (the launcher)
+
+
+class HomeController(QObject):
+    """home.HomeBackend for the Apps page: the tiles, a search, and timers that keep them current."""
+    changed = Signal()
+    notice = Signal(str, str)          # title, text: something the person must read, as a dialog
+
+    def __init__(self, backend: home_mod.HomeBackend, shell: ShellController) -> None:
+        super().__init__()
+        self.backend = backend
+        self.shell = shell
+        self._query = ""
+        self._tiles: List[Dict[str, Any]] = []
+        self._muninn: Dict[str, Any] = {"state": "starting", "message": "Starting Muninn...", "notice": ""}
+        self._muninn_seen = ""
+        self._poll = QTimer(self)
+        self._poll.setInterval(1000)
+        self._poll.timeout.connect(self._tick)
+        self._wait = QTimer(self)
+        self._wait.setInterval(100)
+        self._wait.timeout.connect(self._await_muninn)
+        self._badges = QTimer(self)
+        self._badges.setInterval(home_mod.BADGE_REFRESH_SECONDS * 1000)
+        self._badges.timeout.connect(self._refresh_badges)
+        self._rebuild()
+
+    def start(self) -> None:
+        """Begin the periodic work. Separate from __init__ so tests can build the window without timers."""
+        for message in self.backend.warnings:
+            self.shell.toast(message, "warning")
+        self.backend.start_muninn()
+        self._wait.start()
+        self._poll.start()
+
+    def stop(self) -> None:
+        for timer in (self._poll, self._wait, self._badges):
+            timer.stop()
+        self.backend.close()
+
+    # ---- timers
+    def _rebuild(self) -> None:
+        self._tiles = [plain(t) for t in self.backend.tiles(self._query)]
+        self.changed.emit()
+
+    def _tick(self) -> None:
+        reply = self.backend.poll()
+        for problem in reply["problems"]:
+            self.notice.emit("An app didn't start", problem)
+        if reply["changed"]:
+            self._rebuild()
+
+    def _await_muninn(self) -> None:
+        state = self.backend.muninn_state()
+        if state["state"] == "starting":
+            return
+        self._wait.stop()
+        self._muninn = state
+        if state["state"] == "ready":
+            if state["notice"]:
+                self.shell.toast(state["notice"], "info")
+            self.backend.refresh_badges(force=True)
+            self._badges.start()
+            self._rebuild()
+        else:
+            if state.get("damaged"):
+                self.notice.emit("Muninn's database is damaged", state["message"])
+            else:
+                self.shell.toast(state.get("notice") or state["message"], "warning")
+        self.changed.emit()
+
+    def _refresh_badges(self) -> None:
+        if self.backend.refresh_badges(force=True):
+            self._rebuild()
+
+    # ---- what the page reads
+    @Slot(str)
+    def setQuery(self, text: str) -> None:
+        if text != self._query:
+            self._query = text
+            self._rebuild()
+
+    @Slot()
+    def refreshCounts(self) -> None:
+        """Coming back to the window: counts are at most a few seconds old."""
+        if self.backend.refresh_badges():
+            self._rebuild()
+
+    @Slot(result="QVariant")
+    def reload(self) -> Dict[str, Any]:
+        warnings = self.backend.reload()
+        self._rebuild()
+        for message in warnings:
+            self.shell.toast(message, "warning")
+        return {"message": "Reloaded your tiles."}
+
+    # ---- what the page does
+    def _say(self, reply: Dict[str, Any]) -> Dict[str, Any]:
+        reply = plain(reply)
+        if reply.get("error"):
+            self.shell.toast(reply["error"], "error")
+        return reply
+
+    @Slot(str, result="QVariant")
+    def activate(self, app_id: str) -> Dict[str, Any]:
+        return self._after(self.backend.activate(app_id))
+
+    @Slot(str, result="QVariant")
+    def activateAgain(self, app_id: str) -> Dict[str, Any]:
+        return self._after(self.backend.activate(app_id, again=True))
+
+    @Slot(str, str, result="QVariant")
+    def setUp(self, app_id: str, path: str) -> Dict[str, Any]:
+        return self._after(self.backend.set_up(app_id, path))
+
+    def _after(self, reply: Dict[str, Any]) -> Dict[str, Any]:
+        """Toast what happened, unless the page must ask something first."""
+        reply = plain(reply)
+        kind = reply.get("result")
+        if kind in ("launched", "opened", "saved", "coming_soon") and reply.get("message"):
+            self.shell.toast(reply["message"], "info")
+        elif kind == "error":
+            self.shell.toast(reply["message"], "error")
+        if kind in ("launched", "saved"):
+            self._rebuild()
+        return reply
+
+    @Slot(str, result=str)
+    def localPath(self, url: str) -> str:
+        """A file:// URL from a file dialog as a path."""
+        return QUrl(url).toLocalFile() if url else ""
+
+    @Slot(str, result="QVariant")
+    def openLocation(self, app_id: str) -> Dict[str, Any]:
+        return self._say(self.backend.open_location(app_id))
+
+    @Slot(str, result="QVariant")
+    def viewLog(self, app_id: str) -> Dict[str, Any]:
+        return self._say(self.backend.view_log(app_id))
+
+    @Slot(result="QVariant")
+    def editTiles(self) -> Dict[str, Any]:
+        reply = self._say(self.backend.edit_tiles())
+        if reply.get("message"):
+            self.shell.toast(reply["message"], "info")
+        return reply
+
+    @Slot(result="QVariant")
+    def openData(self) -> Dict[str, Any]:
+        return self._say(self.backend.open_data_folder())
+
+    @Slot(result="QVariant")
+    def backup(self) -> Dict[str, Any]:
+        reply = self._say(self.backend.backup())
+        if reply.get("message"):
+            self.shell.toast(reply["message"], "info")
+        return reply
+
+    @Slot(result=str)
+    def about(self) -> str:
+        return self.backend.about()
+
+    @Slot(result="QVariant")
+    def uninstallInfo(self) -> Dict[str, Any]:
+        return plain(self.backend.uninstall_info())
+
+    @Slot(bool, result="QVariant")
+    def uninstall(self, purge: bool) -> Dict[str, Any]:
+        return self._say(self.backend.uninstall(purge))
+
+    tiles = Property("QVariantList", lambda self: self._tiles, notify=changed)
+    query = Property(str, lambda self: self._query, notify=changed)
+    total = Property(int, lambda self: self.backend.total(), notify=changed)
+    shown = Property(int, lambda self: len(self._tiles), notify=changed)
+    muninnState = Property(str, lambda self: str(self._muninn.get("state", "")), notify=changed)
+    muninnText = Property(str, lambda self: str(self._muninn.get("message", "")), notify=changed)
+
+
 # ------------------------------------------------------------------ navigation
 
 
 class Navigation(QObject):
     changed = Signal()
 
-    def __init__(self, apps: List[registry.AppUI], bridges: Dict[str, Bridge], themes: ThemeController) -> None:
+    def __init__(self, apps: List[registry.AppUI], bridges: Dict[str, Bridge], themes: ThemeController,
+                 home: bool = False) -> None:
         super().__init__()
         self.apps = apps
         self.bridges = bridges
         self.themes = themes
+        self.has_home = home
         self.pages: Dict[str, Dict[str, Any]] = {
-            "dashboard": {"key": "dashboard", "title": "Dashboard", "icon": "Db", "app": "",
+            "dashboard": {"key": "dashboard", "title": "Dashboard", "icon": "dashboard", "app": "",
                           "source": QUrl.fromLocalFile(str(QML_DIR / "AsgardUI" / "Dashboard.qml"))},
-            "settings": {"key": "settings", "title": "Settings", "icon": "St", "app": "",
+            "settings": {"key": "settings", "title": "Settings", "icon": "settings", "app": "",
                          "source": QUrl.fromLocalFile(str(QML_DIR / "AsgardUI" / "Settings.qml"))},
         }
+        if home:
+            self.pages = {"home": {"key": "home", "title": "Apps", "icon": "apps", "app": "",
+                                   "source": QUrl.fromLocalFile(str(QML_DIR / "AsgardUI" / "Home.qml"))},
+                          **self.pages}
         for app in apps:
             for view in app.views:
                 self.pages[view.key] = {"key": view.key, "title": view.title, "icon": view.icon, "app": app.id,
                                         "source": QUrl.fromLocalFile(str(view.qml))}
-        self._current = "dashboard"
+        self._current = "home" if home else "dashboard"
         self._history: List[str] = []
 
     def _items(self) -> List[Dict[str, Any]]:
-        out = [{"kind": "page", "key": "dashboard", "title": "Dashboard", "icon": "Db", "app": ""}]
+        out: List[Dict[str, Any]] = []
+        if self.has_home:
+            out.append({"kind": "page", "key": "home", "title": "Apps", "icon": "apps", "app": ""})
+        out.append({"kind": "page", "key": "dashboard", "title": "Dashboard", "icon": "dashboard", "app": ""})
         for app in self.apps:
             out.append({"kind": "header", "key": f"{app.id}:", "title": app.name, "icon": "", "app": app.id})
             out.extend({"kind": "page", "key": v.key, "title": v.title, "icon": v.icon, "app": app.id}
@@ -568,21 +773,25 @@ class Shell:
     """Everything the window needs, built without starting the event loop (tests use this)."""
 
     def __init__(self, app: Optional[str] = None, root: Optional[Path] = None,
-                 prefs_path: Optional[Path] = None) -> None:
+                 prefs_path: Optional[Path] = None, home: bool = False,
+                 home_backend: Optional[home_mod.HomeBackend] = None) -> None:
         self.apps, self.discovery_warnings = registry.discover(root, only=app)
         if app and not self.apps:
             raise registry.RegistryError(" ".join(self.discovery_warnings))
         single = bool(app)
-        home = self.apps[0].id if single else SUITE_ID
+        home_app = self.apps[0].id if single else SUITE_ID
         title = self.apps[0].name if single else "Asgard"
-        subtitle = (self.apps[0].subtitle or "Asgard") if single else f"{len(self.apps)} apps"
+        subtitle = (self.apps[0].subtitle or "Asgard") if single else ("Apps and tools" if home else f"{len(self.apps)} apps")
         self.prefs = prefs_mod.load(prefs_path)
         self.shell = ShellController(title, subtitle)
-        self.themes = ThemeController(self.apps, self.prefs, home)
+        self.themes = ThemeController(self.apps, self.prefs, home_app)
         self.bridges = {a.id: Bridge(a, self.shell) for a in self.apps}
-        self.navigation = Navigation(self.apps, self.bridges, self.themes)
+        self.navigation = Navigation(self.apps, self.bridges, self.themes, home=home and not single)
+        self.home: Optional[HomeController] = None
+        if home and not single:
+            self.home = HomeController(home_backend or home_mod.HomeBackend(), self.shell)
         self.dashboard = Dashboard(self.apps, self.bridges, single)
-        self.prefs_ctl = PrefsController(self.prefs, self.themes, self.apps, self.bridges, self.shell, home)
+        self.prefs_ctl = PrefsController(self.prefs, self.themes, self.apps, self.bridges, self.shell, home_app)
         self.engine = QQmlApplicationEngine()
         self.qml_warnings: List[str] = []
         self.engine.warnings.connect(self._on_warnings)
@@ -590,7 +799,7 @@ class Shell:
         ctx = self.engine.rootContext()
         for name, obj in (("theme", self.themes.tokens), ("themeCtl", self.themes), ("shell", self.shell),
                           ("navigation", self.navigation), ("dashboard", self.dashboard),
-                          ("prefs", self.prefs_ctl)):
+                          ("prefs", self.prefs_ctl), ("home", self.home)):
             ctx.setContextProperty(name, obj)
 
     def _on_warnings(self, errors: Any) -> None:
@@ -606,10 +815,14 @@ class Shell:
         for message in self.discovery_warnings + self.prefs.warnings + self.themes.warnings:
             self.shell.toast(message, "warning")
         self.dashboard.refresh()
+        if self.home is not None:
+            self.home.start()
         return True
 
     def close(self) -> None:
         """Tear down the QML before the objects it binds to, so closing logs no errors."""
+        if self.home is not None:
+            self.home.stop()
         for bridge in self.bridges.values():
             bridge.stop()
         QThreadPool.globalInstance().waitForDone(5000)
@@ -637,12 +850,12 @@ def make_app(argv: Optional[List[str]] = None) -> QGuiApplication:
     return qapp
 
 
-def run(app: Optional[str] = None, argv: Optional[List[str]] = None) -> int:
+def run(app: Optional[str] = None, argv: Optional[List[str]] = None, home: bool = False) -> int:
     _setup_logging()
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
     qapp = make_app(argv)
     try:
-        shell = Shell(app=app)
+        shell = Shell(app=app, home=home)
     except registry.RegistryError as exc:
         from . import _tell
         _tell(str(exc))

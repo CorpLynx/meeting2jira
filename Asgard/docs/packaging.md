@@ -81,7 +81,7 @@ In order:
 
 ## Open
 
-- [ ] **Signing.** Unsigned programs need App Control rules by path or hash. If the agency signs, add a signing step after the build, before `payload.sha256`.
+- [ ] **Signing.** Unsigned programs need App Control rules by path or hash. If the agency signs, add a signing step after the build, before `payload.sha256`. To find out what the workstation allows before asking IT, run `tools/asgard_signing_survey.ps1` there (read-only, seven steps; `-AsgardFolder` points it at the unzipped build, `-TryRun` runs the self-test from it). It was parse-checked on PowerShell 7.6 and smoke-run on macOS, never on Windows, so its Windows results need target-machine verification.
 - [ ] **App Control's rule for `%LOCALAPPDATA%\Asgard\app`**: by path, by hash (every release changes it), or signing.
 - [ ] **Updates** ([updates.md](updates.md)): the build already writes `payload.sha256`; the updater that checks it isn't built.
 - [x] **The first Windows run** of the workflow: green on Oct 10 (run 8 on this branch also checks setup copying the build into `app\` and its self-test there).

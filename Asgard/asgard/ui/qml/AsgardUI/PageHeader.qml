@@ -7,16 +7,15 @@ RowLayout {
     default property alias actions: actionRow.data
     property string title: ""
     property string subtitle: ""
-    spacing: 12
-
+    spacing: 14
     ColumnLayout {
-        spacing: 2
+        spacing: 4
         Layout.fillWidth: true
         Text {
             text: root.title
             color: theme.text
             font.family: theme.fontFamily
-            font.pixelSize: theme.fontSize + 9
+            font.pixelSize: theme.fontSize + 15
             font.weight: Font.Bold
             elide: Text.ElideRight
             Layout.fillWidth: true
@@ -27,12 +26,11 @@ RowLayout {
             text: root.subtitle
             color: theme.textMuted
             font.family: theme.fontFamily
-            font.pixelSize: theme.fontSize - 1
+            font.pixelSize: theme.fontSize
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }
     }
-
     RowLayout {
         id: actionRow
         spacing: 8

@@ -28,7 +28,7 @@ py -3 asgard\install.py
 
 If `py` isn't found, use `python asgard\install.py`.
 
-You need Python 3.9 or newer with Tcl/Tk (tkinter); Muninn needs 3.11 or newer on Windows, for its SQLite. Most catalog Python installs include Tcl/Tk. `tools\asgard_preflight.ps1` checks this, along with the policies that affect the other apps.
+You need Python 3.9 or newer; Muninn needs 3.11 or newer on Windows, for its SQLite. Asgard opens in its modern window when PySide6 loads (the packaged build has it, and so does a Python install where IT has added the approved PySide6-Essentials). Without PySide6 it falls back to a simpler window that needs Python with Tcl/Tk (tkinter), which most catalog Python installs include; set `ASGARD_UI=tk` to force that one. `tools\asgard_preflight.ps1` checks this, along with the policies that affect the other apps.
 
 ### Install the packaged build
 
