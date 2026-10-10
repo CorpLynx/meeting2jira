@@ -35,6 +35,10 @@ The official MCP Python SDK (`mcp` 2.3.0, `MCPServer`), running only its stdio t
 
   Without the SDK, or on a Python older than 3.10, `ysildir.cmd` says what's missing and what
   still works, and exits 2.
+- **The packaged build** ([packaging.md](../packaging.md)) includes Python 3.12, `mcp` and
+  `pydantic`, so it needs nothing installed. `ysildir.cmd setup` there writes
+  `asgard-cli.exe apps\ysildir\cli.py serve` as the client's command (`clients.launch`), and the
+  build's checks drive Ysildir over stdio from it.
 
 ## Commands
 
@@ -53,7 +57,8 @@ The official MCP Python SDK (`mcp` 2.3.0, `MCPServer`), running only its stdio t
 `setup --print` shows the commands and snippets without changing anything; `--force` replaces an
 entry that's already there. Setup keeps every other server in a file, refuses a file it can't
 parse (VS Code's may have comments) and prints the snippet to paste instead. The client starts the
-Python that ran setup, with `cli.py serve`; run setup again after changing Python.
+Python that ran setup, with `cli.py serve` (in the packaged build, its `asgard-cli.exe`); run setup
+again after changing Python or moving the build.
 
 Kiro's `autoApprove` lists only the read-only tools that are on. Adding `baldur_record_estimate`
 to it saves a click after every commit, and a report never changes a figure on its own; that's

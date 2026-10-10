@@ -34,3 +34,6 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+
+# Asgard packaged build (Asgard/packaging/build.py): venv, PyInstaller work folder, dist and zips.
+Asgard/build/

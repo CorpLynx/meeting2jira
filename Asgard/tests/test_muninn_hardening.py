@@ -574,6 +574,18 @@ class CliTests(Base):
         self.assertIn("Retention is on", text)
         self.assertTrue(integrity.retention_on(self.con))
 
+    def test_prepare_creates_or_updates_without_a_window(self):
+        fresh = self.dir / "fresh" / "muninn.db"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(["--db", str(fresh), "--backups", str(self.dir / "fresh-backups"), "prepare"])
+        self.assertEqual(code, 0)
+        self.assertIn(f"schema v{muninn.SCHEMA_VERSION}", out.getvalue())
+        self.assertIn("(created)", out.getvalue())
+        code, text = self.run_cli("prepare")              # already current: nothing to migrate
+        self.assertEqual(code, 0)
+        self.assertNotIn("migrated", text)
+
     def test_check_exits_1_on_an_error(self):
         self.con.execute("DROP TRIGGER event_cursors_within_log_ins")
         self.con.execute("INSERT INTO event_cursors (app, last_event_id, updated_at) VALUES ('freya', 50, ?)", (NOW,))

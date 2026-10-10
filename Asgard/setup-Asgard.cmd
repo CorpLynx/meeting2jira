@@ -8,7 +8,9 @@ title Asgard setup
 if not exist "%~dp0asgard\install.py" goto not_extracted
 
 set "PYEXE="
-call :try_python py -3
+rem The packaged build brings its own Python: asgard-cli.exe, beside this file.
+if exist "%~dp0asgard-cli.exe" set PYEXE="%~dp0asgard-cli.exe"
+if not defined PYEXE call :try_python py -3
 if not defined PYEXE call :try_python py
 if not defined PYEXE call :try_python python
 if not defined PYEXE goto no_python

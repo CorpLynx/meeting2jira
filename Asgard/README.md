@@ -1,6 +1,11 @@
 # Asgard
 
-Asgard is a launcher for the Asgard suite: one window with a tile for each app, like the Microsoft My Apps portal. It runs on the Python your agency already provides. It installs per user, so you don't need admin rights.
+Asgard is a launcher for the Asgard suite: one window with a tile for each app, like the Microsoft My Apps portal. It runs on the Python your agency already provides, or as a packaged build that brings its own. It installs per user, so you don't need admin rights.
+
+There are two ways to install it. Both hold the same apps, keep your data in `%LOCALAPPDATA%\Asgard`, and are uninstalled the same way:
+
+- **With Python** (below): the zip of the code, on your agency's Python. It needs no programs approved, so it's the default.
+- **The packaged build** (programs made with PyInstaller): it needs no Python, but IT has to allow its programs. See [Install the packaged build](#install-the-packaged-build).
 
 ## Install
 
@@ -23,7 +28,18 @@ py -3 asgard\install.py
 
 If `py` isn't found, use `python asgard\install.py`.
 
-You need Python 3.9 or newer with Tcl/Tk (tkinter). Most catalog Python installs include it. `tools\asgard_preflight.ps1` checks this, along with the policies that affect the other apps.
+You need Python 3.9 or newer with Tcl/Tk (tkinter); Muninn needs 3.11 or newer on Windows, for its SQLite. Most catalog Python installs include Tcl/Tk. `tools\asgard_preflight.ps1` checks this, along with the policies that affect the other apps.
+
+### Install the packaged build
+
+The packaged build is a folder with `Asgard.exe`, `asgard-cli.exe`, Python 3.12 and the packages the apps use (the shared window's Qt and Ysildir's MCP SDK). It comes as `Asgard-VERSION-windows-x64.zip` from a GitHub release, or from the **Package Asgard** workflow's artifact.
+
+1. **Check the download.** Compare `certutil -hashfile Asgard-0.4.0-windows-x64.zip SHA256` with the `.sha256` file beside the zip.
+2. **Unblock it and extract it** into a folder your policy allows programs to run from. Ask IT which; they may put it in place for you. It runs where it is: setup doesn't copy it, and it never writes into its own folder, so a read-only folder is fine.
+3. **Check it.** Open Command Prompt in the folder and run `asgard-cli.exe --self-test`. Each line should say `[ok]`. A blocked DLL or program means App Control needs to allow this folder's files; show IT the output.
+4. **Double-click `setup-Asgard.cmd`** in the folder. If `.cmd` files are blocked, run `asgard-cli.exe asgard\install.py` instead. Setup adds the Start menu shortcut and the **Settings > Apps** entry, and opens Asgard.
+
+Keep the folder where it is: the shortcut points to it. To upgrade, close Asgard, put the new folder in place of the old one, and run setup again. Heimdall's `fill` isn't in the packaged build, because it needs Playwright's own programs; `fill --dry-run` still lists every value to type. [docs/packaging.md](docs/packaging.md) has the details.
 
 ## Using Asgard
 
@@ -36,7 +52,7 @@ You need Python 3.9 or newer with Tcl/Tk (tkinter). Most catalog Python installs
 
 ## Baldur from the command line
 
-Baldur's window opens from its tile. Everything Baldur does also works from Command Prompt:
+Baldur's window opens from its tile. Everything Baldur does also works from Command Prompt. In the packaged build, `cd` to its `apps\baldur` folder instead; `baldur.cmd` uses the build's own `asgard-cli.exe`, and every command below works the same:
 
 ```
 cd /d "%LOCALAPPDATA%\Asgard\app\apps\baldur"
@@ -136,7 +152,7 @@ comment says so, in exactly the words `ai show` showed you.
 
 ## Ysildir: Asgard for your AI client
 
-Ysildir is an MCP server: an AI client (Kiro, Copilot agent mode in VS Code, Claude Code) starts it and gets tools that teach it Baldur and Muninn, take its estimates of your time into Baldur, and answer questions from Muninn. It never approves, changes or posts anything; it gives you the command instead. It needs Python 3.10+ and the MCP SDK (`mcp` and `pydantic` from `requirements.txt`, with IT's approval of their compiled parts). Without them, `ysildir.cmd` says what's missing, and agents still use `baldur.cmd ai record` and the clipboard review.
+Ysildir is an MCP server: an AI client (Kiro, Copilot agent mode in VS Code, Claude Code) starts it and gets tools that teach it Baldur and Muninn, take its estimates of your time into Baldur, and answer questions from Muninn. It never approves, changes or posts anything; it gives you the command instead. It needs Python 3.10+ and the MCP SDK (`mcp` and `pydantic` from `requirements.txt`, with IT's approval of their compiled parts). Without them, `ysildir.cmd` says what's missing, and agents still use `baldur.cmd ai record` and the clipboard review. The packaged build has both already: `ysildir.cmd setup` there points your AI client at the build's `asgard-cli.exe`.
 
 ```
 ysildir.cmd setup --kiro C:\src\my-service     connect Kiro in that workspace (--vscode DIR, --claude DIR,
@@ -235,9 +251,10 @@ Paths can use `{app}` (Asgard's code folder), `{data}` (Asgard's data folder) an
 
 ## Looking after Muninn
 
-Asgard checks Muninn each time it starts. It backs it up once a day and tidies it: it refreshes statistics, folds the write-ahead log in, and rebuilds a damaged search index. If the file itself is damaged, Asgard says so and names the newest backup. From a console, in `%LOCALAPPDATA%\Asgard\app`, using `python.exe` (`pythonw.exe` prints nothing):
+Asgard checks Muninn each time it starts. It backs it up once a day and tidies it: it refreshes statistics, folds the write-ahead log in, and rebuilds a damaged search index. If the file itself is damaged, Asgard says so and names the newest backup. From a console, in `%LOCALAPPDATA%\Asgard\app`, using `python.exe` (`pythonw.exe` prints nothing). In the packaged build, run the same commands in its folder as `asgard-cli.exe --muninn status` and so on:
 
 ```
+python Asgard.pyw --muninn prepare           create Muninn or bring it up to date, as opening Asgard does
 python Asgard.pyw --muninn status            version, sizes, backups, last housekeeping
 python Asgard.pyw --muninn check             look for damage and anything that should never happen (exit 1 if found)
 python Asgard.pyw --muninn repair            rebuild the search index, put back missing protections
@@ -250,13 +267,13 @@ python Asgard.pyw --muninn retention on|off  prune old run records daily (off un
 
 ## Uninstall
 
-Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > Uninstall Asgard**. Valhalla removes what setup recorded: the app folder, the shortcuts and the Settings entry. It asks before deleting your data (tile settings, logs, the Muninn database and its backups). It never deletes anything outside Asgard's own folders, and it doesn't touch apps that live elsewhere, such as Odin.
+Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > Uninstall Asgard**. Valhalla removes what setup recorded: the app folder, the shortcuts and the Settings entry. It asks before deleting your data (tile settings, logs, the Muninn database and its backups). It never deletes anything outside Asgard's own folders, and it doesn't touch apps that live elsewhere, such as Odin. So the packaged build's folder stays: Valhalla says where it is, and you (or IT) delete it once Asgard has closed.
 
 ## Where things live
 
 | Path | What |
 | --- | --- |
-| `%LOCALAPPDATA%\Asgard\app` | The installed code, replaced on upgrade |
+| `%LOCALAPPDATA%\Asgard\app` | The installed code, replaced on upgrade (the Python install only: the packaged build runs from its own folder) |
 | `%LOCALAPPDATA%\Asgard\apps.local.json` | Your tile settings |
 | `%LOCALAPPDATA%\Asgard\logs` | One log per app, plus `launcher.log` |
 | `%LOCALAPPDATA%\Asgard\muninn.db` | Muninn, the database the apps share (with `-wal` and `-shm` files beside it) |
@@ -270,7 +287,7 @@ Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > 
 | `%LOCALAPPDATA%\Asgard\settings\heimdall-templates.json` | Your Heimdall templates. Heimdall won't overwrite this file if it can't read it |
 | `%LOCALAPPDATA%\Asgard\heimdall\edge-profile` | The Edge profile Heimdall signs in with; delete it to sign out. Traces from `--trace` go in `heimdall\traces` |
 
-To upgrade, download the new zip and run setup again. Your tile settings stay. Close Asgard first.
+To upgrade, download the new zip and run setup again. Your tile settings stay. Close Asgard first. For the packaged build, replace its folder with the new one, then run its setup.
 
 ## Muninn, for app authors
 
@@ -321,11 +338,12 @@ Three rules keep the data right:
 
 ## For maintainers
 
-- **Layout.** `setup-Asgard.cmd` finds Python and runs `asgard/install.py`. `Asgard.pyw` starts `asgard/launcher.py`. Default tiles are in `asgard/apps.json`. Put bundled apps in `apps/<id>/` and point their tile at `{app}\apps\<id>\<entry>.pyw`.
+- **Layout.** `setup-Asgard.cmd` finds Python (or the packaged build's `asgard-cli.exe`) and runs `asgard/install.py`. `Asgard.pyw` starts `asgard/launcher.py`. Default tiles are in `asgard/apps.json`. Put bundled apps in `apps/<id>/` and point their tile at `{app}\apps\<id>\<entry>.pyw`.
 - **Rules.** The launcher, setup and Muninn use the Python standard library only, so they run anywhere the catalog Python runs. Keep `setup-Asgard.cmd` ASCII with CRLF line endings; `.gitattributes` enforces CRLF.
 - **Adding pages to the shared window.** Create `apps/<id>/ui/manifest.json` (`app`, `name`, `subtitle`, `theme`, `backend` as `package.module:Class`, and `views`: `id`, `title`, two-letter `icon`, `qml`), the QML files beside it, and the backend class. QML pages `import AsgardUI` for `ScrollPage`, `PageHeader`, `Card`, `MetricCard`, `AppButton`, `NavItem`, `Pill` and `EmptyState`, use only `theme.*` for colours and sizes, and declare `property var bridge: null` to get the backend: `bridge.call("method", [args])` returns a dict, with `error` set when it raised a `ValueError`. Optional backend methods: `dashboard()` (cards with `label`, `value`, `detail`, `tone`, `view`) and `settings_files()`. Heimdall (`apps/heimdall/ui/`, `heimdall/ui_backend.py`) is the worked example. Nothing in `asgard/ui` changes when an app is added.
 - **Packages.** The best module for each job, declared and pinned in `requirements.txt` (`docs/dependency-policy.md`), and imported only where needed: Playwright only in Heimdall's `browser.py` when `fill` runs, PySide6 only in `asgard/ui/shell.py` when a window opens. [MODULES.md](MODULES.md) lists each package, where it's used, and what to use instead if it isn't available on-prem. `tests/test_dependencies.py` enforces all of this.
 - **Tests.** Run `py -3 -m unittest discover -s tests`. Heimdall's browser tests (`tests/test_heimdall_browser.py`, against `tests/fake_servicenow.py`) skip unless Playwright and a browser are installed; set `HEIMDALL_TEST_CHANNEL=msedge` to use Edge. The window's tests (`tests/test_ui_qt.py`) skip unless PySide6 is installed and run offscreen (`QT_QPA_PLATFORM=offscreen`). The schema's own checks (`tools/check_muninn_schema.py`) switch time zones, so they run on Linux, macOS or WSL and are skipped on Windows.
 - **Schema changes.** Add `asgard/muninn/migrations/000N_<name>.sql`, numbered one past the last. The runner wraps each file in a transaction and sets `user_version`. A migration that rebuilds a table starts with `-- muninn: foreign_keys=off`. Never edit a migration that has shipped. Add new tables to `guard.OWNERS` (a test fails until you do) and checks to `tools/check_muninn_schema.py`; `--muninn check` compares every file with what the migrations make, so the schema must come only from migrations.
-- **Releases.** Bump `VERSION`, tag (`git tag v0.2.0`), push the tag, and publish a release from it. GitHub attaches the zip automatically. `.gitattributes` keeps `tests/` and other maintainer files out of downloaded zips.
+- **Releases.** Bump `VERSION`, then tag `asgard-vX.Y.Z` (matching `VERSION`) and push the tag. The **Package Asgard** workflow (`.github/workflows/asgard-package.yml`) builds and checks the packaged build on Windows and publishes the release with its zip and `.sha256`; GitHub adds the source zip. `.gitattributes` keeps `tests/` and other maintainer files out of downloaded zips.
+- **The packaged build.** `py -3.12 packaging\build.py` makes it locally, by the same steps as the workflow: pinned packages in `build\venv`, the tests, PyInstaller (`packaging/asgard.spec`), checks through the built programs, then the zip. Add `--skip-tests` or `--keep-venv` to go faster; on macOS or Linux it makes that system's build, to try the steps. [docs/packaging.md](docs/packaging.md) explains the decisions (one folder that runs in place; `Asgard.exe` and `asgard-cli.exe` standing in for `pythonw` and `python`; Asgard's code shipped as `.py` files) and what IT needs on the workstation.
 - **Icon.** `tools/make_icon.py` regenerates `asgard/asgard.ico`. It needs Pillow.

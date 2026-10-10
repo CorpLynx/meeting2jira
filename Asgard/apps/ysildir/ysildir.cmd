@@ -3,7 +3,9 @@ rem Ysildir, Asgard's MCP server for AI clients. Try: ysildir help
 rem An AI client starts Python with cli.py serve directly (ysildir setup writes that); this file is for you.
 setlocal EnableExtensions
 set "PYEXE="
-call :try_python py -3
+rem The packaged build brings its own Python: asgard-cli.exe, two folders up.
+if exist "%~dp0..\..\asgard-cli.exe" set PYEXE="%~dp0..\..\asgard-cli.exe"
+if not defined PYEXE call :try_python py -3
 if not defined PYEXE call :try_python py
 if not defined PYEXE call :try_python python
 if not defined PYEXE (
@@ -19,6 +21,6 @@ if /i "%~1"=="help" (
 exit /b %ERRORLEVEL%
 
 :try_python
-%* -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >/dev/null 2>&1
+%* -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>&1
 if not errorlevel 1 set "PYEXE=%*"
 exit /b 0

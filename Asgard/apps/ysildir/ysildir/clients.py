@@ -25,6 +25,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from asgard import paths
+
 from . import Refused
 from .config import Config
 
@@ -33,7 +35,13 @@ NAME = "ysildir"
 
 
 def launch() -> Tuple[str, List[str]]:
-    """The command and arguments an AI client runs to start Ysildir."""
+    """The command and arguments an AI client runs to start Ysildir.
+
+    In the packaged build that's its console program, asgard-cli.exe, which runs cli.py as Python
+    would (stdio needs a console program, never the windowless Asgard.exe).
+    """
+    if paths.FROZEN:
+        return paths.frozen_programs()[0], [str(CLI), "serve"]
     return sys.executable, [str(CLI), "serve"]
 
 

@@ -1,0 +1,104 @@
+# Asgard's packaged build: Windows programs made with PyInstaller (Asgard/docs/packaging.md).
+#
+# It runs Asgard/packaging/build.py, the same script you run locally: the pinned packages in a fresh
+# virtual environment, the unit tests, PyInstaller, checks on the built folder (self-test, Muninn,
+# Baldur, Ysildir, Heimdall, setup in place) and the zip with its sha256. The zip is uploaded as an
+# artifact. A tag named asgard-vX.Y.Z also publishes it as a GitHub release, once VERSION says X.Y.Z.
+#
+# Actions are pinned to full commit SHAs (the tag each was is in its comment), each released at
+# least two weeks before it was pinned. Nothing here signs the programs: App Control on the
+# workstation needs IT to allow or sign them (docs/packaging.md, "On the workstation").
+name: Package Asgard
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["asgard-v*"]               # path filters don't apply to tags: every asgard-v tag builds
+    branches: ["**"]                  # a branch builds when its push changes the packaging itself
+    paths:
+      - "Asgard/packaging/**"
+      - ".github/workflows/asgard-package.yml"
+  pull_request:
+    paths:
+      - "Asgard/**"
+      - ".github/workflows/asgard-package.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: asgard-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Build and check (Windows x64)
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen      # Qt tests and the self-test load Qt without opening a window
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            Asgard/requirements.txt
+            Asgard/packaging/requirements-build.txt
+
+      - name: VERSION matches the tag
+        if: startsWith(github.ref, 'refs/tags/asgard-v')
+        shell: pwsh
+        run: |
+          $version = (Get-Content Asgard/VERSION -Raw).Trim()
+          $tag = "${{ github.ref_name }}".Substring("asgard-v".Length)
+          if ($version -ne $tag) {
+            Write-Error "Asgard/VERSION says $version but the tag says $tag. Bump VERSION (AGENTS.md: shipping means a VERSION bump), then tag again."
+            exit 1
+          }
+
+      - name: Build, test and check
+        run: python Asgard/packaging/build.py
+
+      - name: Upload the zip
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: asgard-windows-x64
+          path: |
+            Asgard/build/Asgard-*.zip
+            Asgard/build/Asgard-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish the release
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/asgard-v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download the zip
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: asgard-windows-x64
+          path: dist
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Asgard ${TAG#asgard-v}" \
+            --notes "Asgard's packaged build for Windows x64. Unzip it where your policy allows programs to run (IT may need to allow or sign Asgard.exe and asgard-cli.exe), then run setup-Asgard.cmd. Check the zip against its .sha256. Asgard/README.md, \"Install the packaged build\", has the steps."

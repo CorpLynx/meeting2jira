@@ -517,7 +517,12 @@ class Status:
 
 
 def console_python() -> str:
-    """This Python, as the console python.exe when running under pythonw.exe (which prints nowhere)."""
+    """This Python, as the console python.exe when running under pythonw.exe (which prints nowhere).
+
+    In the packaged build, the console program asgard-cli.exe (paths.frozen_programs).
+    """
+    if paths.FROZEN:
+        return paths.frozen_programs()[0]
     exe = Path(sys.executable)
     if exe.name.lower() == "pythonw.exe" and exe.with_name("python.exe").exists():
         exe = exe.with_name("python.exe")

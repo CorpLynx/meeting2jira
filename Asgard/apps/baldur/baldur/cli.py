@@ -737,6 +737,8 @@ def schedule_command(day: str, at: str, remove: bool = False, python: Optional[s
     exe = Path(python or sys.executable)
     quiet = exe.with_name("pythonw.exe")
     exe = quiet if quiet.exists() else exe
+    if python is None and paths.FROZEN:        # the packaged build: Asgard.exe runs cli.py, no console
+        exe = Path(paths.frozen_programs()[1])
     action = f'"{exe}" "{ENTRY}" collect --quiet'
     if len(action) > 261:
         raise CliError("The scheduled command would be longer than Windows allows (261 characters).")

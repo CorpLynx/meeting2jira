@@ -8,7 +8,7 @@ collection or an estimate; it may not:
 - note real hours (actual), which calibration trusts as ground truth, or accept a calibration;
 - change Baldur's settings, a commit's keys, which repositories count, the schedule or the
   GitHub token;
-- touch Muninn's file directly (muninn.db), or run Asgard's database maintenance;
+- touch Muninn's file directly (muninn.db), run Asgard's database maintenance, or uninstall Asgard;
 - switch Ysildir's tools on or off, connect AI clients to it (ysildir.cmd tools --on/--off, setup),
   or touch its switches file (ysildir.json): which tools an agent may use is the person's choice,
   approved by their ISSO.
@@ -219,6 +219,8 @@ def verdict(command: str, depth: int = 0) -> Optional[str]:
         for n, word in enumerate(lowered[:-1]):
             if word == "--muninn" and lowered[n + 1] in MUNINN_MAINTENANCE:
                 return MESSAGE.format(what="Muninn maintenance (restore, repair, retention)")
+        if "--uninstall" in lowered:          # Asgard.pyw, Asgard.exe or asgard-cli.exe; --purge deletes Muninn
+            return MESSAGE.format(what="Uninstalling Asgard")
         for word in words:
             if _quoted(word):
                 why = verdict(_unquote(word), depth + 1)

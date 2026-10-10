@@ -39,6 +39,7 @@ class Result:
     removed: List[str] = field(default_factory=list)
     kept: List[str] = field(default_factory=list)
     skipped: List[Tuple[str, str]] = field(default_factory=list)
+    packaged: Optional[str] = None      # the packaged build's folder: it runs in place, and stays
 
     @property
     def ok(self) -> bool:
@@ -117,7 +118,7 @@ def uninstall(purge: bool = False) -> Result:
     ledger = load_ledger()
     items = list(reversed(ledger.get("items", []))) if ledger else default_items()
     expected_key = ("HKCU\\" + paths.UNINSTALL_SUBKEY).lower()
-    res = Result()
+    res = Result(packaged=str(ledger["packaged"]) if ledger and ledger.get("packaged") else None)
     for item in items:
         kind, raw = item.get("kind"), str(item.get("path", ""))
         try:
@@ -176,6 +177,9 @@ def summary(res: Result) -> str:
     lines = ["Removed Asgard and its shortcuts." if res.removed else "There was nothing left to remove."]
     if res.kept:
         lines.append(f"\nKept your data in {paths.data_dir()}.")
+    if res.packaged:
+        lines.append(f"\nThe packaged build stays in {res.packaged}. Delete that folder yourself once Asgard "
+                     "has closed, or ask IT if they put it there.")
     if res.skipped:
         lines.append("\nNot removed:")
         lines += [f"  {path}: {why}" for path, why in res.skipped]

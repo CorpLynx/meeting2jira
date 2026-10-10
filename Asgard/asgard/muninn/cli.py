@@ -1,5 +1,6 @@
 """Looking after Muninn by hand.
 
+    python Asgard.pyw --muninn prepare           create Muninn or bring it up to date, as opening Asgard does
     python Asgard.pyw --muninn status            version, size, backups, today's housekeeping
     python Asgard.pyw --muninn check             everything that should never happen (exit 1 if any)
     python Asgard.pyw --muninn repair            rebuild the search index, fix event cursors
@@ -40,6 +41,19 @@ def _size(p: Path) -> str:
     except OSError:
         return "-"
     return f"{n / 1048576:.1f} MB" if n >= 1048576 else f"{n / 1024:.0f} KB"
+
+
+def cmd_prepare(path: Optional[Path], backups: Optional[Path]) -> int:
+    """What the launcher does at start (db.prepare), without a window: for a headless install or a check."""
+    done = db.prepare(path, backups=backups)
+    _out(f"Muninn is ready: schema v{done.version} at {done.path}"
+         + (" (created)" if done.created else "")
+         + (f"; migrated {', '.join(done.migrated)}" if done.migrated else "") + ".")
+    if done.backup:
+        _out(f"Backup: {done.backup}")
+    for warning in done.warnings:
+        _out(f"  ! {warning}")
+    return 0
 
 
 def cmd_status(path: Optional[Path], backups: Optional[Path]) -> int:
@@ -154,6 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--db", type=Path, help=argparse.SUPPRESS)          # tests point these at a temp folder
     p.add_argument("--backups", type=Path, help=argparse.SUPPRESS)
     sub = p.add_subparsers(dest="command", required=True)
+    sub.add_parser("prepare", help="create Muninn or bring it up to date, as opening Asgard does")
     sub.add_parser("status", help="version, size, backups, housekeeping")
     sub.add_parser("check", help="look for damage and for anything that should never happen")
     sub.add_parser("repair", help="rebuild the search index and fix event cursors")
@@ -170,6 +185,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "prepare":
+            return cmd_prepare(args.db, args.backups)
         if args.command == "status":
             return cmd_status(args.db, args.backups)
         if args.command == "check":

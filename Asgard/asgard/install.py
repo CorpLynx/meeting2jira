@@ -6,6 +6,10 @@ yourself from the extracted folder:
     py -3 asgard\\install.py            (or: python asgard\\install.py)
 
 Options: --desktop adds a desktop shortcut; --no-launch skips opening Asgard.
+
+The packaged build (docs/packaging.md) runs this through asgard-cli.exe. It isn't copied: it runs
+in place from the folder IT put it in, because setup never writes programs into your profile
+(AGENTS.md rule 2). Setup then adds only the shortcuts, the Settings > Apps entry and the record.
 """
 from __future__ import annotations
 
@@ -56,8 +60,22 @@ def check_prerequisites() -> None:
                          f"       ({exc})", 2) from exc
     if not (SOURCE_ROOT / "Asgard.pyw").exists() or not (SOURCE_ROOT / "asgard" / "launcher.py").exists():
         raise SetupError("Setup can't find Asgard's files. Extract the whole zip, then run setup again.")
+    if paths.FROZEN:
+        if _within(SOURCE_ROOT, paths.data_dir()):
+            raise SetupError(f"The packaged build is inside Asgard's data folder ({paths.data_dir()}), which setup "
+                             "manages.\n       Put it in a folder of its own (one your IT allows programs to run "
+                             "from), then run setup again.")
+        return
     if paths.app_dir().exists() and SOURCE_ROOT.resolve() == paths.app_dir().resolve():
         raise SetupError("This is the installed copy. Run setup from the folder you downloaded and extracted.")
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def load_ledger() -> Dict[str, Any]:
@@ -110,26 +128,36 @@ def folder_size_kb(folder: Path) -> int:
 
 def install(desktop: bool = False) -> Dict[str, Any]:
     data, app = paths.data_dir(), paths.app_dir()
-    print(f"  Python   {sys.executable} ({platform.python_version()})")
+    if paths.FROZEN:
+        print(f"  Program  {SOURCE_ROOT} (packaged build, Python {platform.python_version()})")
+    else:
+        print(f"  Python   {sys.executable} ({platform.python_version()})")
     print(f"  Folder   {data}\n")
     data.mkdir(parents=True, exist_ok=True)
 
     ledger = load_ledger()
     previous = ledger.get("version")
-    staged = data / "app.new"
-    if staged.exists():
-        shutil.rmtree(staged)
-    count = copy_payload(SOURCE_ROOT, staged)
-    swap_in(staged, app)
     note = f", replacing {previous}" if previous and previous != __version__ else (
         ", reinstalled" if previous else "")
-    say("ok", f"Copied {count} files{note}")
+    items: List[Dict[str, str]] = []
+    if paths.FROZEN:
+        app = SOURCE_ROOT       # runs in place; Valhalla never deletes it (it's outside the data folder)
+        say("ok", f"Runs from {app}{note}. Keep that folder: the shortcuts point to it")
+    else:
+        staged = data / "app.new"
+        if staged.exists():
+            shutil.rmtree(staged)
+        count = copy_payload(SOURCE_ROOT, staged)
+        swap_in(staged, app)
+        say("ok", f"Copied {count} files{note}")
+        items.append({"kind": "dir", "path": str(app)})
 
     paths.log_dir().mkdir(parents=True, exist_ok=True)
     catalog.ensure_local_manifest()
-    items: List[Dict[str, str]] = [{"kind": "dir", "path": str(app)}]
     python, pythonw = catalog.python_paths()
     entry, icon = app / "Asgard.pyw", app / "asgard" / "asgard.ico"
+    # The packaged build's Asgard.exe opens the launcher by itself; Python needs the script named.
+    start = "" if paths.FROZEN else f'"{entry}"'
     shortcut_made = False
 
     if winutil.IS_WINDOWS:
@@ -142,7 +170,7 @@ def install(desktop: bool = False) -> Dict[str, Any]:
                 continue
             lnk = folder / paths.SHORTCUT_NAME
             try:
-                winutil.create_shortcut(lnk, pythonw, f'"{entry}"', str(data), str(icon), "Asgard app launcher")
+                winutil.create_shortcut(lnk, pythonw, start, str(data), str(icon), "Asgard app launcher")
                 items.append({"kind": "file", "path": str(lnk)})
                 shortcut_made = True
                 say("ok", f"{label} shortcut")
@@ -155,8 +183,8 @@ def install(desktop: bool = False) -> Dict[str, Any]:
                 "Publisher": "Asgard",
                 "InstallLocation": str(app),
                 "DisplayIcon": str(icon),
-                "UninstallString": f'"{pythonw}" "{entry}" --uninstall',
-                "QuietUninstallString": f'"{python}" "{entry}" --uninstall --yes',
+                "UninstallString": " ".join(filter(None, [f'"{pythonw}"', start, "--uninstall"])),
+                "QuietUninstallString": " ".join(filter(None, [f'"{python}"', start, "--uninstall --yes"])),
                 "InstallDate": dt.date.today().strftime("%Y%m%d"),
                 "EstimatedSize": folder_size_kb(app),
                 "NoModify": 1,
@@ -175,6 +203,8 @@ def install(desktop: bool = False) -> Dict[str, Any]:
     history = list(ledger.get("history", [])) + [{"version": __version__, "at": now}]
     record = {"product": "Asgard", "version": __version__, "installed_at": now,
               "python": python, "pythonw": pythonw, "items": merged, "history": history[-20:]}
+    if paths.FROZEN:
+        record["packaged"] = str(app)       # Valhalla says this folder stays, for you or IT to remove
     tmp = paths.ledger_path().with_suffix(".json.tmp")
     tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
     os.replace(tmp, paths.ledger_path())
@@ -184,7 +214,8 @@ def install(desktop: bool = False) -> Dict[str, Any]:
 
 def launch(entry: Path, pythonw: str, data: Path) -> None:
     if winutil.IS_WINDOWS:
-        subprocess.Popen([pythonw, str(entry)], cwd=str(data), close_fds=True,
+        argv = [pythonw] if paths.FROZEN else [pythonw, str(entry)]
+        subprocess.Popen(argv, cwd=str(data), close_fds=True,
                          creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
 
 
@@ -213,7 +244,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("Asgard is installed. Find it in the Start menu; right-click it there to pin it to the taskbar.")
     else:
         print("Asgard is installed. Start it with:")
-        print(f'  "{done["pythonw"]}" "{done["entry"]}"')
+        print(f'  "{done["pythonw"]}"' + ("" if paths.FROZEN else f' "{done["entry"]}"'))
     return 0
 
 

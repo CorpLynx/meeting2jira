@@ -306,8 +306,14 @@ class Bridge(QObject):
 
 
 def _windowless(program: str) -> str:
-    """On Windows, run python.exe children as pythonw.exe so no console window flashes up."""
+    """On Windows, run python.exe children as pythonw.exe so no console window flashes up.
+
+    In the packaged build, asgard-cli.exe children run as Asgard.exe, for the same reason.
+    """
     path = Path(program)
+    if paths.FROZEN:
+        console, windowed = paths.frozen_programs()
+        return windowed if path.name.lower() == Path(console).name.lower() else program
     if sys.platform == "win32" and path.name.lower() == "python.exe":
         quiet = path.with_name("pythonw.exe")
         if quiet.exists():

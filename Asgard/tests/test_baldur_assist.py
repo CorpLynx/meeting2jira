@@ -629,6 +629,23 @@ class AgentGuardTests(unittest.TestCase):
             with self.subTest(command):
                 self.assertIsNone(self.guard.verdict(command))
 
+    def test_the_packaged_builds_programs_are_read_the_same_way(self):
+        """asgard-cli.exe and Asgard.exe run Asgard's scripts as python does (docs/packaging.md)."""
+        build = r"C:\Program Files\Asgard"
+        for command in (rf'"{build}\asgard-cli.exe" "{build}\apps\baldur\cli.py" approve --date 2026-10-01',
+                        r"asgard-cli.exe apps\baldur\cli.py calibrate --accept",
+                        rf'cd /d "{build}\apps\baldur" && baldur.cmd approve --date 2026-10-01',
+                        rf'"{build}\asgard-cli.exe" "{build}\apps\ysildir\cli.py" tools --on baldur_day',
+                        "asgard-cli.exe --muninn restore --yes", r"asgard-cli.exe Asgard.pyw --muninn repair",
+                        "asgard-cli.exe --uninstall --yes --purge", rf'"{build}\Asgard.exe" --uninstall',
+                        "python Asgard.pyw --uninstall --yes"):
+            with self.subTest(command):
+                self.assertIsNotNone(self.guard.verdict(command))
+        for command in (r"asgard-cli.exe apps\baldur\cli.py report today", "asgard-cli.exe --self-test",
+                        "asgard-cli.exe --muninn check", r"asgard-cli.exe apps\ysildir\cli.py check"):
+            with self.subTest(command):
+                self.assertIsNone(self.guard.verdict(command))
+
     def test_r6_commands_inside_quotes_bare_cli_py_and_files_are_blocked(self):
         """Review R6 (2026-10-09): each of these got past the guard, and one approved a day."""
         b = r'py -3 "C:\Users\me\AppData\Local\Asgard\app\apps\baldur\cli.py"'

@@ -8,6 +8,8 @@ Oct 6, 2026 · status: proposed · owner: Asgard core
 
 `asgard/install.py` copies a payload into `%LOCALAPPDATA%\Asgard\app.new`, swaps it in (the old folder is renamed `app.old-<time>` and removed after a good swap), and appends `{version, at}` to the ledger's history. There is no update check, no version comparison and no downgrade guard; you rerun `setup-Asgard.cmd` from a new copy.
 
+The packaged build ([packaging.md](packaging.md)) runs in place instead of being copied: you replace its folder and run its setup again. Its build step already writes `payload.sha256` (step 1 below), one line per file; nothing checks it yet.
+
 ## The model
 
 - **One version for the payload** (`VERSION`, semver), plus each app's own version in its manifest entry (see [platform-consolidation.md](platform-consolidation.md)). The About box lists all of them and Muninn's schema version.
