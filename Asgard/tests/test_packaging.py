@@ -217,9 +217,12 @@ class FrozenSetupTests(Home):
         self.assertFalse((self.dir / "home" / "install-ledger.json").exists())
 
     def test_the_folder_path_is_quoted_for_powershell(self):
+        folder = Path("C:/Users/O'Brien/AppData/Local/Asgard/app")
         with mock.patch.object(valhalla.subprocess, "Popen"):
-            argv = valhalla.remove_after_exit(Path("C:/Users/O'Brien/AppData/Local/Asgard/app"), pid=42)
-        self.assertIn("'C:/Users/O''Brien/AppData/Local/Asgard/app'", argv[-1])
+            argv = valhalla.remove_after_exit(folder, pid=42)
+        # PowerShell's single quotes take a quote as two; str() gives the system's own separators.
+        self.assertIn("-LiteralPath '" + str(folder).replace("'", "''") + "'", argv[-1])
+        self.assertIn("O''Brien", argv[-1])
 
     def test_setup_refuses_to_run_from_the_installed_copy(self):
         build = self.fake_build()
