@@ -192,10 +192,10 @@ class LockTests(OdinTestCase):
     """odin.lock is an OS file lock (review 2026-10-10 #7): released when its process ends, however
     it ends, and never held by two runs at once."""
 
-    HOLD = ("import sys, time; sys.path[:0] = [{root!r}, {app!r}]\n"
+    HOLD = ("import os, sys, time; sys.path[:0] = [{root!r}, {app!r}]\n"
             "from odin import store\n"
             "with store.RunLock({data!r}):\n"
-            "    print('held', flush=True)\n"
+            "    print('held', os.getpid(), flush=True)\n"
             "    {then}\n")
 
     def child(self, then):
@@ -207,7 +207,11 @@ class LockTests(OdinTestCase):
         self.addCleanup(proc.stdout.close)
         self.addCleanup(proc.wait, 10)
         self.addCleanup(proc.kill)
-        self.assertEqual(proc.stdout.readline().strip(), "held")
+        word, pid = proc.stdout.readline().split()
+        self.assertEqual(word, "held")
+        # A venv's python.exe on Windows is a launcher that starts the real Python as its child, so
+        # the process holding the lock is the one that says so, not necessarily proc.pid.
+        proc.holder = int(pid)
         return proc
 
     def test_one_run_at_a_time(self):
@@ -220,7 +224,7 @@ class LockTests(OdinTestCase):
 
     def test_another_process_holding_it_is_respected_and_named(self):
         proc = self.child("time.sleep(60)")
-        with self.assertRaisesRegex(store.StoreError, f"process {proc.pid}"):
+        with self.assertRaisesRegex(store.StoreError, f"process {proc.holder},"):
             with store.RunLock(self.data):
                 pass
 
