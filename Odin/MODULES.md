@@ -50,7 +50,7 @@ Odin's daily run replaces the usual packages with standard-library modules, so a
 
 ## Dev only (never shipped)
 
-`pytest`, `pytest-timeout`, `pytest-cov` and `ruff` come from the repo's `requirements-dev.txt` (`vermin` is optional, installed by hand). Odin's tests are plain `unittest`, so they run on the workstation with nothing installed.
+`pytest`, `pytest-timeout`, `pytest-cov`, `ruff`, `vermin` and `actionlint-py` come from the repo's `requirements-dev.txt`, pinned exactly; CI installs the same file. Odin's tests are plain `unittest`, so they run on the workstation with nothing installed.
 
 ## Adding a package
 

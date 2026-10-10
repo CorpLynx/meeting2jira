@@ -1,0 +1,95 @@
+# Asgard's checks on Linux, on every push and pull request: the unit tests on the oldest Python
+# AGENTS.md promises (3.9) and on newer ones, and the static checks no other workflow runs (ruff,
+# vermin for 3.9, the Muninn schema check, actionlint). vermin only reads the code, so a behaviour
+# that differs between Python versions shows up only when the tests run on them: Jira's "+0000"
+# offsets didn't parse before 3.11, and nothing caught it until the suite ran on 3.10 by hand.
+# The tests run without the optional packages (PySide6, the MCP SDK, Playwright); theirs skip here
+# and run in the Windows jobs (odin-checks.yml, asgard-package.yml), which also cover Windows.
+# Actions are pinned to full commit SHAs (the tag each was is in its comment).
+name: Checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests on Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.11", "3.13"]
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Python ${{ matrix.python }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: SQLite has what Muninn needs (3.37+, FTS5, JSON)
+        run: |
+          python - <<'EOF'
+          import sqlite3, sys
+          con = sqlite3.connect(":memory:")
+          con.execute("CREATE VIRTUAL TABLE t USING fts5(x)")
+          con.execute("SELECT json('{}')")
+          print(sys.version.split()[0], "SQLite", sqlite3.sqlite_version)
+          assert sqlite3.sqlite_version_info >= (3, 37), sqlite3.sqlite_version
+          EOF
+
+      - name: Unit tests (Asgard, with Odin and the other apps)
+        working-directory: Asgard
+        run: python -m unittest discover -s tests
+
+      - name: Unit tests (Odin's exporters)
+        run: |
+          for app in graph-app playwright-app; do
+            (cd "Odin/$app" && python -m unittest discover -s tests) || exit 1
+          done
+
+  static:
+    name: Static checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Dev tools, pinned
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+
+      - name: ruff
+        run: ruff check .
+
+      - name: vermin (the code runs on Python 3.9)
+        working-directory: Asgard
+        run: vermin -t=3.9- --no-tips --eval-annotations --violations apps asgard tests
+
+      - name: Muninn schema check
+        working-directory: Asgard
+        run: python tools/check_muninn_schema.py
+
+      - name: actionlint (these workflows)
+        run: actionlint

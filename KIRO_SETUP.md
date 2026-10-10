@@ -38,7 +38,7 @@ tools/
   hooks/*.py             scripts the hooks call (stdlib only)
 .kiroignore              keeps caches, runtime data, exports, tokens and Terraform state away from the agent
 pyproject.toml           dev-only pytest/coverage/ruff config (not a package definition)
-requirements-dev.txt     pytest, pytest-timeout, pytest-cov, ruff
+requirements-dev.txt     pytest, pytest-timeout, pytest-cov, ruff, vermin, actionlint-py (pinned; CI uses it too)
 ```
 
 Root `tools/` is Kiro tooling. `Asgard/apps/odin/tools/` is part of the shipped program. Don't mix them up.
@@ -78,7 +78,7 @@ single module.
    where only the `py` launcher exists, replace `python` with `py -3` in `.kiro/hooks/*.json`,
    `.kiro/agents/test-runner.md` and `.kiro/steering/workflow.md`.
 2. **Dev tools** (your dev machine only; the app never needs them):
-   - `python -m pip install -r requirements-dev.txt` (pytest, pytest-timeout, pytest-cov, ruff).
+   - `python -m pip install -r requirements-dev.txt` (pytest, pytest-timeout, pytest-cov, ruff, vermin, actionlint-py).
      Without pytest the runner stops and tells you to install them.
    - Optional: `Install-Module PSScriptAnalyzer -Scope CurrentUser` for `.ps1` analysis on top of the parse check.
 3. **Turn on `.kiroignore`.** In Settings, search "Agent Ignore Files"

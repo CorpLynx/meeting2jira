@@ -221,6 +221,18 @@ class CommandTests(PostingCase):
         self.assertEqual(len(self.jira.posted), 1)
         self.assertEqual((self.last_run()["command"], self.last_run()["approved_posted"]), ("post", 1))
 
+    def post_checks(self):
+        return self.peek().execute("SELECT count(*) FROM sync_runs WHERE stream = 'post-check'").fetchone()[0]
+
+    def test_a_run_with_nothing_due_leaves_no_post_check_row(self):
+        """Every daily run used to add a 'post-check' sync run to Muninn, due or not."""
+        for _ in range(2):
+            self.assertEqual(self.run_cli("post"), 0)
+        self.assertEqual(self.post_checks(), 0)
+        self.approve()
+        self.assertEqual(self.run_cli("post"), 0)
+        self.assertEqual((self.post_checks(), len(self.jira.posted)), (1, 1))
+
     def test_post_dry_run(self):
         self.approve()
         self.prepare()

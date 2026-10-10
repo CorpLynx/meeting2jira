@@ -15,6 +15,7 @@ Start every session by reading `HANDOFF.md` (state, decisions, what's next), the
 
 - `python3 -m unittest discover -s tests` passes (`py -3 -m unittest discover -s tests` on Windows), and `python3 tools/check_muninn_schema.py` when the schema changed. New behavior has tests; every bug fix has a regression test that fails without the fix. Muninn scenarios end with `muninn.integrity.check()` clean.
 - vermin reports no violations for Python 3.9.
+- CI is green: `checks.yml` (the suite on Linux for Python 3.9, 3.11 and 3.13; ruff, vermin, the schema check, actionlint) and, when Odin or the packaging changes, `odin-checks.yml` and `asgard-package.yml` on Windows. The dev tools are pinned in the repo's `requirements-dev.txt`, so `python -m pip install -r requirements-dev.txt` runs the same checks locally.
 - When Baldur changes, `bash tools/baldur_smoke.sh` still ends with the worked example: PROJ-42 1h30m, PROJ-51 30m.
 - Docs match the code: the snapshot in `docs/` and, if you can reach it, the live Claude Doc (links in `HANDOFF.md`); `README.md` for anything a user sees; `HANDOFF.md` for status.
 - Anything that changes estimates, approvals or posting gets an independent review before it's called done: a fresh agent with no stake in the code tries to break it with scripts it runs. Fix what it confirms, add each repro as a test, and record it as in `docs/review-2026-10-04.md`.

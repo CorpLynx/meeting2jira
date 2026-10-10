@@ -46,7 +46,8 @@ powershell.exe -NoProfile -File Asgard\apps\odin\tools\Test-PowerShellSyntax.ps1
 pwsh -NoProfile -File Asgard/apps/odin/tools/Test-PowerShellSyntax.ps1             # if only PowerShell 7 is there
 bash Asgard/tools/baldur_smoke.sh               # when Baldur changes: must end PROJ-42 1h30m, PROJ-51 30m
 ```
-Dev tools (pytest, pytest-timeout, pytest-cov, ruff) come from `requirements-dev.txt` and are configured
+Dev tools (pytest, pytest-timeout, pytest-cov, ruff, vermin, actionlint-py) are pinned in `requirements-dev.txt`, which CI
+(`.github/workflows/checks.yml`) installs too, and are configured
 in `pyproject.toml`; they are never needed to run the apps. The exporters have their own suites:
 `python -m unittest discover -s tests` from `Odin/graph-app` and `Odin/playwright-app`.
 

@@ -18,12 +18,12 @@ source = ["Asgard/asgard", "Asgard/apps"]
 branch = true
 
 [tool.ruff]
-target-version = "py38"
+target-version = "py39"      # Asgard/AGENTS.md: Python 3.9+
 line-length = 120
 extend-exclude = [".test-output", "infra"]
 
 [tool.ruff.lint]
-# Bug-finding rules only. The code is not ruff-formatted and keeps typing.List/Optional for 3.8,
-# so the import-order and pyupgrade families stay off.
+# Bug-finding rules only. The code is not ruff-formatted and keeps typing.List/Optional, which
+# 3.9 needs at run time outside annotations, so the import-order and pyupgrade families stay off.
 select = ["E", "W", "F", "B"]
 ignore = ["E501"]  # long lines exist on purpose (regexes, messages); not worth churn

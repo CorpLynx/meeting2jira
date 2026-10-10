@@ -1,4 +1,11 @@
-"""JiraClient against a throwaway local HTTP server (stdlib only, no network)."""
+"""JiraClient against a throwaway local HTTP server (stdlib only, no network).
+
+Odin's flow tests run against fake_jira.FakeJira, which replaces this client entirely, so the real
+client's own reading and paging is tested here, and FakeJiraContractTests keeps the fake's methods
+the same as the client's.
+"""
+import ast
+import inspect
 import json
 import os
 import threading
@@ -13,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "apps" / "odin"
-for folder in (ROOT, APP):
+for folder in (ROOT, APP, Path(__file__).resolve().parent):
     if str(folder) not in sys.path:
         sys.path.insert(0, str(folder))
 
@@ -288,6 +295,158 @@ class ReviewFindingTests(_ServerCase):
         seen = [i["key"] for page in self.client.search("x", page_size=10) for i in page]
         self.assertEqual(seen, [f"P-{i}" for i in range(23)])
         self.assertEqual(self.client.search("x", page_size=10, limit=12).__next__(), _Handler.listing[:10])
+
+
+def _query(path):
+    """A request path's query, one value per name."""
+    return {k: v[0] for k, v in parse_qs(urlsplit(path).query).items()}
+
+
+class RealClientTests(_ServerCase):
+    """What the flows use from the client, against HTTP: before this, FakeJira stood in for all of it."""
+
+    def answer(self, method, path, payload=None, status=200, content_type="application/json"):
+        _Handler.special[(method, path)] = lambda h: h._reply(status, payload, content_type)
+
+    def test_an_issue_asks_for_what_muninn_stores_and_a_404_is_none(self):
+        self.answer("GET", "/rest/api/2/issue/ABC-1", {"id": "10", "key": "ABC-1", "fields": {}})
+        self.answer("GET", "/rest/api/2/issue/GONE-1", {"errorMessages": ["Issue does not exist"]}, 404)
+        self.answer("GET", "/rest/api/2/issue/HIDDEN-1", {"errorMessages": ["no"]}, 403)
+        self.assertEqual(self.client.issue("ABC-1", ["customfield_10008"])["key"], "ABC-1")
+        asked = parse_qs(urlsplit(_Handler.calls[-1][1]).query)
+        self.assertIn("summary", asked["fields"][0].split(","))
+        self.assertIn("customfield_10008", asked["fields"][0].split(","))
+        self.assertEqual(asked["expand"], ["changelog"])
+        self.assertIsNone(self.client.issue("GONE-1"))
+        with self.assertRaises(JiraError) as ctx:      # only "no such issue" is None; anything else is a failure
+            self.client.issue("HIDDEN-1")
+        self.assertEqual(ctx.exception.status, 403)
+
+    def test_an_issues_worklogs_are_read_page_by_page(self):
+        logs = [{"id": str(n), "comment": f"w{n}"} for n in range(5)]
+
+        def pages(handler):
+            start = int(_query(handler.path)["startAt"])
+            handler._reply(200, {"total": 5, "startAt": start, "worklogs": logs[start:start + 2]})
+        _Handler.special[("GET", "/rest/api/2/issue/ABC-1/worklog")] = pages
+        self.assertEqual([w["id"] for w in self.client.issue_worklogs("ABC-1")], ["0", "1", "2", "3", "4"])
+        self.assertEqual(sum(1 for c in _Handler.calls if "/worklog" in c[1]), 3)
+
+    def test_a_jira_that_ignores_startat_cant_loop_forever(self):
+        """An older Jira answers every page with the first one; the client stops when nothing is new."""
+        _Handler.special[("GET", "/rest/api/2/issue/ABC-1/worklog")] = lambda h: h._reply(
+            200, {"total": 9, "worklogs": [{"id": "1"}, {"id": "2"}]})
+        self.assertEqual([w["id"] for w in self.client.issue_worklogs("ABC-1")], ["1", "2"])
+        self.assertEqual(sum(1 for c in _Handler.calls if "/worklog" in c[1]), 2)
+
+    def test_worklogs_of_an_issue_jira_doesnt_show_raise_a_404(self):
+        """settle_stuck relies on this: a 404 leaves a post in doubt instead of offering it again."""
+        self.answer("GET", "/rest/api/2/issue/GONE-1/worklog", {"errorMessages": ["Issue does not exist"]}, 404)
+        with self.assertRaises(JiraError) as ctx:
+            self.client.issue_worklogs("GONE-1")
+        self.assertEqual(ctx.exception.status, 404)
+
+    def test_find_worklog_finds_the_marker_in_a_text_or_structured_comment(self):
+        marker = "[asgard:b-9f3c1a2b]"
+        self.answer("GET", "/rest/api/2/issue/ABC-1/worklog", {"total": 3, "worklogs": [
+            {"id": "1", "comment": "by hand"},
+            {"id": "2", "comment": {"type": "doc", "content": [{"text": "Approved: 2h\n" + marker}]}},
+            {"id": "3", "comment": None}]})
+        self.assertEqual(self.client.find_worklog("ABC-1", marker)["id"], "2")
+        self.assertIsNone(self.client.find_worklog("ABC-1", "[asgard:b-00000000]"))
+        self.assertIsNone(self.client.find_worklog("ABC-1", ""), "an empty marker matches nothing")
+
+    def test_deleted_worklogs_follow_until_to_the_last_page(self):
+        def pages(handler):
+            since = int(_query(handler.path)["since"])
+            if since == 1000:
+                handler._reply(200, {"values": [{"worklogId": 1}], "until": 2000, "lastPage": False})
+            else:
+                handler._reply(200, {"values": [{"worklogId": 2}], "until": 3000, "lastPage": True})
+        _Handler.special[("GET", "/rest/api/2/worklog/deleted")] = pages
+        got = list(self.client.deleted_worklogs(1000))
+        self.assertEqual(got, [([{"worklogId": 1}], 2000), ([{"worklogId": 2}], 3000)])
+        asked = [_query(c[1])["since"] for c in _Handler.calls if "/worklog/deleted" in c[1]]
+        self.assertEqual(asked, ["1000", "2000"])
+
+    def test_deleted_worklogs_stop_when_until_doesnt_move(self):
+        self.answer("GET", "/rest/api/2/worklog/deleted", {"values": [], "until": 1000, "lastPage": False})
+        self.assertEqual(list(self.client.deleted_worklogs(1000)), [([], 1000)])
+        self.assertEqual(sum(1 for c in _Handler.calls if "/worklog/deleted" in c[1]), 1)
+
+    def test_personal_access_tokens_in_each_shape_and_when_unavailable(self):
+        token = {"id": 1, "name": "laptop", "expiringAt": "2026-12-01T00:00:00.000+0000"}
+        for payload in ([token], {"values": [token]}, {"tokens": [token]}):
+            with self.subTest(shape=type(payload).__name__ + str(sorted(payload) if isinstance(payload, dict) else "")):
+                self.answer("GET", "/rest/pat/latest/tokens", payload)
+                self.assertEqual(self.client.personal_access_tokens(), [token])
+        for status in (401, 403, 404, 405):
+            with self.subTest(status=status):
+                self.answer("GET", "/rest/pat/latest/tokens", {"errorMessages": ["no"]}, status)
+                self.assertIsNone(self.client.personal_access_tokens())
+        self.answer("GET", "/rest/pat/latest/tokens", {"errorMessages": ["boom"]}, 500)
+        with mock.patch("odin.jira.time.sleep"), self.assertRaises(JiraError):
+            self.client.personal_access_tokens()
+
+    def test_fields_and_statuses_are_lists(self):
+        self.answer("GET", "/rest/api/2/field", [{"id": "customfield_10008", "name": "Epic Link"}])
+        self.answer("GET", "/rest/api/2/status", [{"name": "Done", "statusCategory": {"key": "done"}}])
+        self.assertEqual(self.client.fields()[0]["name"], "Epic Link")
+        self.assertEqual(self.client.statuses()[0]["statusCategory"]["key"], "done")
+        _Handler.special[("GET", "/rest/api/2/field")] = lambda h: h._reply(204)
+        self.assertEqual(self.client.fields(), [])
+
+    def test_a_refusal_says_which_field_jira_wants(self):
+        self.answer("POST", "/rest/api/2/issue", {"errorMessages": [], "errors": {"customfield_10010": "is required"}},
+                    400)
+        with self.assertRaises(JiraError) as ctx:
+            self.client.create_issue({"summary": "x"})
+        self.assertIn("customfield_10010: is required", str(ctx.exception))
+        self.assertTrue(ctx.exception.refused)
+        self.answer("POST", "/rest/api/2/issue", b"Bad request, plainly", 400, "text/plain")
+        with self.assertRaises(JiraError) as ctx:
+            self.client.create_issue({"summary": "x"})
+        self.assertIn("Bad request, plainly", str(ctx.exception))
+
+    def test_a_worklog_started_as_jira_text_is_sent_as_it_is(self):
+        self.answer("POST", "/rest/api/2/issue/ABC-1/worklog", {"id": 50001}, 201)
+        started = "2026-10-01T09:20:00.000-0400"
+        self.assertEqual(self.client.add_worklog("ABC-1", 30, started, "c"), "50001")
+        body = _Handler.calls[-1][3]
+        self.assertEqual((body["started"], body["timeSpentSeconds"]), (started, 60), "Jira refuses 0: at least 1m")
+        self.answer("POST", "/rest/api/2/issue/ABC-1/worklog", {}, 201)
+        self.assertIsNone(self.client.add_worklog("ABC-1", 60, started, "c"), "no id, so the post stays in doubt")
+
+
+class FakeJiraContractTests(unittest.TestCase):
+    """Odin's flow tests run against fake_jira.FakeJira in place of JiraClient. Every method Odin calls
+    on its client has to exist on both with the same parameters, or a test could pass against a call
+    the real client doesn't accept."""
+
+    @staticmethod
+    def called():
+        names = set()
+        for path in sorted((APP / "odin").glob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name) and node.func.value.id == "client"):
+                    names.add(node.func.attr)
+        return names
+
+    def test_every_call_odin_makes_has_the_same_parameters_on_both(self):
+        from fake_jira import FakeJira, LandsThenFails
+        names = self.called()
+        self.assertGreaterEqual(len(names), 15, "the scan found Odin's calls")
+        for name in sorted(names):
+            with self.subTest(method=name):
+                real = getattr(JiraClient, name, None)
+                self.assertTrue(callable(real), f"Odin calls client.{name}, which JiraClient doesn't have")
+                for fake_class in (FakeJira, LandsThenFails):
+                    fake = getattr(fake_class, name, None)
+                    self.assertTrue(callable(fake), f"{fake_class.__name__} has no {name}")
+                    self.assertEqual(list(inspect.signature(fake).parameters),
+                                     list(inspect.signature(real).parameters),
+                                     f"{fake_class.__name__}.{name} takes different parameters from JiraClient's")
 
 
 if __name__ == "__main__":

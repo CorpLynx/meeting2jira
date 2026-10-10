@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+# macOS folder metadata (Finder writes it into every folder it opens)
+.DS_Store
 .ruff_cache/
 .pytest_cache/
 .coverage

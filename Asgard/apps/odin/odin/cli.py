@@ -283,8 +283,12 @@ def _live(cfg: Dict[str, Any], con: sqlite3.Connection, data_dir: Path, work_dir
     #    worklogs are read again just before its time goes).
     if post_wanted and (out.command == "post" or settings["post_approved"]):
         if out.collected is not None and out.collected.worklogs_ok:
-            with muninn.Run(con, store.APP, jira_sid, "post-check") as check:
-                out.posts = posting.post_approved(con, client, int(settings["max_posts_per_run"]), run=check, ctx=ctx)
+            if not mo.posts_due(con):
+                out.posts = posting.PostResult()     # nothing due: no sync run, no row in Muninn
+            else:
+                with muninn.Run(con, store.APP, jira_sid, "post-check") as check:
+                    out.posts = posting.post_approved(con, client, int(settings["max_posts_per_run"]), run=check,
+                                                      ctx=ctx)
         elif out.collected is not None and out.collected.worklogs_left and not out.collected.problems:
             out.warnings.append("Approved Baldur days wait: the worklog sync is still catching up (it reads at most "
                                 f"{settings['max_issues_per_run']} issues a run), so Odin can't yet tell what Jira "

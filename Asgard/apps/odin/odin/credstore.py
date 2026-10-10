@@ -95,7 +95,7 @@ def load_token(data_dir: Path) -> Tuple[str, str]:
         return env.strip(), f"environment variable {ENV_VAR}"
     path = Path(data_dir) / TOKEN_FILE
     if not path.is_file():
-        raise CredentialError("No Jira token stored yet. Run: python -m meeting2jira set-token")
+        raise CredentialError("No Jira token stored yet. Run: odin set-token (or Today > Save token in Odin's window)")
     if sys.platform != "win32":
         raise CredentialError(f"{path} is DPAPI-encrypted and can only be read on Windows. Set {ENV_VAR} instead.")
     try:

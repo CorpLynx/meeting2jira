@@ -1,6 +1,17 @@
 # Asgard handoff (2026-10-10, Asgard 0.4.0 in progress, not shipped)
 
-## Latest: Odin is an Asgard app, on Muninn (2026-10-10)
+## Latest: CI on Linux, and Odin's untested paths (2026-10-10, branch `claude/ci-and-odin-tests`)
+
+After Odin merged (PR #2, then PR #3's docs), Brandon asked for the gaps a survey found, on a new branch from `main`.
+
+- **CI on Linux** (`.github/workflows/checks.yml`): the suite on Python 3.9, 3.11 and 3.13 (3.9 is the oldest `AGENTS.md` promises; the Windows jobs only ran 3.12), Odin's exporters' suites, and ruff, vermin, the schema check and actionlint, which no workflow ran before. The `+0000` parsing bug was only found by running 3.10 by hand. `requirements-dev.txt` is pinned exactly now, with vermin and actionlint-py added, and no longer names the removed `Odin/app`.
+- **The real Jira client** had 67% coverage: the flow tests use `fake_jira.FakeJira`, so `issue`, `issue_worklogs`, `find_worklog` (which settles interrupted posts), `deleted_worklogs` and `personal_access_tokens` never ran against HTTP. They do now (`RealClientTests`), and `FakeJiraContractTests` fails if the fake's methods drift from the client's (91%).
+- **Odin's commands** `init`, `set-token`, `check`, `status` and `forget` ran in no test; `tests/test_odin_commands.py` covers them (`cli.py` 86%). The missing-token message still said `python -m meeting2jira set-token`; it says `odin set-token` now.
+- **A daily run with nothing to post** no longer writes a `post-check` sync run to Muninn.
+- **Housekeeping:** `.DS_Store` untracked and ignored, ruff targets Python 3.9, and a leftover review worktree and its local branch removed (both already in `main`).
+- **Verified:** 734 tests pass on Python 3.9, 3.11 and 3.13 (73 to 76 skips without the optional packages; 31 with them), under the Windows file-lock emulation too; the exporters, ruff, vermin, the schema check and actionlint are clean.
+
+## Earlier on Oct 10: Odin is an Asgard app, on Muninn
 
 Brandon asked for all of the Muninn design's steps for moving Odin in, with Odin as an Asgard app. Done; [docs/integration/odin.md](docs/integration/odin.md) is the contract.
 

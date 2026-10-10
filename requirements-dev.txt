@@ -1,7 +1,13 @@
-# Dev and test tooling for working on this repo (your dev machine, not the target workstation).
-# Nothing here is needed to run the apps; their runtime packages are pinned in
-# Odin/app/requirements.txt and Asgard/requirements.txt (Asgard/docs/dependency-policy.md).
-pytest>=7
-pytest-timeout>=2
-pytest-cov>=4
-ruff>=0.5
+# Dev and test tooling for working on this repo (your dev machine and CI, not the target workstation).
+# Nothing here is needed to run the apps; their runtime packages are pinned in Asgard/requirements.txt
+# and in Odin's exporters' own requirements files (Asgard/docs/dependency-policy.md). Pinned exactly,
+# like every requirements file, so CI and your machine run the same checks.
+# Install with: python -m pip install -r requirements-dev.txt
+pytest==9.1.1
+pytest-timeout==2.4.0
+pytest-cov==7.1.0
+ruff==0.16.10
+# Checks the code needs nothing newer than Python 3.9 (Asgard/AGENTS.md).
+vermin==1.6.0
+# Lints the GitHub Actions workflows. The wheel carries the actionlint binary itself.
+actionlint-py==1.7.7.23
