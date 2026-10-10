@@ -242,7 +242,7 @@ class WrapperTests(unittest.TestCase):
     CMDS = [ROOT / "setup-Asgard.cmd"] + sorted((ROOT / "apps").glob("*/*.cmd"))
 
     def test_cmd_files_are_ascii_crlf_and_prefer_the_builds_program(self):
-        self.assertEqual(len(self.CMDS), 4)
+        self.assertEqual(len(self.CMDS), 5)
         for path in self.CMDS:
             with self.subTest(path.name):
                 raw = path.read_bytes()

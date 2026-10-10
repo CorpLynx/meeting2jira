@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Exports calendar items from classic Outlook to the meeting2jira JSON format (schema v1).
+    Exports calendar items from classic Outlook to Odin's JSON export format (schema v1).
 
 .DESCRIPTION
     Uses the Outlook object model (COM) through your already signed-in Outlook profile, so it needs
@@ -99,7 +99,8 @@ while ($null -ne $item -and $guard -lt 5000) {
     }
     $item = $restricted.GetNext()
 }
-if ($guard -ge 5000) { Write-Warning 'Stopped after 5000 items; narrow the date range.' }
+$truncated = ($guard -ge 5000)
+if ($truncated) { Write-Warning 'Stopped after 5000 items; narrow the date range.' }
 
 if (-not $OutFile) {
     # Odin's folder, under Asgard's: ASGARD_HOME\odin when set, else %LOCALAPPDATA%\Asgard\odin.
@@ -127,6 +128,9 @@ $envelope = [ordered]@{
     exported_at    = (Get-Date).ToUniversalTime().ToString($isoFmt, $inv)
     range_start    = $Start.ToUniversalTime().ToString($isoFmt, $inv)
     range_end      = $End.ToUniversalTime().ToString($isoFmt, $inv)
+    # An export that stopped early didn't read its whole range, so Odin mustn't take an item it
+    # lacks as deleted from the calendar.
+    truncated      = $truncated
     meetings       = $meetings
 }
 # Windows PowerShell 5.1's System.Array type data can turn arrays into {"value":..,"Count":..}.

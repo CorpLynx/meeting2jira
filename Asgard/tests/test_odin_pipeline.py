@@ -1,126 +1,113 @@
-"""Offline tests: sources, routing, dedupe, templating. Run: py -3 -m unittest discover -s tests -v"""
+"""Odin's meeting push, offline: sources, routing, dedupe in Muninn, templating, the run's breadcrumb.
+
+Each test gets its own ASGARD_HOME with a fresh Muninn (fake_jira.OdinTestCase) and an in-memory
+Jira (fake_jira.FakeJira).
+"""
 import contextlib
 import io
 import json
-import sqlite3
-import shutil
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fake_jira import APP, FIXTURES, FakeJira, OdinTestCase  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
-APP = ROOT / "apps" / "odin"
-for folder in (ROOT, APP):
-    if str(folder) not in sys.path:
-        sys.path.insert(0, str(folder))
-
+from odin import store  # noqa: E402
 from odin.cli import main  # noqa: E402
 from odin.config import ConfigError, build_config, load_config  # noqa: E402
 from odin.rules import Router  # noqa: E402
 from odin.sources import load_export, load_outlook_csv  # noqa: E402
-from odin.state import State  # noqa: E402
-from odin.sync import run  # noqa: E402
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures" / "odin"
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 
 
-class FakeJira:
-    def __init__(self):
-        self.created, self.worklogs, self.transitions = [], [], []
-
-    def myself(self):
-        return {"name": "jdoe", "displayName": "Jordan Doe"}
-
-    def personal_access_tokens(self):
-        return None      # mirrors a Jira that does not expose token expiry
-
-    def create_issue(self, fields):
-        self.created.append(fields)
-        return f"{fields['project']['key']}-{900 + len(self.created)}"
-
-    def add_worklog(self, key, seconds, started, comment):
-        self.worklogs.append((key, seconds, started, comment))
-
-    def transition(self, key, name):
-        self.transitions.append((key, name))
-        return True
-
-
-def example_config(tmp: Path, **jira_overrides) -> dict:
+def example_config(folder: Path, **jira_overrides) -> dict:
     """The shipped config.example.json, loaded the real way, so the example itself stays valid."""
     raw = json.loads((APP / "config.example.json").read_text(encoding="utf-8"))
     raw["jira"].update(jira_overrides)
-    path = tmp / "config.json"
+    path = folder / "config.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
     return load_config(path)
 
 
-class PipelineTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
+class PushCase(OdinTestCase):
+    def recent(self):
+        return store.recent(self.peek())
 
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
 
+class PipelineTests(PushCase):
     def test_routing_filters_and_dedupe(self):
-        cfg = example_config(self.tmp, log_work=True, transition_to="Done")
+        cfg = example_config(self.data, log_work=True, transition_to="Done")
         meetings = load_export(FIXTURES / "sample_export.json")
         jira = FakeJira()
-        with State(self.tmp / "state.db") as state:
-            result = run(meetings, cfg, state, jira, now=NOW)
+        result = self.push(meetings, cfg, jira)
 
-            parents = sorted(f["parent"]["key"] for f in jira.created)
-            self.assertEqual(parents, ["ADMIN-7", "PROJ-123", "PROJ-200", "PROJ-200"])
-            self.assertEqual(len(result.created), 4)
-            self.assertEqual(result.skipped["declined"], 1)
-            self.assertEqual(result.skipped["all-day"], 1)
-            self.assertEqual(result.skipped["cancelled"], 1)
-            self.assertEqual(result.skipped["not ended yet"], 1)
-            self.assertEqual(result.skipped["appointment (no attendees)"], 2)
-            self.assertEqual(result.skipped["rule 'no 1:1s'"], 1)
+        parents = sorted(f["parent"]["key"] for f in jira.created)
+        self.assertEqual(parents, ["ADMIN-7", "PROJ-123", "PROJ-200", "PROJ-200"])
+        self.assertEqual(len(result.created), 4)
+        self.assertEqual(result.skipped["declined"], 1)
+        self.assertEqual(result.skipped["all-day"], 1)
+        self.assertEqual(result.skipped["cancelled"], 1)
+        self.assertEqual(result.skipped["not ended yet"], 1)
+        self.assertEqual(result.skipped["appointment (no attendees)"], 2)
+        self.assertEqual(result.skipped["rule 'no 1:1s'"], 1)
 
-            first = jira.created[0]
-            self.assertEqual(first["issuetype"], {"name": "Sub-task"})
-            self.assertEqual(first["assignee"], {"name": "jdoe"})
-            # Configured labels, plus the deterministic m2j-<hash> marker that makes recovery
-            # from an ambiguous create exact (jira.dedupe_label, on by default).
-            self.assertEqual(first["labels"][0], "meeting")
-            self.assertRegex(first["labels"][1], r"^m2j-[0-9a-f]{10}$")
-            self.assertIn("Sprint Planning", first["summary"])
-            self.assertEqual(len(jira.worklogs), 4)
-            self.assertEqual(jira.worklogs[0][1], 3600)
-            self.assertEqual(len(jira.transitions), 4)
+        first = jira.created[0]
+        self.assertEqual(first["issuetype"], {"name": "Sub-task"})
+        self.assertEqual(first["assignee"], {"name": "jdoe"})
+        # Configured labels, plus the deterministic m2j-<hash> marker that makes recovery
+        # from an ambiguous create exact (jira.dedupe_label, on by default).
+        self.assertEqual(first["labels"][0], "meeting")
+        self.assertRegex(first["labels"][1], r"^m2j-[0-9a-f]{10}$")
+        self.assertIn("Sprint Planning", first["summary"])
+        self.assertEqual(len(jira.posted), 4)
+        self.assertEqual(jira.posted[0][1], 3600)
+        self.assertRegex(jira.posted[0][3], r"^Meeting: Sprint Planning\n\[asgard:m-[0-9a-f]{8}\]$")
+        self.assertEqual(len(jira.transitions), 4)
 
-            again = run(meetings, cfg, state, FakeJira(), now=NOW)
-            self.assertEqual(again.created, [])
-            self.assertEqual(again.existing, 4)
-            self.assertTrue(all(r["worklog_logged"] for r in state.recent()))
+        again = self.push(meetings, cfg, FakeJira())
+        self.assertEqual(again.created, [])
+        self.assertEqual(again.existing, 4)
+        self.assertTrue(all(r["worklog_state"] == "posted" for r in self.recent()))
+
+    def test_each_sub_task_is_recorded_with_its_meeting_and_issue(self):
+        cfg = example_config(self.data, log_work=True)
+        jira = FakeJira()
+        self.push(load_export(FIXTURES / "sample_export.json"), cfg, jira)
+        peek = self.peek()
+        rows = peek.execute("SELECT ms.issue_key, ms.parent_key, ms.origin, e.logged_as_key, w.key, w.parent_key "
+                            "FROM meeting_subtasks ms JOIN calendar_events e ON e.id = ms.calendar_event_id "
+                            "JOIN work_items w ON w.key = ms.issue_key ORDER BY ms.started_at").fetchall()
+        self.assertEqual(len(rows), 4)
+        for issue_key, parent, origin, logged_as, item_key, item_parent in rows:
+            self.assertEqual((origin, logged_as, item_key, item_parent), ("odin", issue_key, issue_key, parent))
+        logs = peek.execute("SELECT origin, state, calendar_event_id IS NOT NULL FROM worklogs").fetchall()
+        self.assertEqual([tuple(r) for r in logs], [("meeting", "posted", 1)] * 4)
 
     def test_dry_run_needs_no_client_and_writes_nothing(self):
-        cfg = example_config(self.tmp)
-        with State(self.tmp / "state.db") as state:
-            result = run(load_export(FIXTURES / "sample_export.json"), cfg, state, None, dry_run=True, now=NOW)
-            self.assertEqual(result.planned, 4)
-            self.assertEqual(state.recent(), [])
+        cfg = example_config(self.data)
+        result = self.push(load_export(FIXTURES / "sample_export.json"), cfg, dry_run=True)
+        self.assertEqual(result.planned, 4)
+        peek = self.peek()
+        for table in ("meeting_subtasks", "calendar_events", "sync_runs", "sources"):
+            self.assertEqual(peek.execute(f"SELECT count(*) FROM {table}").fetchone()[0], 0, table)
 
     def test_max_creates_cap(self):
-        cfg = example_config(self.tmp, max_creates_per_run=2)
+        cfg = example_config(self.data, max_creates_per_run=2)
         jira = FakeJira()
-        with State(self.tmp / "state.db") as state:
-            result = run(load_export(FIXTURES / "sample_export.json"), cfg, state, jira, now=NOW)
+        result = self.push(load_export(FIXTURES / "sample_export.json"), cfg, jira)
         self.assertEqual(len(jira.created), 2)
         self.assertEqual(result.capped, 2)
 
     def test_bad_template_field_is_reported(self):
-        cfg = example_config(self.tmp)
+        cfg = example_config(self.data)
         cfg["templates"]["summary"] = "{subjct}"
-        with State(self.tmp / "state.db") as state, self.assertRaises(ConfigError):
-            run(load_export(FIXTURES / "sample_export.json"), cfg, state, None, dry_run=True, now=NOW)
+        with self.assertRaises(ConfigError):
+            self.push(load_export(FIXTURES / "sample_export.json"), cfg, dry_run=True)
 
     def test_text_exclusion_filters(self):
         """The *_contains lists are the knobs a user is expected to edit (e.g. OOO, PTO)."""
@@ -193,28 +180,21 @@ class PipelineTests(unittest.TestCase):
                           "rules": [{"match": {"subject_regex": "x"}}]})
 
 
-class PrivacyTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
+class PrivacyTests(PushCase):
     def test_private_subjects_are_kept_out_of_the_logs(self):
         """skip_private keeps these out of scope entirely, not just out of Jira.
 
         Logs live in the user's profile and persist, so writing the subject there would leak
         exactly what the filter exists to protect.
         """
-        cfg = example_config(self.tmp)
+        cfg = example_config(self.data)
         cfg["filters"]["meetings_only"] = False     # so 'private' is the reason that fires
         cfg["filters"]["only_ended"] = False
         meetings = load_outlook_csv(FIXTURES / "sample_outlook.csv", cfg["csv"]["datetime_formats"])
         self.assertTrue(any(m.is_private and "Dentist" in m.subject for m in meetings))
 
-        with State(self.tmp / "state.db") as state, \
-                self.assertLogs("odin.sync", level="INFO") as logged:
-            result = run(meetings, cfg, state, None, dry_run=True, now=NOW)
+        with self.assertLogs("odin.sync", level="INFO") as logged:
+            result = self.push(meetings, cfg, dry_run=True)
 
         written = " ".join(logged.output)
         self.assertEqual(result.skipped["private"], 1)
@@ -223,84 +203,104 @@ class PrivacyTests(unittest.TestCase):
         # Non-private items are still identifiable, or a dry run would be useless.
         self.assertIn("Sprint Planning", written)
 
+    def test_private_subjects_are_kept_out_of_muninn(self):
+        cfg = example_config(self.data)
+        meetings = load_outlook_csv(FIXTURES / "sample_outlook.csv", cfg["csv"]["datetime_formats"])
+        self.push(meetings, cfg, FakeJira(), source="outlook-csv")
+        titles = [r[0] for r in self.peek().execute("SELECT title FROM calendar_events")]
+        self.assertIn(store.PRIVATE_TITLE, titles, "its time still counts for Baldur")
+        self.assertFalse(any("Dentist" in t for t in titles))
 
-class LastRunTests(unittest.TestCase):
+
+class LastRunTests(OdinTestCase):
     """A hidden scheduled task must leave evidence that it ran and whether it worked."""
 
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def _push(self, extra_argv=()):
+    def _push(self, extra_argv=(), jira=None, command="push"):
         raw = json.loads((APP / "config.example.json").read_text(encoding="utf-8"))
         raw["jira"]["base_url"] = "https://j.example.gov"
         raw["jira"]["default_parent"] = "PROJ-123"
         raw["filters"]["only_ended"] = False
-        cfg_path = self.tmp / "config.json"
+        raw["notify"] = {"desktop_alert": True}
+        cfg_path = self.data / "config.json"
         cfg_path.write_text(json.dumps(raw), encoding="utf-8")
-        argv = ["push", "--config", str(cfg_path), "--csv", str(FIXTURES / "sample_outlook.csv")]
-        return main(list(argv) + list(extra_argv))
+        argv = [command, "--config", str(cfg_path), "--csv", str(FIXTURES / "sample_outlook.csv")]
+        buffer = io.StringIO()
+        with mock.patch("odin.cli.load_token", return_value=("tok", "env")), \
+                mock.patch("odin.cli.JiraClient.from_config", return_value=jira or FakeJira()), \
+                mock.patch("odin.cli._desktop_dir", return_value=None), contextlib.redirect_stdout(buffer):
+            code = main(list(argv) + list(extra_argv))
+        self.output = buffer.getvalue()
+        return code
 
     def test_dry_run_leaves_no_breadcrumb(self):
         self.assertEqual(self._push(["--dry-run"]), 0)
-        self.assertFalse((self.tmp / "last_run.json").exists())
+        self.assertFalse((self.data / "last_run.json").exists())
 
     def test_push_records_the_outcome(self):
-        with mock.patch("odin.cli.load_token", return_value=("tok", "env")), \
-             mock.patch("odin.cli.JiraClient.from_config", return_value=FakeJira()):
-            self.assertEqual(self._push(), 0)
-        recorded = json.loads((self.tmp / "last_run.json").read_text(encoding="utf-8"))
+        self.assertEqual(self._push(), 0)
+        recorded = json.loads((self.data / "last_run.json").read_text(encoding="utf-8"))
         self.assertEqual(recorded["exit_code"], 0)
+        self.assertEqual(recorded["command"], "push")
         self.assertEqual(recorded["created"], 1)
         self.assertIsNone(recorded["first_error"])
         self.assertTrue(recorded["finished_utc"].endswith("Z"))
 
+    def test_a_run_that_stops_early_still_leaves_its_breadcrumb_and_alert(self):
+        """An expired token used to exit 2 with nothing written: the hidden task failed silently."""
+        from odin.jira import JiraError
+        jira = FakeJira()
+        jira.fail("myself", JiraError("GET /rest/api/2/myself -> HTTP 401: token rejected", 401))
+        self.assertEqual(self._push(jira=jira), 2)
+        recorded = json.loads((self.data / "last_run.json").read_text(encoding="utf-8"))
+        self.assertEqual((recorded["exit_code"], recorded["consecutive_failures"]), (2, 1))
+        self.assertIn("401", recorded["first_error"])
+        self.assertTrue((self.data / "ATTENTION-Odin.txt").exists())
+        self.assertEqual(self._push(), 0)
+        self.assertFalse((self.data / "ATTENTION-Odin.txt").exists(), "a good run takes the notice down")
 
-class StateFailureTests(unittest.TestCase):
-    """A broken or busy state database must exit 2 with advice, not raise a traceback."""
+
+class FailureTests(OdinTestCase):
+    """A broken state.db, a busy Odin or a missing Muninn must exit 2 with advice, not a traceback."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
+        super().setUp()
         cfg = {"jira": {"base_url": "https://j.example.gov", "default_parent": "PROJ-1"}}
-        self.cfg_path = self.tmp / "config.json"
+        self.cfg_path = self.data / "config.json"
         self.cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
 
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def _push(self):
+    def _push(self, dry_run=True):
         """Run push, returning (exit_code, console_output).
 
         stdout is captured rather than using assertLogs, because main() calls _setup_logging,
         which replaces the logger's handlers and would discard a capture handler.
         """
         buffer = io.StringIO()
-        with contextlib.redirect_stdout(buffer):
-            code = main(["push", "--config", str(self.cfg_path),
-                         "--csv", str(FIXTURES / "sample_outlook.csv"), "--dry-run"])
+        argv = ["push", "--config", str(self.cfg_path), "--csv", str(FIXTURES / "sample_outlook.csv")]
+        with contextlib.redirect_stdout(buffer), \
+                mock.patch("odin.cli.load_token", return_value=("tok", "env")), \
+                mock.patch("odin.cli.JiraClient.from_config", return_value=FakeJira()), \
+                mock.patch("odin.cli._desktop_dir", return_value=None):
+            code = main(argv + (["--dry-run"] if dry_run else []))
         return code, buffer.getvalue().lower()
 
     def test_corrupt_state_db(self):
-        (self.tmp / "state.db").write_bytes(b"not a sqlite database" * 20)
+        (self.data / "state.db").write_bytes(b"not a sqlite database" * 20)
         code, output = self._push()
         self.assertEqual(code, 2)
         self.assertIn("corrupt", output)
         self.assertIn("state.db", output)      # tells you which file to move aside
 
-    def test_locked_state_db(self):
-        conn = sqlite3.connect(str(self.tmp / "state.db"))
-        try:
-            conn.execute("CREATE TABLE IF NOT EXISTS lockme (x)")
-            conn.execute("BEGIN EXCLUSIVE")
-            # Don't wait out the real lock timeout just to assert the message.
-            with mock.patch("odin.state.LOCK_TIMEOUT_SECONDS", 0.05):
-                code, output = self._push()
-            self.assertEqual(code, 2)
-            self.assertIn("another odin run", output)
-        finally:
-            conn.close()
+    def test_another_run_in_progress(self):
+        with store.RunLock(self.data):
+            code, output = self._push(dry_run=False)
+        self.assertEqual(code, 2)
+        self.assertIn("another odin run", output)
+
+    def test_muninn_not_set_up(self):
+        (self.home / "muninn.db").unlink()
+        code, output = self._push()
+        self.assertEqual(code, 2)
+        self.assertIn("open asgard once", output)
 
 
 class ExportFormatTests(unittest.TestCase):

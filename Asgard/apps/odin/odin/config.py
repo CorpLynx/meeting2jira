@@ -33,7 +33,10 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*-\d+$")
+from asgard import paths as asgard_paths
+
+# The key rule Muninn enforces on every key column: a number that doesn't start with 0.
+ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*-[1-9]\d*$")
 
 # Filter keys that hold a list of plain substrings. Kept in one place so config validation,
 # the router, and the README stay in step.
@@ -111,7 +114,7 @@ DEFAULTS: Dict[str, Any] = {
     #     would make this tool look like the thing the controls exist to stop.
     # What is left is unglamorous and works everywhere: leave a file where the user will see it.
     "notify": {
-        "desktop_alert": True,         # write ATTENTION-meeting2jira.txt to the Desktop on failure
+        "desktop_alert": True,         # write ATTENTION-Odin.txt to the Desktop on failure
         "alert_after_failures": 1,     # consecutive failed runs before alerting; 2 rides out a blip
         "use_msg_exe": False,          # additionally try msg.exe, which is absent on some builds
     },
@@ -135,11 +138,23 @@ DEFAULTS: Dict[str, Any] = {
         "outside_label": "outside-tod",
         "outside_parent": None,        # required when outside_action is "route"
     },
+    # Muninn, Asgard's shared database. Odin keeps Jira there for the other apps, and posts the time
+    # you approve in Baldur. Each part can be turned off; the meeting push always uses Muninn.
+    "muninn": {
+        "sync_issues": True,           # your issues, tracked parents and their children, keys others mention
+        "sync_worklogs": True,         # your worklogs, so Baldur sees what Jira already holds
+        # Post the days you approve in Baldur that Jira is missing. Only approved minutes, only what
+        # Jira doesn't hold yet (which is why it needs the worklog sync), at most max_posts_per_run.
+        "post_approved": True,
+        "max_posts_per_run": 20,
+        "history_days": 365,           # how far back the first sync reaches
+        "max_issues_per_run": 500,     # per stream; a bigger first sync carries on next run
+    },
     "rules": [],
     "templates": {
         "summary": "Meeting: {subject} ({start_local:%Y-%m-%d %H:%M})",
         "description": (
-            "Logged automatically from my calendar by meeting2jira.\n\n"
+            "Logged automatically from my calendar by Odin.\n\n"
             "When: {start_local:%Y-%m-%d %H:%M} - {end_local:%H:%M} ({minutes} min)\n"
             "Organizer: {organizer}\n"
             "Location: {location}"
@@ -162,12 +177,8 @@ class ConfigError(Exception):
 
 
 def asgard_dir() -> Path:
-    """Asgard's per-user folder, the way asgard.paths finds it (Odin doesn't import Asgard)."""
-    home = os.environ.get("ASGARD_HOME")
-    if home:
-        return Path(home)
-    base = os.environ.get("LOCALAPPDATA")
-    return Path(base) / "Asgard" if base else Path.home() / ".local" / "share" / "Asgard"
+    """Asgard's per-user folder (asgard.paths): ASGARD_HOME when set, else %LOCALAPPDATA%\\Asgard."""
+    return asgard_paths.data_dir()
 
 
 def legacy_data_dirs() -> List[Path]:
@@ -216,7 +227,8 @@ def move_legacy_data(target: Path) -> Optional[Path]:
 def default_data_dir() -> Path:
     """Odin's files: %LOCALAPPDATA%\\Asgard\\odin, beside Asgard's (ASGARD_HOME\\odin when set).
 
-    Odin still runs without Asgard installed; it only shares the folder. A folder from before
+    Odin is an Asgard app: its config, token, logs and exports sit beside Asgard's own files, and
+    its records are in Muninn. A folder from before
     (%LOCALAPPDATA%\\meeting2jira) is moved here the first time.
     """
     target = asgard_dir() / "odin"
@@ -250,7 +262,7 @@ def _merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
 def load_config(path: Optional[Path] = None) -> Dict[str, Any]:
     path = Path(path) if path else default_config_path()
     if not path.is_file():
-        raise ConfigError(f"No config file at {path}. Run `python -m meeting2jira init` first.")
+        raise ConfigError(f"No config file at {path}. Run `odin setup` (or `odin init`) first.")
     try:
         with open(path, encoding="utf-8-sig") as fh:
             user = json.load(fh)
@@ -341,6 +353,23 @@ def _tour_of_duty_problems(tod: Dict[str, Any]) -> List[str]:
     return problems
 
 
+def _muninn_problems(section: Any) -> List[str]:
+    if not isinstance(section, dict):
+        return ["muninn must be an object"]
+    problems = []
+    for key in ("sync_issues", "sync_worklogs", "post_approved"):
+        if not isinstance(section.get(key), bool):
+            problems.append(f"muninn.{key} must be true or false")
+    for key, low, high in (("max_posts_per_run", 0, 500), ("history_days", 1, 3650), ("max_issues_per_run", 1, 10000)):
+        try:
+            value = int(section.get(key))
+        except (TypeError, ValueError):
+            continue     # reported as a non-number
+        if not low <= value <= high:
+            problems.append(f"muninn.{key} must be between {low} and {high}")
+    return problems
+
+
 def validate(cfg: Dict[str, Any]) -> None:
     j = cfg["jira"]
     problems = []
@@ -379,7 +408,10 @@ def validate(cfg: Dict[str, Any]) -> None:
     for section, key, kind in (("jira", "max_creates_per_run", int),
                                ("jira", "timeout_seconds", float),
                                ("filters", "min_minutes", int),
-                               ("filters", "max_minutes", int)):
+                               ("filters", "max_minutes", int),
+                               ("muninn", "max_posts_per_run", int),
+                               ("muninn", "history_days", int),
+                               ("muninn", "max_issues_per_run", int)):
         value = cfg[section].get(key)
         if value is None or isinstance(value, bool):
             continue
@@ -403,6 +435,7 @@ def validate(cfg: Dict[str, Any]) -> None:
             problems.append(f"templates.{name} must be a string, got {template!r}")
 
     problems.extend(_tour_of_duty_problems(cfg.get("tour_of_duty") or {}))
+    problems.extend(_muninn_problems(cfg.get("muninn")))
 
     if not isinstance(cfg.get("rules"), list):
         problems.append("rules must be a list")

@@ -1,8 +1,9 @@
 """Minimal Jira REST v2 client for Jira Data Center, using only the standard library.
 
 Position in the flow
-    The only module that talks to the network. sync.py and __main__.py call it; it knows nothing
-    about meetings, filters, or state. Tests drive it against a local http.server, never real Jira.
+    The only module that talks to the network. sync.py, collect.py, posting.py and cli.py call it;
+    it knows nothing about meetings, filters, or Muninn. Tests drive it against a local http.server,
+    never real Jira.
 
 Why urllib instead of requests
     On Windows, ssl.create_default_context() loads the Windows certificate store, so an agency root
@@ -35,7 +36,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 from urllib.parse import quote, urlencode
 
 from . import __version__
@@ -48,6 +49,9 @@ _AMBIGUOUS_CODES = (502, 503, 504)
 # A 502/503/504 or timeout on POST is ambiguous: Jira may have created the issue before the proxy gave
 # up. Retrying would risk a duplicate, so non-GET calls only retry 429, which is rejected before processing.
 _RETRY_CODES_UNSAFE_METHODS = (429,)
+# What Muninn stores of an issue (asgard.muninn.odin.issue_row), plus the custom fields Odin finds.
+ISSUE_FIELDS = ("summary", "status", "issuetype", "project", "resolution", "resolutiondate", "priority", "parent",
+                "assignee", "reporter", "labels", "components", "created", "updated", "duedate")
 _STATUS_HINTS = {
     401: " (personal access token rejected: expired, revoked, or for a different Jira. Create a new one under Profile > Personal Access Tokens, then run set-token again)",
     403: " (authenticated but not allowed; after several failed logins Jira may require a CAPTCHA - log in once in a browser)",
@@ -67,6 +71,12 @@ class JiraError(Exception):
         super().__init__(message)
         self.status = status
         self.ambiguous = ambiguous
+
+    @property
+    def refused(self) -> bool:
+        """Jira answered and definitely didn't apply the request: a 4xx. Only then may a write be
+        recorded as failed and tried again; a timeout or a 5xx may have landed."""
+        return self.status is not None and 400 <= self.status < 500 and not self.ambiguous
 
 
 def _error_detail(exc: urllib.error.HTTPError) -> str:
@@ -106,7 +116,7 @@ class JiraClient:
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "Content-Type": "application/json",
-            "User-Agent": f"meeting2jira/{__version__}",
+            "User-Agent": f"asgard-odin/{__version__}",
         }
         context = ssl.create_default_context()      # includes the Windows cert store
         if ca_bundle:
@@ -182,6 +192,91 @@ class JiraClient:
     def get_issue(self, key: str, fields: str = "summary,issuetype,project,status") -> Dict[str, Any]:
         return self.request("GET", f"/rest/api/2/issue/{quote(key)}?fields={fields}")
 
+    def fields(self) -> List[Dict[str, Any]]:
+        """Every field, so Muninn can find Epic Link, Story Points and Sprint's custom field ids."""
+        return list(self.request("GET", "/rest/api/2/field") or [])
+
+    def statuses(self) -> List[Dict[str, Any]]:
+        """Every status with its category, so a status Muninn hasn't seen still files as to do or done."""
+        return list(self.request("GET", "/rest/api/2/status") or [])
+
+    def issue(self, key: str, extra_fields: Sequence[str] = (), changelog: bool = True) -> Optional[Dict[str, Any]]:
+        """One issue as Muninn stores it, or None when Jira answers 404 (no such key, or deleted).
+
+        Jira answers an old key with the issue's current one, which is how a moved issue is found.
+        """
+        query = {"fields": ",".join(ISSUE_FIELDS + tuple(f for f in extra_fields if f))}
+        if changelog:
+            query["expand"] = "changelog"
+        try:
+            return self.request("GET", f"/rest/api/2/issue/{quote(key)}?{urlencode(query)}")
+        except JiraError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    def search(self, jql: str, extra_fields: Sequence[str] = (), changelog: bool = False,
+               page_size: int = 50, limit: Optional[int] = None) -> Iterator[List[Dict[str, Any]]]:
+        """Issues matching a JQL query, a page at a time (GET, so a lost answer is safe to ask again).
+
+        One bad key fails a whole query, so keys other apps mention are looked up one at a time
+        with issue() instead. limit stops after that many issues.
+        """
+        start = 0
+        while True:
+            query = {"jql": jql, "fields": ",".join(ISSUE_FIELDS + tuple(f for f in extra_fields if f)),
+                     "startAt": start, "maxResults": page_size}
+            if changelog:
+                query["expand"] = "changelog"
+            data = self.request("GET", f"/rest/api/2/search?{urlencode(query)}") or {}
+            issues = [i for i in data.get("issues") or [] if isinstance(i, dict)]
+            if limit is not None:
+                issues = issues[:max(0, limit - start)]
+            if issues:
+                yield issues
+            start += len(issues)
+            total = int(data.get("total") or 0)
+            if not issues or start >= total or (limit is not None and start >= limit):
+                return
+
+    def issue_worklogs(self, key: str) -> List[Dict[str, Any]]:
+        """Every worklog on one issue, oldest first. Each carries issueId, author, started and comment."""
+        out: List[Dict[str, Any]] = []
+        seen = set()
+        start = 0
+        while True:
+            data = self.request("GET", f"/rest/api/2/issue/{quote(key)}/worklog?startAt={start}&maxResults=1000") or {}
+            page = [w for w in data.get("worklogs") or [] if isinstance(w, dict) and str(w.get("id")) not in seen]
+            seen.update(str(w.get("id")) for w in page)
+            out.extend(page)
+            start += len(page)
+            total = int(data.get("total") or 0)
+            if not page or start >= total:      # an older Jira that ignores startAt sends nothing new
+                return out
+
+    def deleted_worklogs(self, since_ms: int, max_pages: int = 50) -> Iterator[Tuple[List[Dict[str, Any]], Optional[int]]]:
+        """Worklogs deleted anywhere in Jira since a time (epoch milliseconds), a page at a time with
+        the time the page reaches. Only ids and times: nothing about whose they were."""
+        since = int(since_ms)
+        for _ in range(max_pages):
+            data = self.request("GET", f"/rest/api/2/worklog/deleted?since={since}") or {}
+            values = [v for v in data.get("values") or [] if isinstance(v, dict)]
+            until = data.get("until")
+            until = int(until) if isinstance(until, (int, float)) else None
+            yield values, until
+            if data.get("lastPage", True) or until is None or until <= since:
+                return
+            since = until
+
+    def find_worklog(self, key: str, marker: str) -> Optional[Dict[str, Any]]:
+        """The worklog on an issue whose comment carries an Asgard marker, if Jira has it."""
+        for worklog in self.issue_worklogs(key):
+            comment = worklog.get("comment")
+            text = comment if isinstance(comment, str) else json.dumps(comment)
+            if marker and marker in (text or ""):
+                return worklog
+        return None
+
     def get_project(self, key: str) -> Dict[str, Any]:
         return self.request("GET", f"/rest/api/2/project/{quote(key)}")
 
@@ -222,15 +317,18 @@ class JiraClient:
         data = self.request("GET", f"/rest/api/2/search?{query}") or {}
         return [str(issue["key"]) for issue in data.get("issues") or [] if issue.get("key")]
 
-    def add_worklog(self, key: str, seconds: int, started: datetime, comment: str) -> Optional[str]:
+    def add_worklog(self, key: str, seconds: int, started: Union[datetime, str], comment: str) -> Optional[str]:
         """Log time against an issue. Returns the new worklog's id when Jira reports one.
 
-        timeSpentSeconds is the meeting's real duration; Jira rejects 0, so it is floored at
-        one minute.
+        started is a datetime or Jira's own text (2026-10-01T09:20:00.000-0400, as Muninn's
+        PendingPost.started gives it). timeSpentSeconds is the real duration; Jira rejects 0, so it
+        is floored at one minute.
         """
+        if isinstance(started, datetime):
+            started = started.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
         body = {
             "timeSpentSeconds": max(60, int(seconds)),
-            "started": started.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000+0000"),
+            "started": started,
             "comment": comment,
         }
         created = self.request("POST", f"/rest/api/2/issue/{quote(key)}/worklog", body) or {}

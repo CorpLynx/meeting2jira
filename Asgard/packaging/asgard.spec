@@ -22,7 +22,7 @@ from pathlib import Path
 
 HERE = Path(SPECPATH)                       # noqa: F821 (PyInstaller defines SPECPATH and the classes below)
 ROOT = HERE.parent                          # Asgard/
-APP_FOLDERS = ("baldur", "heimdall", "ysildir")
+APP_FOLDERS = ("baldur", "heimdall", "odin", "ysildir")
 OURS = {"asgard"} | set(APP_FOLDERS)       # packages that run from the .py files, never from the archive
 PAYLOAD = ("Asgard.pyw", "VERSION", "README.md", "MODULES.md", "requirements.txt", "setup-Asgard.cmd",
            "asgard", "apps")

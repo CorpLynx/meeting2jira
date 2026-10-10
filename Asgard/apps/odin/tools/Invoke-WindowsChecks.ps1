@@ -1,19 +1,18 @@
 <#
 .SYNOPSIS
-    Runs every meeting2jira check that can only be proven on Windows, and prints a pass/fail summary.
+    Runs every Odin check that can only be proven on Windows, and prints a pass/fail summary.
 
 .DESCRIPTION
-    Covers the parts of the project's status table (HANDOFF.md, in the repo) that a macOS or Linux
-    checkout cannot
-    exercise: real Windows PowerShell 5.1 parsing, DPAPI credential storage, the PowerShell to
-    Python JSON handoff (including 5.1's array-wrapping quirk), and the CSV push path end to end.
+    Covers what a macOS or Linux checkout cannot exercise: real Windows PowerShell 5.1 parsing, DPAPI
+    credential storage, the PowerShell to Python JSON handoff (including 5.1's array-wrapping quirk),
+    and the CSV push path end to end against a temporary Muninn.
 
     It does NOT touch Outlook, Jira, or Task Scheduler, so it is safe to run anywhere: on the
     throwaway AWS lab VM in infra/windows-test-vm, or on the real workstation. The Outlook COM
     export still has to be verified by hand against a live profile.
 
     Run it under Windows PowerShell 5.1 for the meaningful result:
-        powershell.exe -NoProfile -File tools\Invoke-WindowsChecks.ps1
+        powershell.exe -NoProfile -File apps\odin\tools\Invoke-WindowsChecks.ps1   (or: odin selftest)
 
     Exits 1 if any check fails.
 
@@ -21,7 +20,7 @@
     Path to a python.exe, if py.exe should not be used.
 
 .PARAMETER SkipUnitTests
-    Skip the unittest suite; useful when iterating on the Windows-specific probes alone.
+    Skip Odin's unit tests; useful when iterating on the Windows-specific probes alone.
 #>
 [CmdletBinding()]
 param(
@@ -30,10 +29,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$appRoot = Split-Path -Parent $PSScriptRoot          # tools/ sits at the app root
-$srcRoot = Join-Path $appRoot 'src'
+$appRoot = Split-Path -Parent $PSScriptRoot          # apps\odin: tools\ sits in Odin's folder
+$asgardRoot = Split-Path -Parent (Split-Path -Parent $appRoot)
+$cliPy = Join-Path $appRoot 'cli.py'
 $results = New-Object System.Collections.ArrayList
-$probeDir = Join-Path $env:TEMP ('m2j-checks-' + (Get-Date -Format 'yyyyMMdd_HHmmss'))
+$probeDir = Join-Path $env:TEMP ('odin-checks-' + (Get-Date -Format 'yyyyMMdd_HHmmss'))
 New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
 
 function Add-Result([string]$Status, [string]$Name, [string]$Detail) {
@@ -43,21 +43,51 @@ function Add-Result([string]$Status, [string]$Name, [string]$Detail) {
     [void]$results.Add([pscustomobject]@{ Status = $Status; Name = $Name; Detail = $Detail })
 }
 
-# Duplicated verbatim in src/windows/Invoke-MeetingSync.ps1, src/windows/Test-Environment.ps1,
-# tools/Invoke-WindowsChecks.ps1 and power-platform/power-bi/report.ps1 on purpose: dot-sourcing can
-# fail across AppLocker trust levels. tests/test_guardrails.py asserts the copies stay identical, so
-# change one and you must change all of them.
+# Duplicated verbatim in windows/Invoke-MeetingSync.ps1, windows/Test-Environment.ps1 and
+# tools/Invoke-WindowsChecks.ps1 on purpose: dot-sourcing can fail across AppLocker trust levels.
+# tests/test_odin_guardrails.py asserts the copies stay identical, so change one and change all.
 #
-# Existence is not proof. A real agency install routinely has py.exe present with no 3.x registered
-# (so `py -3` fails), or a working Python that was never added to PATH, or a 2.x on PATH ahead of a
-# 3.x. So candidates are gathered from PATH, the registry and the usual install directories, then
-# each is *executed* and made to report its version. The first that actually works wins.
-# $script:M2JPythonAttempts records every candidate tried, which is what makes a failure diagnosable.
+# Odin is an Asgard app and runs on what Asgard runs on, in this order:
+#   1. -Python, when given;
+#   2. the packaged build's own program, asgard-cli.exe two folders above Odin's, which brings
+#      Python and everything else with it and runs Odin's scripts as python.exe would;
+#   3. the Python Asgard was installed with, from install-ledger.json;
+#   4. any other Python 3.9+ whose SQLite is 3.37 or newer with FTS5, which Muninn needs (Windows
+#      Python has that from 3.11): the launcher, PATH, the registry, the usual directories.
+# Existence is not proof. A real agency install routinely has py.exe present with no 3.x registered,
+# a working Python that was never added to PATH, or an old one ahead of a new one. So every real
+# Python is *executed* and made to report its version and its SQLite's; the first that works wins.
+# $script:OdinPythonAttempts records every candidate tried, which is what makes a failure diagnosable.
 function Resolve-Python([string]$Override) {
-    $script:M2JPythonAttempts = @()
+    $script:OdinPythonAttempts = @()
     $candidates = @()
 
     if ($Override) { $candidates += @{ Exe = $Override; Prefix = @() } }
+
+    # The packaged build: Odin's scripts are in apps\odin\windows and apps\odin\tools, two folders
+    # below the build's programs. It can't run probe code, so it is trusted as it is.
+    $asgardRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    $frozen = Join-Path $asgardRoot 'asgard-cli.exe'
+    if (-not $Override -and (Test-Path -LiteralPath $frozen)) {
+        $script:OdinPythonAttempts += "ok   $frozen (Asgard's packaged build)"
+        return @{ Exe = $frozen; Prefix = @(); Version = 'the packaged build'; Frozen = $true }
+    }
+
+    # The Python Asgard was installed with. A packaged install's asgard-cli.exe runs only the scripts
+    # in its own folder, so it is no use to a copy of Odin anywhere else.
+    $asgardData = if ($env:ASGARD_HOME) { $env:ASGARD_HOME } else { Join-Path $env:LOCALAPPDATA 'Asgard' }
+    $ledgerPath = Join-Path $asgardData 'install-ledger.json'
+    if (Test-Path -LiteralPath $ledgerPath) {
+        $ledger = $null
+        try {
+            $ledger = Get-Content -LiteralPath $ledgerPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        } catch {
+            $ledger = $null
+        }
+        if ($ledger -and $ledger.python -and ("$($ledger.python)" -notmatch 'asgard-cli\.exe$')) {
+            $candidates += @{ Exe = "$($ledger.python)"; Prefix = @() }
+        }
+    }
 
     # The launcher, but only if it can really produce a 3.x - that is verified below, not assumed.
     foreach ($found in @(Get-Command 'py.exe' -All -ErrorAction SilentlyContinue)) {
@@ -105,6 +135,12 @@ function Resolve-Python([string]$Override) {
         }
     }
 
+    # Single-quoted so no double quote ever reaches the native command: Windows PowerShell 5.1
+    # mangles embedded double quotes in native arguments. Exit 3 marks "runs, but can't run Muninn".
+    $probe = 'import sqlite3, sys; con = sqlite3.connect('':memory:''); ' +
+        'fts5 = any(''FTS5'' in row[0] for row in con.execute(''pragma compile_options'')); ' +
+        'print(sys.version.split()[0] + '' with SQLite '' + sqlite3.sqlite_version); ' +
+        'sys.exit(0 if sys.version_info >= (3, 9) and sqlite3.sqlite_version_info >= (3, 37, 0) and fts5 else 3)'
     $seen = @()
     foreach ($candidate in $candidates) {
         if (-not $candidate.Exe) { continue }
@@ -112,14 +148,12 @@ function Resolve-Python([string]$Override) {
         if ($seen -contains $label) { continue }
         $seen += $label
         if (-not (Test-Path -LiteralPath $candidate.Exe)) {
-            $script:M2JPythonAttempts += "gone $label"
+            $script:OdinPythonAttempts += "gone $label"
             continue
         }
         $argv = @()
         $argv += $candidate.Prefix
-        # Single-quoted so no double quote ever reaches the native command: Windows PowerShell 5.1
-        # mangles embedded double quotes in native arguments. Exit 3 marks "runs, but too old".
-        $argv += @('-c', 'import sys; print(sys.version.split()[0]); sys.exit(0 if sys.version_info >= (3, 8) else 3)')
+        $argv += @('-c', $probe)
         $previousEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         $reported = ''
@@ -134,12 +168,12 @@ function Resolve-Python([string]$Override) {
         }
         $reportedVersion = "$(@($reported) | Select-Object -First 1)".Trim()
         if ($code -eq 0) {
-            $script:M2JPythonAttempts += "ok   $label -> $reportedVersion"
-            return @{ Exe = $candidate.Exe; Prefix = $candidate.Prefix; Version = $reportedVersion }
+            $script:OdinPythonAttempts += "ok   $label -> $reportedVersion"
+            return @{ Exe = $candidate.Exe; Prefix = $candidate.Prefix; Version = $reportedVersion; Frozen = $false }
         } elseif ($code -eq 3) {
-            $script:M2JPythonAttempts += "old  $label -> $reportedVersion (needs 3.8+)"
+            $script:OdinPythonAttempts += "old  $label -> $reportedVersion (needs 3.9+ with SQLite 3.37+ and FTS5)"
         } else {
-            $script:M2JPythonAttempts += "fail $label -> $reportedVersion"
+            $script:OdinPythonAttempts += "fail $label -> $reportedVersion"
         }
     }
     return $null
@@ -161,10 +195,10 @@ function Invoke-Native([string]$Exe, [string[]]$NativeArgs) {
     }
 }
 
-# Runs a standalone .py probe file that needs `import meeting2jira`. Unlike `-m meeting2jira`,
-# python.exe run against a file path only puts that file's own directory on sys.path, not the
-# current directory -- so Push-Location alone does not make the package importable. Set
-# PYTHONPATH for the duration of the call instead, and restore whatever was there before.
+# Runs a standalone .py probe file that needs `import odin`. python.exe run against a file path
+# only puts that file's own directory on sys.path, not the current directory -- so Push-Location
+# alone does not make the package importable. Set PYTHONPATH (Odin's folder and Asgard's) for the
+# duration of the call instead, and restore whatever was there before.
 # Arguments are passed without embedded double quotes, because Windows PowerShell 5.1 mangles
 # those when handing them to a native command.
 function Invoke-Probe($Py, [string]$ScriptPath, [string[]]$ProbeArgs) {
@@ -173,7 +207,7 @@ function Invoke-Probe($Py, [string]$ScriptPath, [string[]]$ProbeArgs) {
     $argv += $ScriptPath
     $argv += $ProbeArgs
     $previousPythonPath = $env:PYTHONPATH
-    $env:PYTHONPATH = $srcRoot
+    $env:PYTHONPATH = "$appRoot;$asgardRoot"
     try {
         return Invoke-Native $Py.Exe $argv
     } finally {
@@ -181,7 +215,7 @@ function Invoke-Probe($Py, [string]$ScriptPath, [string[]]$ProbeArgs) {
     }
 }
 
-Write-Host "`nmeeting2jira Windows checks`n" -ForegroundColor Cyan
+Write-Host "`nOdin Windows checks`n" -ForegroundColor Cyan
 
 # --- Environment banner -------------------------------------------------------------------------
 $mode = $ExecutionContext.SessionState.LanguageMode
@@ -209,28 +243,43 @@ if ($syntaxResult.Code -eq 0) {
 # --- Python -------------------------------------------------------------------------------------
 $py = Resolve-Python $Python
 if (-not $py) {
-    Add-Result FAIL 'Python discovery' ("no working Python 3.8+; candidates tried:`n       " + (@($script:M2JPythonAttempts) -join "`n       "))
+    Add-Result FAIL 'Python discovery' ("no Python that can run Odin (3.9+ with SQLite 3.37+); candidates tried:`n       " + (@($script:OdinPythonAttempts) -join "`n       "))
     Write-Host ''
     Write-Host 'Cannot continue without Python.' -ForegroundColor Red
     exit 1
 }
-$versionProbe = Join-Path $probeDir 'version.py'
-Set-Content -Path $versionProbe -Encoding ascii -Value @'
-import sys
-print(sys.version.split()[0])
+# The packaged build runs only the scripts inside it, so the probes below that are files in %TEMP%
+# can't run on it; `asgard-cli.exe --self-test` checks the same modules load instead.
+$canProbe = -not $py.Frozen
+if ($canProbe) {
+    $versionProbe = Join-Path $probeDir 'version.py'
+    Set-Content -Path $versionProbe -Encoding ascii -Value @'
+import sqlite3, sys
+print(sys.version.split()[0] + " with SQLite " + sqlite3.sqlite_version)
 '@
-$r = Invoke-Probe $py $versionProbe @()
-Add-Result INFO ('Python {0} at {1}' -f $r.Output, $py.Exe) ''
+    $r = Invoke-Probe $py $versionProbe @()
+    Add-Result INFO ('Python {0} at {1}' -f $r.Output, $py.Exe) ''
+} else {
+    $r = Invoke-Native $py.Exe @('--self-test')
+    if ($r.Code -eq 0) {
+        Add-Result PASS "Asgard's packaged build (asgard-cli.exe --self-test)" (($r.Output -split "`n" | Select-Object -Last 1) -join '')
+    } else {
+        Add-Result FAIL "Asgard's packaged build (asgard-cli.exe --self-test)" $r.Output
+    }
+}
 
 # --- 2. The unittest suite on Windows -----------------------------------------------------------
+$testsDir = Join-Path $asgardRoot 'tests'
 if ($SkipUnitTests) {
     Add-Result SKIP 'unittest suite' '-SkipUnitTests was passed'
+} elseif (-not $canProbe -or -not (Test-Path -LiteralPath (Join-Path $testsDir 'test_odin_pipeline.py'))) {
+    Add-Result SKIP 'unittest suite' "this copy of Asgard has no tests folder (a download or the packaged build)"
 } else {
-    Push-Location $appRoot
+    Push-Location $asgardRoot
     try {
         $argv = @()
         $argv += $py.Prefix
-        $argv += @('-m', 'unittest', 'discover', '-s', 'tests', '-v')
+        $argv += @('-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_odin_*.py', '-v')
         $testResult = Invoke-Native $py.Exe $argv
     } finally {
         Pop-Location
@@ -254,7 +303,7 @@ import tempfile
 
 # The file must win, not the env var, so clear the override before importing.
 os.environ.pop("JIRA_PAT", None)
-from meeting2jira.credstore import load_token, save_token
+from odin.credstore import load_token, save_token
 
 secret = "probe-token-\u00e9\u20ac-" + "x" * 200
 tmp = tempfile.mkdtemp()
@@ -271,11 +320,15 @@ try:
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 '@
-$r = Invoke-Probe $py $dpapiProbe @()
-if ($r.Code -eq 0) {
-    Add-Result PASS 'DPAPI credential storage (credstore.py)' $r.Output
+if (-not $canProbe) {
+    Add-Result SKIP 'DPAPI credential storage (credstore.py)' 'the packaged build runs only its own scripts'
 } else {
-    Add-Result FAIL 'DPAPI credential storage (credstore.py)' $r.Output
+    $r = Invoke-Probe $py $dpapiProbe @()
+    if ($r.Code -eq 0) {
+        Add-Result PASS 'DPAPI credential storage (credstore.py)' $r.Output
+    } else {
+        Add-Result FAIL 'DPAPI credential storage (credstore.py)' $r.Output
+    }
 }
 
 # --- 4. PowerShell -> Python JSON handoff -------------------------------------------------------
@@ -286,7 +339,7 @@ $loadProbe = Join-Path $probeDir 'load_export.py'
 Set-Content -Path $loadProbe -Encoding ascii -Value @'
 import sys
 
-from meeting2jira.sources import load_export
+from odin.sources import load_export
 
 path, expected = sys.argv[1], int(sys.argv[2])
 meetings = load_export(path)
@@ -340,6 +393,10 @@ foreach ($count in @(0, 1, 2)) {
     $wrapped = 'no'
     if ($json -match '"Count"\s*:') { $wrapped = 'YES (unwrap_ps_array is doing real work)' }
 
+    if (-not $canProbe) {
+        $handoffDetail += ('{0} item(s): written; array wrapping: {1}' -f $count, $wrapped)
+        continue
+    }
     $r = Invoke-Probe $py $loadProbe @($exportPath, "$count")
     if ($r.Code -eq 0) {
         $handoffDetail += ('{0} item(s): {1}; array wrapping: {2}' -f $count, $r.Output, $wrapped)
@@ -355,8 +412,9 @@ if ($handoffOk) {
 }
 
 # --- 5. The CSV push path, end to end, no network ------------------------------------------------
-# Exercises the real CLI: config load, CSV parse, filters, routing, templates, sqlite state.
-# --dry-run creates nothing and needs no token.
+# Exercises the real CLI: config load, CSV parse, filters, routing, templates, and Muninn, made for
+# the occasion in a temporary ASGARD_HOME by Asgard itself (--muninn prepare). --dry-run creates
+# nothing and needs no token.
 $cliDir = Join-Path $probeDir 'cli'
 New-Item -ItemType Directory -Force -Path $cliDir | Out-Null
 $cfgPath = Join-Path $cliDir 'config.json'
@@ -374,35 +432,46 @@ Remove-TypeData -TypeName System.Array -ErrorAction SilentlyContinue
 [System.IO.File]::WriteAllText($cfgPath, (ConvertTo-Json -InputObject $cfg -Depth 6),
     (New-Object System.Text.UTF8Encoding($false)))
 
-$csvFixture = Join-Path $appRoot 'tests\fixtures\sample_outlook.csv'
+$csvFixture = Join-Path $cliDir 'calendar.csv'
+Set-Content -Path $csvFixture -Encoding ascii -Value @(
+    'Subject,Start Date,Start Time,End Date,End Time,All day event,Meeting Organizer,Required Attendees,Location,Show time as,Private,Categories',
+    'Sprint Planning,9/21/2026,10:00:00 AM,9/21/2026,11:00:00 AM,False,Alex Kim,me@agency.gov,Microsoft Teams Meeting,2,False,'
+)
+$savedHome = $env:ASGARD_HOME
+$env:ASGARD_HOME = Join-Path $probeDir 'asgard-home'
 Push-Location $appRoot
 try {
     $argv = @()
     $argv += $py.Prefix
-    $argv += @('-m', 'meeting2jira', 'push', '--config', $cfgPath, '--csv', $csvFixture, '--dry-run')
+    $argv += @((Join-Path $asgardRoot 'Asgard.pyw'), '--muninn', 'prepare')
+    $prepared = Invoke-Native $py.Exe $argv
+    $argv = @()
+    $argv += $py.Prefix
+    $argv += @($cliPy, 'push', '--config', $cfgPath, '--csv', $csvFixture, '--dry-run')
     $cliResult = Invoke-Native $py.Exe $argv
 } finally {
     Pop-Location
+    $env:ASGARD_HOME = $savedHome
 }
 $cliText = $cliResult.Output
 if ($cliResult.Code -eq 0 -and $cliText -match 'Would create') {
-    Add-Result PASS 'CLI push --csv --dry-run' (($cliText -split "`n" | Select-Object -Last 2) -join ' | ')
+    Add-Result PASS 'CLI push --csv --dry-run (on a temporary Muninn)' (($cliText -split "`n" | Select-Object -Last 2) -join ' | ')
 } else {
-    Add-Result FAIL 'CLI push --csv --dry-run' $cliText
+    Add-Result FAIL 'CLI push --csv --dry-run (on a temporary Muninn)' ("Muninn: " + $prepared.Output + "`n       " + $cliText)
 }
 
-# --- 6. The meeting2jira.cmd entry point --------------------------------------------------------
+# --- 6. The odin.cmd entry point ----------------------------------------------------------------
 # Batch has no parse-only mode, so exercise the paths that need no config or Outlook. `help` and an
 # unknown command both go through argument collection, which is where the bugs live.
-$entryPoint = Join-Path $appRoot 'meeting2jira.cmd'
+$entryPoint = Join-Path $appRoot 'odin.cmd'
 if (-not (Test-Path -LiteralPath $entryPoint)) {
-    Add-Result FAIL 'meeting2jira.cmd entry point' 'file not found'
+    Add-Result FAIL 'odin.cmd entry point' 'file not found'
 } else {
     $entryOk = $true
     $entryDetail = @()
 
     $help = Invoke-Native 'cmd.exe' @('/c', $entryPoint, 'help')
-    if ($help.Code -ne 0 -or $help.Output -notmatch 'push ended Outlook meetings') {
+    if ($help.Code -ne 0 -or $help.Output -notmatch 'meetings to Jira sub-tasks') {
         $entryOk = $false
         $entryDetail += ('help: exit {0}; {1}' -f $help.Code, $help.Output)
     } else {
@@ -428,18 +497,18 @@ if (-not (Test-Path -LiteralPath $entryPoint)) {
     }
 
     if ($entryOk) {
-        Add-Result PASS 'meeting2jira.cmd entry point' ($entryDetail -join "`n       ")
+        Add-Result PASS 'odin.cmd entry point' ($entryDetail -join "`n       ")
     } else {
-        Add-Result FAIL 'meeting2jira.cmd entry point' ($entryDetail -join "`n       ")
+        Add-Result FAIL 'odin.cmd entry point' ($entryDetail -join "`n       ")
     }
 }
 
 # --- 7. Test-Environment.ps1 actually runs, including the last-run health block -------------------
 # The syntax checker only parses it. This executes it, with a planted last_run.json, because the
 # health block does ConvertFrom-Json and DateTime arithmetic that parsing cannot validate.
-$doctorScript = Join-Path $srcRoot 'windows\Test-Environment.ps1'
+$doctorScript = Join-Path $appRoot 'windows\Test-Environment.ps1'
 # Odin's files live under Asgard's folder: ASGARD_HOME\odin when set (as in Asgard's own tests),
-# else %LOCALAPPDATA%\Asgard\odin. Odin doesn't need Asgard installed; it only shares the folder.
+# else %LOCALAPPDATA%\Asgard\odin. Odin is an Asgard app; its records are in Muninn beside them.
 $asgardDir = if ($env:ASGARD_HOME) { $env:ASGARD_HOME } else { Join-Path $env:LOCALAPPDATA 'Asgard' }
 $dataDir = Join-Path $asgardDir 'odin'
 # A folder from before (%LOCALAPPDATA%\meeting2jira) moves here the first time, in one rename, so the
@@ -525,8 +594,8 @@ try {
 # --- 8. Scheduled-task registration and the tour-of-duty start time ------------------------------
 # Registers for real, inspects the trigger, then removes it. This is the only way to check that
 # -At is derived from tour_of_duty.end, since that path reads the config and does arithmetic.
-$taskScript = Join-Path $srcRoot 'windows\Register-MeetingSyncTask.ps1'
-$probeTask = 'm2j-selfcheck-task'
+$taskScript = Join-Path $appRoot 'windows\Register-MeetingSyncTask.ps1'
+$probeTask = 'odin-selfcheck-task'
 $configPath = Join-Path $dataDir 'config.json'
 $savedConfig = $null
 if (Test-Path -LiteralPath $configPath) { $savedConfig = Get-Content -LiteralPath $configPath -Raw }

@@ -1,7 +1,7 @@
 """Readers that turn calendar exports into Meeting objects.
 
 Position in the flow
-    The front door. __main__.cmd_push calls one of these, then hands the resulting list to sync.py.
+    The front door. cli.py calls one of these, then hands the resulting list to sync.py.
     Everything downstream sees only Meeting objects and cannot tell which path produced them.
 
 Two sources today
@@ -30,7 +30,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Sequence
+from typing import Any, Dict, List, Sequence, Tuple
 
 from .models import Meeting, unwrap_ps_array
 
@@ -45,8 +45,15 @@ _CSV_REQUIRED = {"subject", "start date", "start time", "end date", "end time"}
 
 
 def load_export(path) -> List[Meeting]:
+    return read_export(path)[0]
+
+
+def read_export(path) -> Tuple[List[Meeting], Dict[str, Any]]:
+    """The export's meetings, and its envelope (source, range_start, range_end, truncated)."""
     with open(path, encoding="utf-8-sig") as fh:   # PowerShell 5.1 may write a BOM
         doc = json.load(fh)
+    if not isinstance(doc, dict):
+        raise ValueError(f"{path}: not an Odin export (expected a JSON object)")
     version = doc.get("schema_version")
     if version != SUPPORTED_SCHEMA:
         raise ValueError(f"{path}: unsupported schema_version {version!r} (expected {SUPPORTED_SCHEMA})")
@@ -57,7 +64,8 @@ def load_export(path) -> List[Meeting]:
             meetings.append(Meeting.from_dict(raw, source))
         except (KeyError, ValueError, TypeError) as exc:
             log.warning("Skipping malformed item #%d in %s: %s", i, path, exc)
-    return meetings
+    info = {k: doc.get(k) for k in ("source", "exported_at", "range_start", "range_end", "truncated")}
+    return meetings, info
 
 
 def _read_text(path: Path) -> str:

@@ -1,11 +1,9 @@
 """Tour of duty: classifying meetings against scheduled working hours.
 
 Tour of duty deliberately does NOT decide which days get scanned. The scan window is safe to
-widen because the state database makes re-runs idempotent, so "did I miss a late meeting" is a
+widen because Muninn's record of sub-tasks makes re-runs idempotent, so "did I miss a late meeting" is a
 question for -DaysBack, not for this. What this decides is how an out-of-tour meeting is treated.
 """
-import shutil
-import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,11 +16,12 @@ for folder in (ROOT, APP):
     if str(folder) not in sys.path:
         sys.path.insert(0, str(folder))
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fake_jira import FakeJira, OdinTestCase  # noqa: E402
+
 from odin.config import ConfigError, build_config  # noqa: E402
 from odin.models import Meeting  # noqa: E402
 from odin.rules import INSIDE, OUTSIDE, PARTIAL, UNKNOWN, Router, TourOfDuty  # noqa: E402
-from odin.state import State  # noqa: E402
-from odin.sync import run  # noqa: E402
 
 NOW = datetime(2099, 1, 1, tzinfo=timezone.utc)   # far future, so nothing is "not ended yet"
 
@@ -101,30 +100,11 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(strict.minutes_outside(meeting_at(21, "06:50", 30)), 10)
 
 
-class RoutingTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
+class RoutingTests(OdinTestCase):
     def _created(self, tour, meetings):
-        recorded = []
-
-        class Jira:
-            def create_issue(self, fields):
-                recorded.append(fields)
-                return "PROJ-%d" % (500 + len(recorded))
-
-            def add_worklog(self, *a):
-                return "1"
-
-            def transition(self, *a):
-                return True
-
-        with State(self.tmp / "state.db") as state:
-            result = run(meetings, config(tour), state, Jira(), now=NOW)
-        return result, recorded
+        jira = FakeJira()
+        result = self.push(meetings, config(tour), jira, now=NOW)
+        return result, jira.created
 
     def test_include_treats_out_of_tour_like_any_other_meeting(self):
         tour = dict(WEEKDAY_TOUR, outside_action="include")
@@ -177,16 +157,9 @@ class RoutingTests(unittest.TestCase):
     def test_template_fields_are_available(self):
         cfg = config(WEEKDAY_TOUR)
         cfg["templates"]["description"] = "{tod_status} / {minutes_outside_tod} min outside"
-        recorded = []
-
-        class Jira:
-            def create_issue(self, fields):
-                recorded.append(fields)
-                return "PROJ-501"
-
-        with State(self.tmp / "state.db") as state:
-            run([meeting_at(21, "15:00", 60)], cfg, state, Jira(), now=NOW)
-        self.assertEqual(recorded[0]["description"], "partial / 15 min outside")
+        jira = FakeJira()
+        self.push([meeting_at(21, "15:00", 60)], cfg, jira, now=NOW)
+        self.assertEqual(jira.created[0]["description"], "partial / 15 min outside")
 
 
 class ValidationTests(unittest.TestCase):

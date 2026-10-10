@@ -74,6 +74,7 @@ class JiraClientTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
+        cls.server.server_close()       # the listening socket too, or Windows keeps it open
 
     def setUp(self):
         _Handler.calls.clear()

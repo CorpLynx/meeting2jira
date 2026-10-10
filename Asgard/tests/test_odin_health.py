@@ -21,6 +21,9 @@ for folder in (ROOT, APP):
         sys.path.insert(0, str(folder))
 
 from odin.cli import (ALERT_FILE, clear_alert, token_expiry_warning, write_alert)  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fake_jira import FIXTURES, FakeJira, OdinTestCase  # noqa: E402
+
 from odin.config import build_config  # noqa: E402
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
@@ -130,34 +133,27 @@ class AlertFileTests(unittest.TestCase):
         self.assertTrue((self.tmp / ALERT_FILE).exists())
 
 
-class FailureStreakTests(unittest.TestCase):
+class FailureStreakTests(OdinTestCase):
     """The streak lives in last_run.json, so `status` and the alert threshold agree on it."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        cfg = json.loads((APP / "config.example.json")
-                         .read_text(encoding="utf-8"))
+        super().setUp()
+        cfg = json.loads((APP / "config.example.json").read_text(encoding="utf-8"))
         cfg["jira"].update(base_url="https://j.example.gov", default_parent="PROJ-1")
         cfg["rules"] = []
         cfg["filters"]["only_ended"] = False
-        self.cfg_path = self.tmp / "config.json"
+        self.cfg_path = self.data / "config.json"
         self.cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
 
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
     def _last_run(self):
-        return json.loads((self.tmp / "last_run.json").read_text(encoding="utf-8"))
+        return json.loads((self.data / "last_run.json").read_text(encoding="utf-8"))
 
     def test_streak_increments_on_failure_and_resets_on_success(self):
         import contextlib
         import io
         from odin.cli import main
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from test_odin_pipeline import FakeJira
 
-        fixture = Path(__file__).resolve().parent / "fixtures" / "odin" / "sample_outlook.csv"
-        argv = ["push", "--config", str(self.cfg_path), "--csv", str(fixture)]
+        argv = ["push", "--config", str(self.cfg_path), "--csv", str(FIXTURES / "sample_outlook.csv")]
 
         class FailingJira(FakeJira):
             def create_issue(self, fields):
@@ -176,11 +172,18 @@ class FailureStreakTests(unittest.TestCase):
         self.assertEqual(run_with(FailingJira()), 1)
         self.assertEqual(self._last_run()["consecutive_failures"], 2)
         # An alert should be outstanding by now.
-        self.assertTrue((self.tmp / ALERT_FILE).exists())
+        self.assertTrue((self.data / ALERT_FILE).exists())
 
         self.assertEqual(run_with(FakeJira()), 0)
         self.assertEqual(self._last_run()["consecutive_failures"], 0)
-        self.assertFalse((self.tmp / ALERT_FILE).exists())
+        self.assertFalse((self.data / ALERT_FILE).exists())
+
+    def test_the_old_alert_file_is_taken_down_too(self):
+        old = self.data / "ATTENTION-meeting2jira.txt"
+        old.write_text("from before the move", encoding="utf-8")
+        with mock.patch("odin.cli._desktop_dir", return_value=None):
+            clear_alert(self.data)
+        self.assertFalse(old.exists())
 
 
 if __name__ == "__main__":

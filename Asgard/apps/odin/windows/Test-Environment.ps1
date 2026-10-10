@@ -1,21 +1,23 @@
 <#
 .SYNOPSIS
-    Read-only preflight: reports what this machine allows and which meeting2jira path to use.
+    Read-only preflight: reports what this machine allows and which Odin path to use.
 
 .DESCRIPTION
     Run this first, and run it again whenever something stops working. It changes nothing: no
     files, no registry, no scheduled tasks, no network calls to Jira. Safe under Constrained
     Language Mode, which matters because one of the things it reports is whether you are in it.
 
-    Reached as `.\meeting2jira doctor`.
+    Reached as `odin doctor`.
 
     What it inspects:
       * PowerShell version and language mode. Constrained Language Mode blocks COM, which decides
         whether the automatic Outlook export (Path A) is available at all.
       * Execution policy, per scope, plus the internet-zone mark on the .ps1 files - the usual
         reason scripts refuse to run after being downloaded.
-      * Python: the launcher it would pick, the version, and that ssl/sqlite3/ctypes are present.
+      * Python: which one Odin would run on (Asgard's packaged build, the Python Asgard was installed
+        with, or another 3.9+ with SQLite 3.37+), and that ssl, sqlite3 and ctypes are present.
         Deliberately skips the Microsoft Store alias, which opens the Store instead of running.
+      * Muninn, Asgard's database, which Odin keeps its records in: whether Asgard has made it.
       * Classic Outlook COM registration, and whether "new Outlook" (olk.exe) is running instead.
       * Proxy configuration, including PAC, which Python does not evaluate.
       * Whether the ScheduledTasks cmdlets are available for the optional daily task.
@@ -37,21 +39,51 @@ function Write-Check([string]$Status, [string]$Message) {
     Write-Host ('[{0,-4}] {1}' -f $Status, $Message) -ForegroundColor $color
 }
 
-# Duplicated verbatim in src/windows/Invoke-MeetingSync.ps1, src/windows/Test-Environment.ps1,
-# tools/Invoke-WindowsChecks.ps1 and power-platform/power-bi/report.ps1 on purpose: dot-sourcing can
-# fail across AppLocker trust levels. tests/test_guardrails.py asserts the copies stay identical, so
-# change one and you must change all of them.
+# Duplicated verbatim in windows/Invoke-MeetingSync.ps1, windows/Test-Environment.ps1 and
+# tools/Invoke-WindowsChecks.ps1 on purpose: dot-sourcing can fail across AppLocker trust levels.
+# tests/test_odin_guardrails.py asserts the copies stay identical, so change one and change all.
 #
-# Existence is not proof. A real agency install routinely has py.exe present with no 3.x registered
-# (so `py -3` fails), or a working Python that was never added to PATH, or a 2.x on PATH ahead of a
-# 3.x. So candidates are gathered from PATH, the registry and the usual install directories, then
-# each is *executed* and made to report its version. The first that actually works wins.
-# $script:M2JPythonAttempts records every candidate tried, which is what makes a failure diagnosable.
+# Odin is an Asgard app and runs on what Asgard runs on, in this order:
+#   1. -Python, when given;
+#   2. the packaged build's own program, asgard-cli.exe two folders above Odin's, which brings
+#      Python and everything else with it and runs Odin's scripts as python.exe would;
+#   3. the Python Asgard was installed with, from install-ledger.json;
+#   4. any other Python 3.9+ whose SQLite is 3.37 or newer with FTS5, which Muninn needs (Windows
+#      Python has that from 3.11): the launcher, PATH, the registry, the usual directories.
+# Existence is not proof. A real agency install routinely has py.exe present with no 3.x registered,
+# a working Python that was never added to PATH, or an old one ahead of a new one. So every real
+# Python is *executed* and made to report its version and its SQLite's; the first that works wins.
+# $script:OdinPythonAttempts records every candidate tried, which is what makes a failure diagnosable.
 function Resolve-Python([string]$Override) {
-    $script:M2JPythonAttempts = @()
+    $script:OdinPythonAttempts = @()
     $candidates = @()
 
     if ($Override) { $candidates += @{ Exe = $Override; Prefix = @() } }
+
+    # The packaged build: Odin's scripts are in apps\odin\windows and apps\odin\tools, two folders
+    # below the build's programs. It can't run probe code, so it is trusted as it is.
+    $asgardRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    $frozen = Join-Path $asgardRoot 'asgard-cli.exe'
+    if (-not $Override -and (Test-Path -LiteralPath $frozen)) {
+        $script:OdinPythonAttempts += "ok   $frozen (Asgard's packaged build)"
+        return @{ Exe = $frozen; Prefix = @(); Version = 'the packaged build'; Frozen = $true }
+    }
+
+    # The Python Asgard was installed with. A packaged install's asgard-cli.exe runs only the scripts
+    # in its own folder, so it is no use to a copy of Odin anywhere else.
+    $asgardData = if ($env:ASGARD_HOME) { $env:ASGARD_HOME } else { Join-Path $env:LOCALAPPDATA 'Asgard' }
+    $ledgerPath = Join-Path $asgardData 'install-ledger.json'
+    if (Test-Path -LiteralPath $ledgerPath) {
+        $ledger = $null
+        try {
+            $ledger = Get-Content -LiteralPath $ledgerPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        } catch {
+            $ledger = $null
+        }
+        if ($ledger -and $ledger.python -and ("$($ledger.python)" -notmatch 'asgard-cli\.exe$')) {
+            $candidates += @{ Exe = "$($ledger.python)"; Prefix = @() }
+        }
+    }
 
     # The launcher, but only if it can really produce a 3.x - that is verified below, not assumed.
     foreach ($found in @(Get-Command 'py.exe' -All -ErrorAction SilentlyContinue)) {
@@ -99,6 +131,12 @@ function Resolve-Python([string]$Override) {
         }
     }
 
+    # Single-quoted so no double quote ever reaches the native command: Windows PowerShell 5.1
+    # mangles embedded double quotes in native arguments. Exit 3 marks "runs, but can't run Muninn".
+    $probe = 'import sqlite3, sys; con = sqlite3.connect('':memory:''); ' +
+        'fts5 = any(''FTS5'' in row[0] for row in con.execute(''pragma compile_options'')); ' +
+        'print(sys.version.split()[0] + '' with SQLite '' + sqlite3.sqlite_version); ' +
+        'sys.exit(0 if sys.version_info >= (3, 9) and sqlite3.sqlite_version_info >= (3, 37, 0) and fts5 else 3)'
     $seen = @()
     foreach ($candidate in $candidates) {
         if (-not $candidate.Exe) { continue }
@@ -106,14 +144,12 @@ function Resolve-Python([string]$Override) {
         if ($seen -contains $label) { continue }
         $seen += $label
         if (-not (Test-Path -LiteralPath $candidate.Exe)) {
-            $script:M2JPythonAttempts += "gone $label"
+            $script:OdinPythonAttempts += "gone $label"
             continue
         }
         $argv = @()
         $argv += $candidate.Prefix
-        # Single-quoted so no double quote ever reaches the native command: Windows PowerShell 5.1
-        # mangles embedded double quotes in native arguments. Exit 3 marks "runs, but too old".
-        $argv += @('-c', 'import sys; print(sys.version.split()[0]); sys.exit(0 if sys.version_info >= (3, 8) else 3)')
+        $argv += @('-c', $probe)
         $previousEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         $reported = ''
@@ -128,20 +164,20 @@ function Resolve-Python([string]$Override) {
         }
         $reportedVersion = "$(@($reported) | Select-Object -First 1)".Trim()
         if ($code -eq 0) {
-            $script:M2JPythonAttempts += "ok   $label -> $reportedVersion"
-            return @{ Exe = $candidate.Exe; Prefix = $candidate.Prefix; Version = $reportedVersion }
+            $script:OdinPythonAttempts += "ok   $label -> $reportedVersion"
+            return @{ Exe = $candidate.Exe; Prefix = $candidate.Prefix; Version = $reportedVersion; Frozen = $false }
         } elseif ($code -eq 3) {
-            $script:M2JPythonAttempts += "old  $label -> $reportedVersion (needs 3.8+)"
+            $script:OdinPythonAttempts += "old  $label -> $reportedVersion (needs 3.9+ with SQLite 3.37+ and FTS5)"
         } else {
-            $script:M2JPythonAttempts += "fail $label -> $reportedVersion"
+            $script:OdinPythonAttempts += "fail $label -> $reportedVersion"
         }
     }
     return $null
 }
 
-$appRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$srcRoot = Join-Path $appRoot 'src'
-Write-Host "`nmeeting2jira environment check`n" -ForegroundColor Cyan
+$appRoot = Split-Path -Parent $PSScriptRoot
+$cliPy = Join-Path $appRoot 'cli.py'
+Write-Host "`nOdin environment check`n" -ForegroundColor Cyan
 
 # --- PowerShell -------------------------------------------------------------------------------
 $mode = $ExecutionContext.SessionState.LanguageMode
@@ -170,13 +206,17 @@ if ($blocked) {
 $py = Resolve-Python $Python
 $pythonOk = $false
 if (-not $py) {
-    Write-Check FAIL 'No working Python 3.8+ found. Every candidate tried is listed below.'
-    Write-Check INFO 'Searched PATH (py.exe, python3.exe, python.exe), the registry, and the usual install directories.'
+    Write-Check FAIL 'No Python that can run Odin found: it needs 3.9+ with SQLite 3.37+ (3.11+ on Windows). Every candidate tried is listed below.'
+    Write-Check INFO "Searched Asgard's install record, PATH (py.exe, python3.exe, python.exe), the registry, and the usual install directories."
     Write-Check INFO 'If one of these is the Python you expect, the reason it was rejected is the thing to fix.'
     Write-Check INFO 'Escape hatch: pass -Python C:\path\to\python.exe'
+} elseif ($py.Frozen) {
+    Write-Check OK "Asgard's packaged build at $($py.Exe) (it brings Python and every module with it)"
+    $pythonOk = $true
 } else {
-    # Resolve-Python already proved this one runs and is 3.8+, so only the module check is left.
-    # ssl, sqlite3 and ctypes are not optional here: Jira calls, dedupe state, and DPAPI need them,
+    # Resolve-Python already proved this one runs, with a SQLite Muninn can use, so only the module
+    # check is left.
+    # ssl, sqlite3 and ctypes are not optional here: Jira calls, Muninn, and DPAPI need them,
     # and a trimmed-down agency build can be missing them.
     $probe = @()
     $probe += $py.Prefix
@@ -198,20 +238,18 @@ if (-not $py) {
 }
 # Always show the search trail. When discovery works this explains *which* Python was chosen and why,
 # which matters on a machine with several installed; when it fails it is the whole diagnosis.
-foreach ($attempt in @($script:M2JPythonAttempts)) {
+foreach ($attempt in @($script:OdinPythonAttempts)) {
     Write-Check INFO "  python candidate: $attempt"
 }
 if ($pythonOk) {
-    $previousPythonPath = $env:PYTHONPATH
-    $env:PYTHONPATH = $srcRoot
     Push-Location $appRoot
     try {
         $cli = @()
         $cli += $py.Prefix
-        $cli += @('-m', 'meeting2jira', '--version')
+        $cli += @($cliPy, '--version')
         $ver = & $py.Exe @cli 2>&1
-        if ($LASTEXITCODE -eq 0) { Write-Check OK "Package importable: $ver" } else { Write-Check FAIL "Package import failed: $ver" }
-    } finally { $env:PYTHONPATH = $previousPythonPath; Pop-Location }
+        if ($LASTEXITCODE -eq 0) { Write-Check OK "Odin runs: $ver" } else { Write-Check FAIL "Odin didn't start: $ver" }
+    } finally { Pop-Location }
 }
 
 # --- Outlook --------------------------------------------------------------------------------
@@ -242,7 +280,7 @@ if (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue) {
     Write-Check WARN 'ScheduledTasks cmdlets unavailable; run syncs manually'
 }
 # Odin's files live under Asgard's folder: ASGARD_HOME\odin when set (as in Asgard's own tests),
-# else %LOCALAPPDATA%\Asgard\odin. Odin doesn't need Asgard installed; it only shares the folder.
+# else %LOCALAPPDATA%\Asgard\odin. Odin is an Asgard app; its records are in Muninn beside them.
 $asgardDir = if ($env:ASGARD_HOME) { $env:ASGARD_HOME } else { Join-Path $env:LOCALAPPDATA 'Asgard' }
 $dataDir = Join-Path $asgardDir 'odin'
 $legacyDir = Join-Path $env:LOCALAPPDATA 'meeting2jira'
@@ -250,11 +288,19 @@ if (-not $env:ASGARD_HOME -and -not (Test-Path -LiteralPath $dataDir) -and (Test
     Write-Check INFO "Odin's files are still in $legacyDir; the next run moves them to $dataDir"
     $dataDir = $legacyDir
 }
-if (Test-Path (Join-Path $dataDir 'config.json')) { Write-Check OK "Config exists in $dataDir" } else { Write-Check INFO 'No config yet: py -3 -m meeting2jira init' }
-if (Test-Path (Join-Path $dataDir 'jira_token.dpapi')) { Write-Check OK 'Jira token stored' } else { Write-Check INFO 'No token yet: py -3 -m meeting2jira set-token' }
+if (Test-Path (Join-Path $asgardDir 'muninn.db')) {
+    Write-Check OK "Muninn exists in $asgardDir"
+} else {
+    Write-Check WARN 'Muninn has not been made yet: open Asgard once, and it creates it'
+}
+if (Test-Path (Join-Path $dataDir 'state.db')) {
+    Write-Check INFO "Odin's history from before Muninn (state.db) is there; the next run moves it into Muninn"
+}
+if (Test-Path (Join-Path $dataDir 'config.json')) { Write-Check OK "Config exists in $dataDir" } else { Write-Check INFO 'No config yet: odin setup' }
+if (Test-Path (Join-Path $dataDir 'jira_token.dpapi')) { Write-Check OK 'Jira token stored' } else { Write-Check INFO 'No token yet: odin set-token' }
 
 # A scheduled task runs hidden, so an expired token or a moved parent issue would otherwise fail
-# every day unnoticed. cmd_push leaves this breadcrumb behind on every real run.
+# every day unnoticed. Every real Odin run leaves this breadcrumb behind, even one that stopped early.
 $lastRunPath = Join-Path $dataDir 'last_run.json'
 if (Test-Path $lastRunPath) {
     $lastRun = Get-Content -LiteralPath $lastRunPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
@@ -279,17 +325,18 @@ if (Test-Path $lastRunPath) {
 
 # An outstanding alert file means a failure was surfaced and not yet resolved. Worth reporting here
 # too, because this is where someone looks when they suspect a problem.
-$alertName = 'ATTENTION-meeting2jira.txt'
 $alertFound = $null
-foreach ($base in @($env:OneDrive, $env:OneDriveCommercial, $env:USERPROFILE)) {
-    if ($base -and -not $alertFound) {
-        $candidate = Join-Path (Join-Path $base 'Desktop') $alertName
+foreach ($alertName in @('ATTENTION-Odin.txt', 'ATTENTION-meeting2jira.txt')) {
+    foreach ($base in @($env:OneDrive, $env:OneDriveCommercial, $env:USERPROFILE)) {
+        if ($base -and -not $alertFound) {
+            $candidate = Join-Path (Join-Path $base 'Desktop') $alertName
+            if (Test-Path -LiteralPath $candidate) { $alertFound = $candidate }
+        }
+    }
+    if (-not $alertFound) {
+        $candidate = Join-Path $dataDir $alertName
         if (Test-Path -LiteralPath $candidate) { $alertFound = $candidate }
     }
-}
-if (-not $alertFound) {
-    $candidate = Join-Path $dataDir $alertName
-    if (Test-Path -LiteralPath $candidate) { $alertFound = $candidate }
 }
 if ($alertFound) {
     Write-Check WARN "An unresolved alert is outstanding: $alertFound"
@@ -299,9 +346,9 @@ if ($alertFound) {
 # --- Verdict --------------------------------------------------------------------------------
 Write-Host ''
 if (-not $pythonOk) {
-    Write-Host 'Blocked: get Python 3.8+ from your software catalog first.' -ForegroundColor Red
+    Write-Host "Blocked: Odin needs Asgard's packaged build or the Python Asgard runs on (3.11+ on Windows)." -ForegroundColor Red
 } elseif ($comAllowed -and $outlookCom) {
-    Write-Host 'Use Path A (automatic Outlook COM export):  .\powershell\Invoke-MeetingSync.ps1 -DryRun' -ForegroundColor Green
+    Write-Host 'Use Path A (automatic Outlook COM export):  odin preview' -ForegroundColor Green
 } else {
-    Write-Host 'Use Path B (manual Outlook CSV export):  .\powershell\Invoke-MeetingSync.ps1 -Source Csv -CsvPath <file> -DryRun' -ForegroundColor Yellow
+    Write-Host 'Use Path B (manual Outlook CSV export):  odin csv <file> -DryRun' -ForegroundColor Yellow
 }

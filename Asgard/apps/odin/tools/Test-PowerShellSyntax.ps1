@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Parse-checks every .ps1 in powershell\ and tools\, and flags PowerShell 7-only syntax.
+    Parse-checks every .ps1 in Odin's windows\ and tools\, and flags PowerShell 7-only syntax.
 
 .DESCRIPTION
     The scripts must run on Windows PowerShell 5.1. Running this under 5.1 is the real test, because
@@ -14,7 +14,7 @@
 #>
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$windowsDir = Join-Path (Join-Path $root 'src') 'windows'
+$windowsDir = Join-Path $root 'windows'
 $files = @(Get-ChildItem -Path $windowsDir -Filter *.ps1) + @(Get-ChildItem -Path $PSScriptRoot -Filter *.ps1)
 $failed = $false
 

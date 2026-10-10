@@ -175,6 +175,23 @@ class PowerShellGuardrails(unittest.TestCase):
     def _read(self, name):
         return _ps_code(PS_DIR / name)
 
+    def test_scripts_are_ascii_with_crlf(self):
+        """Asgard's rule for every .cmd and .ps1 (AGENTS.md); Windows PowerShell 5.1 reads a file
+        without a BOM in the ANSI code page, so anything but ASCII can change meaning."""
+        scripts = sorted(APP.rglob("*.ps1")) + sorted(APP.glob("*.cmd"))
+        self.assertGreaterEqual(len(scripts), 7)
+        for path in scripts:
+            with self.subTest(script=path.name):
+                raw = path.read_bytes()
+                self.assertTrue(raw.isascii(), "ASCII only")
+                self.assertNotIn(b"\n", raw.replace(b"\r\n", b""), "CRLF line endings")
+
+    def test_the_scripts_call_odins_cli_by_path(self):
+        """The packaged build runs scripts by path and has no -m, so nothing may use python -m odin."""
+        for path in sorted(APP.rglob("*.ps1")) + sorted(APP.glob("*.cmd")):
+            with self.subTest(script=path.name):
+                self.assertNotRegex(path.read_text(encoding="ascii"), r"-m['\"]?,?\s*['\"]?(odin|meeting2jira)\b")
+
     def test_no_execution_policy_bypass(self):
         pattern = re.compile(r"ExecutionPolicy\s+(Bypass|Unrestricted)|Set-ExecutionPolicy", re.IGNORECASE)
         hits = [p.name for p in PS_DIR.glob("*.ps1") if pattern.search(_ps_code(p))]
