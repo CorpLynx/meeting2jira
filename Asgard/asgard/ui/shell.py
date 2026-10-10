@@ -33,7 +33,7 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine, QQmlPropertyMap
 from PySide6.QtQuickControls2 import QQuickStyle
 
-from asgard import paths
+from asgard import paths, winutil
 
 from . import prefs as prefs_mod
 from . import registry, theme
@@ -272,6 +272,9 @@ class Bridge(QObject):
     @Slot()
     def stop(self) -> None:
         if self._proc is not None and self._proc.state() != QProcess.ProcessState.NotRunning:
+            # The whole tree: a script's children (Odin's daily run is PowerShell running Python)
+            # would otherwise carry on after the window says it stopped.
+            winutil.kill_tree(int(self._proc.processId()))
             self._proc.kill()
 
     def _read(self) -> None:
@@ -306,8 +309,14 @@ class Bridge(QObject):
 
 
 def _windowless(program: str) -> str:
-    """On Windows, run python.exe children as pythonw.exe so no console window flashes up."""
+    """On Windows, run python.exe children as pythonw.exe so no console window flashes up.
+
+    In the packaged build, asgard-cli.exe children run as Asgard.exe, for the same reason.
+    """
     path = Path(program)
+    if paths.FROZEN:
+        console, windowed = paths.frozen_programs()
+        return windowed if path.name.lower() == Path(console).name.lower() else program
     if sys.platform == "win32" and path.name.lower() == "python.exe":
         quiet = path.with_name("pythonw.exe")
         if quiet.exists():

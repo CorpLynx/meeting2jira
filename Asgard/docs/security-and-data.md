@@ -1,6 +1,6 @@
 # Security and data handling
 
-Oct 6, 2026 · for the ISSO review · covers Asgard 0.4.0 and Muninn schema v3
+Oct 9, 2026 · for the ISSO review · covers Asgard 0.4.0 and Muninn schema v4
 
 Asgard is a per-user desktop tool set. It runs on the catalog's Python as the signed-in user, needs no admin rights, opens no network port, and keeps its data in `%LOCALAPPDATA%\Asgard` (BitLocker covers it at rest; the folder is readable only by the user and administrators). This page lists what it stores, what leaves the machine, how secrets are kept, and what the protections do and don't cover.
 
@@ -9,13 +9,14 @@ Asgard is a per-user desktop tool set. It runs on the catalog's Python as the si
 | Where | What | Sensitivity |
 | --- | --- | --- |
 | `muninn.db` | Jira issue metadata (key, summary, status, assignee, labels; not descriptions), your calendar entries (title, times, response; not bodies or attendees), your worklogs, git commit metadata (subject, author, times, file counts; not code or diffs), pull request titles and reviews, time estimates and your approvals | Work metadata; may be CUI depending on project names and titles |
+| `muninn.db` (v4) | AI coding agents' estimates of your time on a change: agent and model name, ticket key, day, minutes, commit SHAs and a one-sentence summary (code-like text is refused). Your real hours from a calibration trial. A checked AI review's suggested figures and reasons on each open proposal | Work metadata, same as above |
 | `muninn.db` (planned apps) | Meeting recap summaries and action items (never transcripts), BLUFs, accomplishments and review drafts, submission field values (SeCcHm, BEARs) | Submission fields can hold the same detail as those systems; handled like their exports |
 | `backups\` | Copies of `muninn.db`: 7 daily, 3 before each schema upgrade, 5 manual | Same as the database |
 | `muninn.before-restore-*.db` | The database as it was before a restore, kept so the restore can be undone | Same as the database; removed by an uninstall with purge |
 | `settings\`, `apps.local.json` | Preferences, folder paths, server URLs | Low |
 | `logs\` | Errors and run summaries | Low; credentials are masked (below) |
 | Windows Credential Manager | GitHub token (Baldur); other service tokens as apps arrive | Secret |
-| `%LOCALAPPDATA%\meeting2jira\` | Odin's own config, DPAPI-protected Jira token, state | Odin's existing review applies |
+| `%LOCALAPPDATA%\Asgard\odin\` | Odin's own config, DPAPI-protected Jira token, state | Odin's existing review applies |
 
 ## What leaves the machine
 
@@ -25,7 +26,10 @@ Asgard is a per-user desktop tool set. It runs on the catalog's Python as the si
 | Jira, GitHub, calendar (reads) | Odin, Baldur | Syncs you run or schedule | Your own tokens and access |
 | Confluence attachment, SeCcHm form | Bifrost, Heimdall (planned) | After you approve; the SeCcHm Submit click stays yours | Per submission |
 | AI completions | Mímir's tier 1 (planned) | Only for purposes your settings allow | An approved endpoint and data flow, per purpose |
-| AI client reads | Ysildir (planned), stdio to VS Code | When the client calls a tool | Copilot's MCP policy; per-tool review |
+| Baldur's AI review, clipboard tier | You, by pasting | When you run `baldur.cmd ai pack` and paste the text into your approved AI chat (M365 Copilot) | Baldur's `review_mode` must be `metadata` (off by default). The pack holds commit subjects (one line, at most 120 characters), times, line counts, ticket keys and agent reports' summaries, never code; `content` mode is refused |
+| AI client reads | Ysildir, stdio to the AI client (Kiro, VS Code, Claude Code) | When the client calls a tool | The client's MCP policy (Copilot's org policy, VS Code's `ChatMCP`); a switch per tool in `settings\ysildir.json`. On by default: `asgard_guide` and `muninn_catalog` (Asgard's own text, table names and counts) and the agents' own reports (`baldur_record_estimate`, `baldur_withdraw_estimate`, `baldur_estimates`). Off until you turn them on: `baldur_day` (keys, minutes, AI reasons; commit subjects on request), `baldur_review_pack` and `baldur_submit_review` (the clipboard pack's contents; also need `review_mode` `metadata`), `muninn_what_changed` (event kinds, keys, allow-listed payload fields), `muninn_day_status` (approved and logged minutes), `muninn_issue` and `muninn_search` (Jira keys and summaries, your commit subjects, pull request titles). Metadata only; at most 200 items and 64 KB per answer ([integration/ysildir.md](integration/ysildir.md)) |
+
+An AI coding agent recording its estimate (`baldur.cmd ai record`) sends nothing out: the agent writes into Muninn on this machine. What the agent itself sends to its model is the agent's own data flow, approved with the agent.
 
 Nothing is sent anywhere else: no telemetry, no update check unless an update source is configured ([updates.md](updates.md)).
 
@@ -60,4 +64,4 @@ Uninstall without purge removes the program and keeps the data. With purge it re
 
 ## Dependencies
 
-Third-party packages are allowed when declared, pinned exactly and justified, with pure-Python wheels preferred because App Control blocks unsigned DLLs ([dependency-policy.md](dependency-policy.md)). The requirements files are the bill of materials. `asgard.muninn` and the launcher's start-up path use only the standard library.
+Third-party packages are allowed when declared, pinned exactly and justified ([dependency-policy.md](dependency-policy.md)). Each is the best module for its job. Its comment names the alternatives if it isn't available on-premises, and says whether it's native: App Control blocks unsigned DLLs, so compiled wheels need IT approval. The requirements files and the payload's wheel list are the bill of materials. Ysildir adds the MCP SDK (`mcp`, `pydantic`) and about 30 wheels, five of them native (`pydantic-core`, `cryptography`, `cffi`, `rpds-py`, and `pywin32` on Windows); nothing else in Asgard needs them. `asgard.muninn` and the launcher's start-up path use only the standard library. The packaged build ([packaging.md](packaging.md)) brings its own Python 3.12 and those packages as one folder of programs and DLLs, so App Control decides on that folder (by path, hash or signature) instead of on a Python install. Setup copies it to `%LOCALAPPDATA%\Asgard\app`, beside Asgard's data, so App Control needs a rule for that folder; it never unpacks programs into `%TEMP%`, runs only Asgard's own scripts, and leaves out Playwright.

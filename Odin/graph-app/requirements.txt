@@ -2,6 +2,7 @@
 #
 # msal is pure Python. This is the plain form, so it stays installable wherever pip reaches and
 # needs no native build.
+# Alternatives if it isn't on-prem: ../MODULES.md, "msal".
 msal==1.31.1
 
 # ---------------------------------------------------------------------------------------------

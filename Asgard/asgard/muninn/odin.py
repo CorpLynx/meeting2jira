@@ -45,6 +45,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
+from . import baldur as baldur_rules
 from .db import MuninnError, ago, from_ts, to_ts, transaction, utcnow
 from .keys import normalize_key
 from .redact import scrub
@@ -90,13 +91,16 @@ def jira_time(ts: str) -> str:
     return from_ts(ts).astimezone().strftime("%Y-%m-%dT%H:%M:%S.000%z")
 
 
-def jql_time(ts: str, overlap_minutes: int = 2) -> str:
-    """A cursor as a JQL date ('2026/10/01 09:18'), a little early.
+# Jira reads a JQL date in the Jira profile's time zone, which needn't be this computer's: a
+# laptop in Berlin with a New York profile would otherwise skip six hours of updates every run.
+# Zones are at most 26 hours apart (UTC-12 to UTC+14), and Windows has no time-zone database
+# to convert with, so the cursor is simply read back that far. Re-reads write nothing twice.
+JQL_OVERLAP_MINUTES = 26 * 60
 
-    JQL compares to the minute in the Jira user's time zone (taken to be this
-    computer's), so the overlap makes sure nothing updated in the cursor's
-    own minute is missed. Re-reading a few issues writes nothing twice.
-    """
+
+def jql_time(ts: str, overlap_minutes: int = JQL_OVERLAP_MINUTES) -> str:
+    """A cursor as a JQL date ('2026/09/30 11:05'), early enough for any Jira profile's time zone,
+    the fall-back hour, and JQL's whole minutes."""
     return (from_ts(ts) - dt.timedelta(minutes=overlap_minutes)).astimezone().strftime("%Y/%m/%d %H:%M")
 
 
@@ -686,6 +690,11 @@ def begin_post(con: sqlite3.Connection, proposal_id: int) -> Optional[PendingPos
             return None
         marker = new_marker("baldur")
         lines = [row["basis"]]
+        # When the approved figure is an AI-assisted one you took, the comment says so.
+        review = con.execute("SELECT review FROM day_proposals WHERE id = ?", (proposal_id,)).fetchone()
+        reviewed = baldur_rules.review_line(review[0] if review else None, row["approved_minutes"])
+        if reviewed:
+            lines.append(reviewed)
         if row["logged_minutes"]:
             origins = [r[0] for r in con.execute(
                 "SELECT DISTINCT origin FROM worklogs WHERE work_item_id = ? AND state IN ('sending', 'posted') "

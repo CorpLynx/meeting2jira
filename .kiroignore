@@ -32,14 +32,14 @@ coverage.xml
 *.pem
 *.key
 
-# meeting2jira runtime data and secrets (also in .gitignore). Real exports and CSVs contain the
+# Odin runtime data and secrets (also in .gitignore). Real exports and CSVs contain the
 # user's calendar; *.dpapi is the encrypted Jira token. The agent never needs to open them.
 *.dpapi
 state.db
 exports/
 logs/
 *.csv
-!Odin/app/tests/fixtures/*.csv
+!Asgard/tests/fixtures/odin/*.csv
 
 # Terraform state holds the lab VM's local-account password in plaintext.
 **/.terraform/

@@ -1,0 +1,10 @@
+# Build-time only: what packaging/build.py needs to make Asgard's packaged build. Nothing here ships
+# or runs on the workstation; the build's own packages are requirements.txt (minus Playwright).
+# Pinned exactly, like every requirements file (docs/dependency-policy.md).
+
+# Freezes Python, the standard library and the pinned packages into Asgard.exe and asgard-cli.exe
+# (packaging/asgard.spec). The standard tool for this; alternatives in docs/packaging.md.
+pyinstaller==6.22.3
+# PyInstaller's community hooks: how to collect pydantic, cryptography and the MCP SDK's other
+# dependencies. Released alongside PyInstaller; pin the two together.
+pyinstaller-hooks-contrib==2026.8

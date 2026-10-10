@@ -5,7 +5,7 @@ no COM, no browser automation, and reads only documented APIs. The output is con
 existing, unmodified pipeline:
 
     python export_graph.py --days-back 1 --out week.json
-    cd ../app && PYTHONPATH=src python -m meeting2jira push --input ../graph-app/week.json --dry-run
+    odin cli push --input ../graph-app/week.json --dry-run     (odin.cmd is Asgard's apps\\odin\\odin.cmd)
 
 First run:
 
@@ -37,8 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--days-back", type=int, default=1,
                    help="midnight this many days ago through now (default 1). Wider is safe: "
                         "re-runs cannot duplicate, because the pipeline dedupes.")
-    p.add_argument("--out", help="output file (default: %%LOCALAPPDATA%%\\meeting2jira\\exports\\graph_<stamp>.json)")
-    p.add_argument("--config", help="path to graph.json (default: in %%LOCALAPPDATA%%\\meeting2jira)")
+    p.add_argument("--out", help="output file (default: %%LOCALAPPDATA%%\\Asgard\\odin\\exports\\graph_<stamp>.json)")
+    p.add_argument("--config", help="path to graph.json (default: in %%LOCALAPPDATA%%\\Asgard\\odin)")
     p.add_argument("--init", action="store_true",
                    help="write a starter graph.json and exit")
     p.add_argument("--login", action="store_true",
@@ -238,7 +238,7 @@ def main(argv=None) -> int:
         log.warning("  skipped %s", line)
     log.info("")
     log.info("Next: push it (dry run first)")
-    log.info("  cd ../app && PYTHONPATH=src python -m meeting2jira push --input %s --dry-run",
+    log.info("  odin cli push --input %s --dry-run   (Asgard's apps\\odin\\odin.cmd)",
              out_path)
     return 0
 

@@ -1,5 +1,11 @@
 <!-- Snapshot exported 2026-10-04 from the live Claude Doc: https://claude.ai/code/artifact/bc161cb2-9cfc-4f28-9e1e-8a1075972208
-     The live doc is the source of truth; diagrams appear here only as placeholders. -->
+     The live doc is the source of truth; diagrams appear here only as placeholders.
+     Edited here on 2026-10-09 (branch claude/baldur-estimation), not yet in the live doc: the v4
+     sentences and check count in the schema paragraph, Baldur's tables in "Who owns what", "Agent estimates (v4)", the
+     two v4 indexes, the migrations list, and the encryption open decision; and the 2026-10-09 review's fixes in
+     "Agent estimates (v4)". Edited on 2026-10-10: v5 (`meeting_subtasks`) in the schema paragraph, "Who owns what", the
+     Odin tables, the indexes, the migrations list, "Moving Odin into Muninn" and the state.db open decision.
+     Carry these over to the live doc. -->
 
 # Muninn data layer design
 
@@ -19,7 +25,9 @@ The executable version ships in Asgard 0.2 and later as `asgard/muninn/migration
 - Day status that counts a Baldur worklog for its approved day.
 - `run_id` indexes for pruning.
 
-The schema's own script runs 148 checks. The tests cover migrations, sync runs, Odin's flows, Baldur's approvals, the tile badges, the guard and the hardening (`tests/test_muninn*.py`). Two independent reviews of the hardening are recorded in [review-2026-10-06.md](review-2026-10-06.md), and running the file by hand is [muninn-operations.md](muninn-operations.md).
+Schema v4 (`0004_agent_estimates.sql`, also Asgard 0.4.0) adds Baldur's agent estimates and is additive. Schema v5 (`0005_odin_meetings.sql`, also Asgard 0.4.0) adds `meeting_subtasks`, the record of which meetings Odin has made Jira sub-tasks for, which replaces the `synced` table of Odin's own `state.db`; it is additive too. At v5 the schema has 38 tables plus the search index, 60 indexes, 63 triggers and 11 views.
+
+The schema's own script runs 204 checks. The tests cover migrations, sync runs, Odin's flows, Baldur's approvals, the tile badges, the guard and the hardening (`tests/test_muninn*.py`). Two independent reviews of the hardening are recorded in [review-2026-10-06.md](review-2026-10-06.md), and running the file by hand is [muninn-operations.md](muninn-operations.md).
 
 ## Rules every app follows
 
@@ -46,8 +54,8 @@ Each app writes only its own tables and reads anything it needs; the views in th
 
 | App | Writes (sole owner) | Reads from other apps |
 | --- | --- | --- |
-| Odin | `work_items`, `work_item_aliases`, `work_item_transitions`, `calendar_events`, `worklogs` | `v_unknown_keys` (keys to look up), `v_worklogs_to_post` (approved time to post) |
-| Baldur | `repos`, `commits`, `commit_work_items`, `reflog_entries`, `pull_requests`, `pr_reviews`, `calibration_runs`, `estimate_runs`, `work_sessions`, `session_commits`, `session_allocations`, `day_proposals`, `time_actuals` | `work_item_aliases` and `work_items` (titles, status), `v_busy_meetings`, `v_day_status` (what Jira already holds) |
+| Odin | `work_items`, `work_item_aliases`, `work_item_transitions`, `calendar_events`, `worklogs`, `meeting_subtasks` | `v_unknown_keys` (keys to look up), `v_worklogs_to_post` (approved time to post) |
+| Baldur | `repos`, `commits`, `commit_work_items`, `reflog_entries`, `pull_requests`, `pull_request_commits`, `pr_reviews`, `calibration_runs`, `estimate_runs`, `work_sessions`, `session_commits`, `session_allocations`, `day_proposals`, `time_actuals`, `agent_estimates`, `agent_estimate_commits` | `work_item_aliases` and `work_items` (titles, status), `v_busy_meetings`, `v_day_status` (what Jira already holds) |
 | Loki | `meetings`, `action_items`, `blufs` | `calendar_events`, `commits`, `pull_requests`, `work_items` |
 | Freya | `accomplishments`, `review_periods`, `review_drafts`, `citations` | `events` (done and reopened), `work_items`, `v_day_status`, `commits`, `pull_requests`, `blufs` |
 | Heimdall, Bifrost | `submissions`, `submission_status_history` | `work_items` |
@@ -167,7 +175,7 @@ Every other change emits a `created` or `updated` event, which Ysildir uses to a
 
 ## Work tables (Odin)
 
-Odin owns five tables: Jira issues, every key they have had, their status history, your calendar and your worklogs. The numeric `jira_id` is the real key, because an issue's key changes when it moves projects.
+Odin owns six tables: Jira issues, every key they have had, their status history, your calendar, your worklogs, and the sub-tasks it made for your meetings. The numeric `jira_id` is the real key, because an issue's key changes when it moves projects.
 
 **Sync scope.** Odin keeps four sets of issues current:
 
@@ -255,7 +263,25 @@ Incremental runs ask for `updated >= odin.jql_time(cursor)`, two minutes early b
 | `posted_at`, `created_at` | ts | posted requires posted\_at |  |
 | `error` | TEXT |  | Jira's message when a post fails |
 
-Five table checks keep the states honest: a Jira id exists exactly for posted and deleted rows, posted needs `posted_at`, rows found in Jira are never sending or failed, and the origin decides whether `proposal_id` or `calendar_event_id` is set. Odin finds your worklogs with Jira's `/rest/api/2/worklog/updated?since=` and `/worklog/list`, keeping only yours, and `/worklog/deleted?since=` marks removed ones.
+Five table checks keep the states honest: a Jira id exists exactly for posted and deleted rows, posted needs `posted_at`, rows found in Jira are never sending or failed, and the origin decides whether `proposal_id` or `calendar_event_id` is set. Odin finds your worklogs by the issues you logged time on (`worklogAuthor = currentUser()`, then each issue's worklog list), keeping only yours, and `/worklog/deleted?since=` marks removed ones. This deviates from the first design, which read `/worklog/updated?since=`: that lists every worklog in the whole Jira, which on a large Data Center is most of the instance's history ([integration/odin.md](integration/odin.md#worklogs-and-a-deviation-from-the-design)).
+
+**`meeting_subtasks`** (v5): one row per meeting Odin made a Jira sub-task for. It is all that stands between a re-run and a pile of duplicate sub-tasks, so Odin consults it before creating anything and writes it the moment Jira accepts the create, before the worklog and the transition.
+
+| Column | Type | Rules | Notes |
+| --- | --- | --- | --- |
+| `id` | INTEGER | primary key |  |
+| `meeting_key` | TEXT | UNIQUE | The calendar item's own key: Outlook's id and start, or `csv:<hash>` |
+| `content_hash` | TEXT | 32 lower-case hex | sha256 of the normalised subject, start and end; matches a meeting across export paths |
+| `calendar_event_id` | INTEGER | FK calendar\_events, set null on delete | NULL for history imported from `state.db` |
+| `issue_key`, `parent_key` | TEXT | Jira keys in capitals | The sub-task and the issue it was made under |
+| `summary` | TEXT | 1 to 255 characters | The sub-task's summary as created |
+| `started_at`, `minutes` | ts, INTEGER | minutes 0 to 1440 |  |
+| `worklog_wanted` | INTEGER | 0 or 1 | Whether `log_work` was on when it was made, so turning it on later doesn't backfill months |
+| `worklog_comment` | TEXT |  | Rendered when it was made, so a retry needs no calendar |
+| `origin` | TEXT | odin, state\_db |  |
+| `created_at` | ts | not null |  |
+
+Odin finds a meeting's record by `meeting_key` or `content_hash`, so the Outlook and CSV paths recognise each other's work, and two records may share a hash. The meeting's time is a worklog on the sub-task (origin meeting, linked through `calendar_event_id`), written through the posting protocol below, so it is never posted twice. The trigger `meeting_subtasks_are_facts` lets only `calendar_event_id` change; removing a row (`odin forget KEY`) is the one deliberate way to push a meeting again.
 
 ## Code and time tables (Baldur)
 
@@ -363,6 +389,32 @@ Three rules hold its lifecycle together:
 - **Decisions are kept.** The trigger `day_proposals_decisions_are_kept` refuses to delete any row that was approved or rejected, so pruning an estimate run that holds one fails instead of dropping approved time.
 
 **`time_actuals`**: real hours you note during a calibration trial: `on_date`, `minutes` 0–1440, `work_item_key` (NULL = the whole day) and `note`. `ux_time_actuals_day_item` allows one row per day and ticket, including one whole-day row.
+
+### Agent estimates (v4)
+
+An AI coding agent that worked a change with you can record what it thinks your working time on that change was. It records through Baldur's CLI (`baldur.cmd ai record`) or Ysildir's MCP tool, both of which call `asgard.muninn.baldur.record_agent_estimate()`. A report is evidence, never a number on its own: Baldur's AI-assisted method uses it only to move minutes between tickets or lower them, so a day never rises because of one. Baldur owns both tables.
+
+**`agent_estimates`**: one report per row.
+
+| Column | Type | Rules | Notes |
+| --- | --- | --- | --- |
+| `id` | INTEGER | primary key | Shown as `r12` |
+| `recorded_at` | ts | not null |  |
+| `via` | TEXT | cli, mcp, window | How it arrived |
+| `agent`, `model`, `guide_version` | TEXT | agent 1–40 characters, model ≤ 80, guide ≤ 40 | Which tool, which model, which version of Baldur's agent guide it followed |
+| `work_item_key` | TEXT | a key like PROJ-123, or NULL | The ticket the agent named; NULL means its commits' keys |
+| `local_date` | date | not null | The day the work happened |
+| `started_at`, `ended_at` | ts | ended ≥ started | Only when the agent read them from a clock |
+| `minutes` | INTEGER | 1–1440 | The agent's estimate of your working time on the change |
+| `minutes_low` | INTEGER | 1 to `minutes` | The low end of a range; Baldur counts it, since of two readings the smaller wins |
+| `confidence` | TEXT | high, medium, low |  |
+| `summary` | TEXT | 1–300 characters | One sentence. Baldur refuses code, diff lines and control characters before it gets here |
+| `report_hash` | TEXT | unique | A digest of what the report says and the commits it cites. The same report is stored once while it counts; sent again after it was withdrawn, it's stored again with a suffix |
+| `status`, `withdrawn_at` | TEXT, ts | recorded, withdrawn; a withdrawal has its time | A newer report from the same agent on the same commits withdraws the older one |
+
+**`agent_estimate_commits`**: the commits a report is about: `estimate_id` and `sha` (7–64 lower-case hex characters). A SHA may be short, because an agent can record before Baldur has collected the commit; Baldur matches it by prefix when it reads the report. A report without commits is shown to you and never counted.
+
+Reports are facts. The trigger `agent_estimates_are_facts` allows one change, recorded → withdrawn with its time. `agent_estimates_are_kept` and the two triggers on `agent_estimate_commits` refuse every other edit or delete. A commit added to a report afterwards (an insert, which no v4 trigger stops) changes its digest: Baldur then doesn't count the report, and `--muninn check` reports it until it's withdrawn (`muninn.baldur.report_digest`; review R14). `ix_agent_estimates_day` serves "the day's recorded reports", and `ix_agent_estimate_commits_sha` serves "reports citing these commits".
 
 ## Meeting and BLUF tables (Loki)
 
@@ -591,6 +643,11 @@ Each of the 48 explicit indexes exists for a named query; the 18 marked checked 
 | `ux_day_proposals_open` | day\_proposals (local\_date, coalesce(work\_item\_key, '')) where proposed; unique | Days waiting for review; one open row each | Yes |
 | `ux_day_proposals_approved` | day\_proposals (local\_date, work\_item\_key) where approved; unique | `v_day_status`; one approval each | Yes |
 | `ux_time_actuals_day_item` | time\_actuals (on\_date, coalesce(work\_item\_key, '')); unique | One actual per day and ticket |  |
+| `ix_agent_estimates_day` | agent\_estimates (local\_date) where recorded | Baldur: a day's agent reports (v4) | Yes |
+| `ix_agent_estimate_commits_sha` | agent\_estimate\_commits (sha) | Baldur: reports citing a day's commits (v4) | Yes |
+| `ix_meeting_subtasks_hash` | meeting\_subtasks (content\_hash) | Odin: has this meeting a sub-task (v5) | Yes |
+| `ix_meeting_subtasks_issue` | meeting\_subtasks (issue\_key) | Odin: forget a sub-task (v5) | Yes |
+| `ix_meeting_subtasks_event` | meeting\_subtasks (calendar\_event\_id) where not null | Clearing the link when an event goes (v5) |  |
 | `ix_meetings_starts` | meetings (starts\_at) | Meetings by day |  |
 | `ix_meetings_calendar_event` | meetings (calendar\_event\_id) where not null | Recap for a calendar entry |  |
 | `ix_action_items_meeting` | action\_items (meeting\_id) | A meeting's actions; cascade deletes |  |
@@ -694,18 +751,18 @@ Odin never edits or deletes a worklog in Jira. If you lower an approved day afte
 
 ## Moving Odin into Muninn
 
-Odin moves into Muninn, and Asgard 0.2 ships the package it needs. Each step replaces one part of Odin's `state.db` and can ship on its own, so Odin keeps working throughout. Jira stays the source of truth, so Odin re-reads it rather than converting its cache.
+Done on Oct 10, 2026 (Asgard 0.4.0): Odin is an Asgard app (`apps/odin`) and keeps its records in Muninn. Each step of the plan, and what became of it:
 
-1. **Install Asgard 0.2 or later.** It creates Muninn at first start and ships `asgard.muninn`.
-2. **Load the package.** Odin adds the `load_muninn()` function from Asgard's README and opens Muninn with `muninn.open_app("odin", supported=(1, 3))`.
-3. **Issues.** Odin's Jira sync passes each issue's JSON to `odin.upsert_issue()` inside a `muninn.Run`. The Assigned to Me view becomes `odin.assigned_to_me()`, and the tracked-parent pull reads `odin.children_of()`. The list of tracked parents stays in Odin's settings file.
-4. **Calendar and meeting logging.** The meeting sync calls `odin.upsert_calendar_event()`, then `odin.sweep_calendar()` for the window it read. Logging a meeting becomes `odin.begin_meeting_post()`, the Jira call, then `odin.finish_post()`.
-5. **Worklogs.** Odin reads your worklogs from `/worklog/updated` and stores them with `odin.upsert_worklog()`. The first run reaches back a year.
-6. **The new jobs.** Key lookups (`odin.unknown_keys()`, `odin.record_lookup()`), posting approved Baldur days (`odin.posts_due()`, `odin.begin_post()`), and the crash check at start (`odin.stuck_posts()`).
-7. **Carry over what only Odin knows.** A one-time import copies the issue each past meeting was logged to into `calendar_events.logged_as_key`. It also marks Odin's earlier meeting worklogs with `odin.adopt_meeting_worklog()`, so they don't count as development time. Where `state.db` has no record, `odin.classify_meeting_worklogs()` matches strictly by comment, start and length.
-8. **Retire state.db.** Keep it read-only for 30 days, then delete it.
+1. **Asgard installed.** Odin ships with Asgard now; setup installs it, and the packaged build carries it.
+2. **Load the package.** Odin opens Muninn with `muninn.open_app("odin", supported=(5, 5))` and runs on Asgard's Python.
+3. **Issues.** Your issues, each tracked parent (default parent, rules, tour-of-duty parent) and its children, through `odin.upsert_issue()` in a `muninn.Run` per stream. Assigned to Me is `odin.assigned_to_me()`, in Odin's window.
+4. **Calendar and meeting logging.** Every export item goes through `odin.upsert_calendar_event()`; a whole-window export sweeps. A meeting's sub-task is recorded in `meeting_subtasks` (v5), and its time logged through `odin.begin_meeting_post()`.
+5. **Worklogs.** By issue rather than `/worklog/updated` (above); the first run reaches back a year.
+6. **The new jobs.** Key lookups, posting approved Baldur days (after the worklog sync of the same run, capped per run), and the crash check at start.
+7. **What only Odin knew.** `state.db` imported into `meeting_subtasks`; owed worklogs carried, logged ones not; earlier meeting worklogs classified strictly by comment, start and length.
+8. **state.db retired.** Renamed `state.db.migrated-DATE`, deleted after 30 days; kept and consulted if any row couldn't move.
 
-Until step 4 ships, Baldur's meeting policy falls back to `independent`; until step 6, Baldur works report-only.
+Baldur's meeting policy and its posting now have what they waited for: meetings in `calendar_events` and Odin posting approved days.
 
 ## Migrations, backup and retention
 
@@ -713,7 +770,7 @@ Schema changes are forward-only numbered SQL files, each applied after an automa
 
 - **Version.** `PRAGMA user_version` holds the schema version; `0001_initial.sql` sets it to 1.
 - **One migrator.** Only Asgard applies migrations, at startup and off its window's thread. Every other app, including Odin, opens Muninn with `muninn.open_app()`, which checks the version against the range the app declares and never changes it.
-- **Files.** Later changes are `asgard/muninn/migrations/0002_<name>.sql`, `0003_…`. The runner wraps each in `BEGIN IMMEDIATE`, rechecks the version inside the lock and sets `user_version` itself, so two processes upgrading at once apply each file once. A file that fails is undone whole.
+- **Files.** Later changes are `asgard/muninn/migrations/0002_<name>.sql`, `0003_…`. So far: `0002_copies_arent_activity.sql`, `0003_hardening.sql`, `0004_agent_estimates.sql` and `0005_odin_meetings.sql`. The runner wraps each in `BEGIN IMMEDIATE`, rechecks the version inside the lock and sets `user_version` itself, so two processes upgrading at once apply each file once. A file that fails is undone whole.
 - **Constraint changes.** SQLite's ALTER TABLE can't change a CHECK, so those use the create-copy-drop-rename recipe. A file that starts with `-- muninn: foreign_keys=off` runs with foreign keys off and must pass `PRAGMA foreign_key_check` before it commits.
 - **Backups.** `VACUUM INTO` copies Muninn to `%LOCALAPPDATA%\Asgard\backups` once a day (7 kept), before each schema upgrade (3 kept) and from Asgard's menu (5 kept). Each copy is written under a private name and moved into place, so two processes never touch the same file.
 - **Abandoned runs.** At startup, Asgard closes any sync run still marked running after six hours as failed.
@@ -743,9 +800,9 @@ Rows are short text, so a year of one engineer's work should stay in the tens of
 - [ ] **Scope.** One database per engineer (this design), or a team view later? A team view needs a server, which this design avoids.
 - [ ] **Raw API payloads.** Keep them for debugging? Default: no, only `sync_runs.error`.
 - [ ] **Versions.** Keep every BLUF and review-draft version, or prune superseded ones once a period closes?
-- [ ] **state.db layout.** Step 7 of moving Odin needs the layout of Odin's `state.db` tables (the output of `sqlite3 state.db .schema`, no data).
+- [x] **state.db layout.** Settled on 2026-10-10: `state.db` holds one table, `synced`, which Odin's own code defined. v5's `meeting_subtasks` takes its place, and Odin imports it once.
 - [ ] **Posting mode.** Odin posts approved worklogs on its next run (proposed, since approving in Baldur is the consent), or waits for a Post button in Odin?
 - [ ] **Which resolutions count as wins.** Proposed: all except Won't Do, Duplicate and Cannot Reproduce, editable in Freya's settings.
 - [x] **Time zone travel.** Decided (Brandon, Oct 9): US time zones only. A day is local to wherever the laptop is when Baldur estimates it and Odin posts it. The rare shift is accepted rather than pinning a zone in `meta`. Baldur's own worklogs count for their approved day whatever the zone; a worklog logged by hand near midnight can fall in the neighbouring day after a move between US zones (at most 6 hours apart).
-- [ ] **Encryption beyond BitLocker.** SQLCipher needs a compiled extension, which breaks the pure-Python rule.
+- [ ] **Encryption beyond BitLocker.** SQLCipher replaces `sqlite3` with a compiled module. That would make Muninn's package depend on a package, which every app and Odin import; the dependency policy keeps it standard library. It would also need IT approval.
 - [ ] **Retention.** Confirm the defaults above against your records schedule.

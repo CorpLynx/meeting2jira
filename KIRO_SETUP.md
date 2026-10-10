@@ -6,13 +6,13 @@ credits, or by subagents on cheaper models.
 
 It started from a generic Python + PowerShell scaffold and was adapted to this project:
 
-- **Tests are written as stdlib `unittest` but run with pytest in dev.** They ship in `Odin/app/tests`
+- **Tests are written as stdlib `unittest` but run with pytest in dev.** They live in `Asgard/tests`
   and must still run on the no-pip workstation, so they can't use pytest features. On your dev
   machine, pytest + ruff (from `requirements-dev.txt`) give better failure output, per-test timeouts,
   coverage and linting.
 - **PowerShell calls Python here, not the other way round.** That's why there is no
-  `fake_powershell` fixture. PowerShell runtime behavior is verified by `Odin/app/tools/Invoke-WindowsChecks.ps1`, not by mocks.
-- **Nothing in this file set lives in `Odin/app/`.** The deliverable stays self-contained; any package it uses is pinned in `Odin/app/requirements.txt` and listed in `Odin/MODULES.md`.
+  `fake_powershell` fixture. PowerShell runtime behavior is verified by `Asgard/apps/odin/tools/Invoke-WindowsChecks.ps1`, not by mocks.
+- **Nothing in this file set lives in `Asgard/`.** The deliverable stays self-contained; any package it uses is the best module for its job, pinned in `Asgard/requirements.txt` and listed in `Asgard/MODULES.md` with its alternatives (Odin's optional exporters: `Odin/MODULES.md`).
 
 ## What's in the box
 
@@ -41,13 +41,13 @@ pyproject.toml           dev-only pytest/coverage/ruff config (not a package def
 requirements-dev.txt     pytest, pytest-timeout, pytest-cov, ruff
 ```
 
-Root `tools/` is Kiro tooling. `Odin/app/tools/` is part of the shipped program. Don't mix them up.
+Root `tools/` is Kiro tooling. `Asgard/apps/odin/tools/` is part of the shipped program. Don't mix them up.
 
 ## How the loop runs
 
 1. **Opus** reads the always-on steering and edits code.
 2. The **save hook** reports lint and syntax errors right away. A clean save adds nothing to context.
-3. While iterating, Opus runs a narrow scope itself, e.g. `python tools/run_tests.py test_state -k worklog` or `--lf`.
+3. While iterating, Opus runs a narrow scope itself, e.g. `python tools/run_tests.py test_odin_meetings -k worklog` or `--lf`.
    The runner prints about 5-30 lines, with failures grouped by root cause. For example, three
    failing `subTest` cases from one bug show as one group.
 4. For **full-suite runs**, Opus delegates to the **test-runner** subagent (Haiku).
@@ -57,12 +57,12 @@ What a failing run looks like to the model (illustrative):
 
 ```
 RESULT: FAIL | 7 passed, 3 failed, 0 errors, 0 skipped | 0.1s
-cmd: pytest Odin/app/tests/test_tour_of_duty.py
+cmd: pytest Asgard/tests/test_odin_tour_of_duty.py
 full log: .test-output/last-run.log
 
 [1] 3 tests | AssertionError: 'outside' != 'partial'
-    at Odin/app/tests/test_tour_of_duty.py:66
-    Odin/app/tests/test_tour_of_duty.py::ClassificationTests::test_inside_partial_and_outside [case=1]
+    at Asgard/tests/test_odin_tour_of_duty.py:66
+    Asgard/tests/test_odin_tour_of_duty.py::ClassificationTests::test_inside_partial_and_outside [case=1]
     ...
     trace (...):
       <the last few traceback lines>
@@ -90,7 +90,7 @@ single module.
 
 ## Check that it works
 
-1. Run `python tools/run_tests.py` yourself. You should get `RESULT: PASS | 80 passed ...`, and the
+1. Run `python tools/run_tests.py` yourself. You should get `RESULT: PASS | 599 passed ...`, and the
    full log in `.test-output/`. `--cov` adds a coverage summary.
 2. Ask Kiro to "run pytest". The guard should block it, and Kiro
    should switch to `tools/run_tests.py`.
@@ -110,9 +110,9 @@ follow the IDE 1.x / CLI 3.x hook format; older Kiro versions use a different fo
   `.kiro/session-handoff.md` is a scratch note. The project's status, backlog and checklist stay in `HANDOFF.md`.
 - **Narrow test runs.** Use one module, `-k`, or `--lf` while fixing. Run the full suite once at
   the end, via test-runner. `--changed` runs only the tests that cover your changes.
-- **Point at the target.** "Make `test_tour_of_duty.ClassificationTests.test_grace_of_zero_is_strict`
+- **Point at the target.** "Make `test_odin_tour_of_duty.ClassificationTests.test_grace_of_zero_is_strict`
   pass; the bug is in `TourOfDuty.classify()` in `rules.py`" is far cheaper than "fix the failing tests".
-- **Use Kiro specs** for backlog items (HANDOFF.md section 6). One planned pass beats several blind
+- **Use Kiro specs** for backlog items (`Asgard/HANDOFF.md`, "What's next"). One planned pass beats several blind
   fix-and-retry loops.
 - **Model choice.** Routine fixes, renames, test writing and doc updates usually don't need Opus;
   switch to Sonnet (or Auto) for those.

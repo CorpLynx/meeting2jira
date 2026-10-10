@@ -323,6 +323,7 @@ class DirectionTests(unittest.TestCase):
 class MuninnCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         # Resolved, because Baldur stores resolved paths: macOS's temp folder is under /var, a link
         # to /private/var, and Windows can hand out an 8.3 short name such as C:\Users\BRANDO~1.
         self.dir = Path(self.tmp.name).resolve()
@@ -330,6 +331,8 @@ class MuninnCase(unittest.TestCase):
         os.environ["ASGARD_HOME"] = str(self.dir)
         muninn.prepare(self.dir / "muninn.db", backups=self.dir / "backups")
         self.con = muninn.connect(self.dir / "muninn.db")
+        # A cleanup, not tearDown: it also runs when a subclass's setUp skips, and before the folder goes.
+        self.addCleanup(lambda: self.con.close())
         self.settings = config.Settings(config.validate({"project_keys": ["PROJ", "OPS"], "history_days": 3650}))
         self.source = muninn.ensure_source(self.con, "git", "local-git")
         muninn.add_identity(self.con, "git_email", "brandon@agency.gov")
@@ -337,12 +340,10 @@ class MuninnCase(unittest.TestCase):
         self.n = 0
 
     def tearDown(self):
-        self.con.close()
         if self._home is None:
             os.environ.pop("ASGARD_HOME", None)
         else:
             os.environ["ASGARD_HOME"] = self._home
-        self.tmp.cleanup()
 
     def add_repo(self, name, active=1):
         return int(self.con.execute("INSERT INTO repos (source_id, name, local_path, active) VALUES (?, ?, ?, ?) "

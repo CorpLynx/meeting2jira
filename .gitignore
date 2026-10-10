@@ -14,7 +14,7 @@ state.db
 exports/
 logs/
 *.csv
-!tests/fixtures/*.csv
+!Asgard/tests/fixtures/odin/*.csv
 
 # Terraform (infra/windows-test-vm).
 # State is the important one: it holds the lab VM's local-account password in plaintext,
@@ -34,3 +34,6 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+
+# Asgard packaged build (Asgard/packaging/build.py): venv, PyInstaller work folder, dist and zips.
+Asgard/build/

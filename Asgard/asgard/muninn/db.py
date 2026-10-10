@@ -155,17 +155,23 @@ def connect(path: Optional[PathLike] = None, *, readonly: bool = False,
     if not readonly:
         db.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(db), timeout=timeout, isolation_level=None)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA foreign_keys = ON")
-    con.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")
-    con.execute("PRAGMA synchronous = NORMAL")
-    # With this on, a row removed by a REPLACE conflict fires its delete triggers, so its search
-    # entry goes with it instead of being left behind. No trigger in the schema recurses.
-    con.execute("PRAGMA recursive_triggers = ON")
-    if not readonly:
-        con.execute(f"PRAGMA journal_size_limit = {WAL_LIMIT_BYTES}")
-    if readonly:
-        con.execute("PRAGMA query_only = ON")
+    try:
+        con.row_factory = sqlite3.Row
+        con.execute("PRAGMA foreign_keys = ON")
+        con.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")
+        con.execute("PRAGMA synchronous = NORMAL")
+        # With this on, a row removed by a REPLACE conflict fires its delete triggers, so its search
+        # entry goes with it instead of being left behind. No trigger in the schema recurses.
+        con.execute("PRAGMA recursive_triggers = ON")
+        if not readonly:
+            con.execute(f"PRAGMA journal_size_limit = {WAL_LIMIT_BYTES}")
+        if readonly:
+            con.execute("PRAGMA query_only = ON")
+    except BaseException:
+        # A damaged file fails here. Close it now: an open handle would keep the file locked on
+        # Windows for as long as the error is kept (on screen, say), and a restore couldn't replace it.
+        con.close()
+        raise
     return con
 
 
@@ -517,7 +523,12 @@ class Status:
 
 
 def console_python() -> str:
-    """This Python, as the console python.exe when running under pythonw.exe (which prints nowhere)."""
+    """This Python, as the console python.exe when running under pythonw.exe (which prints nowhere).
+
+    In the packaged build, the console program asgard-cli.exe (paths.frozen_programs).
+    """
+    if paths.FROZEN:
+        return paths.frozen_programs()[0]
     exe = Path(sys.executable)
     if exe.name.lower() == "pythonw.exe" and exe.with_name("python.exe").exists():
         exe = exe.with_name("python.exe")

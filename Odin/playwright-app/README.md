@@ -126,7 +126,7 @@ playwright install msedge        # registers the installed Edge; or: playwright 
 python export_owa.py --login     # visible browser, sign in incl. MFA, then close it
 ```
 
-The session is stored in `%LOCALAPPDATA%\meeting2jira\owa-profile`. Later runs are headless and
+The session is stored in `%LOCALAPPDATA%\Asgard\odin\owa-profile`. Later runs are headless and
 unattended. **No password is ever handled by this code** — it reuses the browser session Windows
 already established, which is also why Conditional Access sees a browser it already trusts.
 

@@ -1,7 +1,7 @@
 """Muninn: Asgard's shared SQLite database, and the one way apps write to it.
 
     from asgard import muninn
-    con = muninn.open_app("odin", supported=(1, 3))      # checks the schema version, never migrates
+    con = muninn.open_app("odin", supported=(5, 5))      # checks the schema version, never migrates
     jira = muninn.ensure_source(con, "jira", "jira-dc", "https://jira.example.gov")
     with muninn.Run(con, "odin", jira, "issues") as run:
         ...

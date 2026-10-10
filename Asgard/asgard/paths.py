@@ -7,18 +7,34 @@
     install-ledger.json   what setup created, for Valhalla to undo
 
 Set ASGARD_HOME to use another folder (tests do this).
+
+The packaged build (PyInstaller, docs/packaging.md) installs the same way: setup copies the whole
+build into app\\. Its two programs stand in for Python there: Asgard.exe for pythonw and
+asgard-cli.exe for python, each running one of Asgard's scripts.
 """
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 CODE_ROOT = PACKAGE_DIR.parent  # the folder holding Asgard.pyw; "{app}" in apps.json
 
 UNINSTALL_SUBKEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Asgard"
 SHORTCUT_NAME = "Asgard.lnk"
+
+FROZEN = bool(getattr(sys, "frozen", False))      # running from the packaged build
+WINDOWED_PROGRAM = "Asgard"                        # + .exe on Windows: no console, like pythonw
+CONSOLE_PROGRAM = "asgard-cli"                     # + .exe on Windows: a console, like python
+
+
+def frozen_programs(folder: Optional[Path] = None) -> Tuple[str, str]:
+    """(console, windowed) programs of the packaged build in folder (default: beside the one running)."""
+    folder = folder or Path(sys.executable).resolve().parent
+    ext = ".exe" if os.name == "nt" else ""
+    return str(folder / (CONSOLE_PROGRAM + ext)), str(folder / (WINDOWED_PROGRAM + ext))
 
 
 def data_dir() -> Path:

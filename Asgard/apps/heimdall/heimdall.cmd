@@ -2,7 +2,9 @@
 rem Heimdall from the command line. Try: heimdall help
 setlocal EnableExtensions
 set "PYEXE="
-call :try_python py -3
+rem The packaged build brings its own Python: asgard-cli.exe, two folders up.
+if exist "%~dp0..\..\asgard-cli.exe" set PYEXE="%~dp0..\..\asgard-cli.exe"
+if not defined PYEXE call :try_python py -3
 if not defined PYEXE call :try_python py
 if not defined PYEXE call :try_python python
 if not defined PYEXE (

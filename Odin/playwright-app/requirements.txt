@@ -7,4 +7,6 @@
 # `playwright install msedge` registers the Edge already on the machine rather than downloading a
 # browser, which is both faster and avoids introducing an unsigned binary. Chromium is the fallback
 # when Edge is absent.
+# Native: it bundles node.exe, which AppLocker may block in a user-profile path.
+# Alternatives if it isn't on-prem: ../MODULES.md, "playwright".
 playwright==1.49.1

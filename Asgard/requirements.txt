@@ -1,15 +1,31 @@
-# Asgard's optional runtime packages. Pin each exactly, say what it's for, and record its approval
-# (docs/dependency-policy.md). tests/test_dependencies.py fails on an undeclared import, and on
-# any package imported by asgard/muninn or the launcher's start-up path.
+# Asgard's optional runtime packages: the best module for each job (docs/dependency-policy.md).
+# Pin each exactly. The comment above each pin says what it's for, whether it's native (compiled
+# wheels need IT approval, because App Control checks DLLs) and its approval status. MODULES.md has a
+# section per package: where it's imported, what happens without it, and the standard-library and
+# package alternatives if it isn't available on-prem. tests/test_dependencies.py fails on an
+# undeclared import, a pinned package nothing imports, a package without its MODULES.md section,
+# and any package imported by asgard/muninn or the launcher's start-up path.
 #
 # Nothing here is needed to install Asgard, open the launcher, or run Baldur.
 
-# Heimdall `fill` only: drives the installed Edge (playwright install msedge). Not pure Python: it
-# bundles node.exe, which AppLocker may block in a user-profile path. Same pin as
-# Odin/playwright-app. approval: pending
+# Heimdall `fill` only: drives the installed Edge (playwright install msedge). Native: it bundles
+# node.exe, which AppLocker may block in a user-profile path. Same pin as Odin/playwright-app.
+# approval: pending
+# Alternatives if it isn't on-prem: MODULES.md, "playwright".
 playwright==1.49.1
 # The shared desktop window (asgard/ui/shell.py, apps/*/ui/*.qml): Qt Quick via PySide6. Imported
 # only when a window opens; the launcher, Muninn and every CLI work without it. Not pure Python
 # (Qt DLLs and .pyd files): native, approved by Brandon Oct 2026 (in use on-prem). 6.10.3 is the
 # last release that supports Python 3.9. Essentials has QtQml, QtQuick and Quick Controls.
 PySide6-Essentials==6.10.3
+# Ysildir's MCP server: the official MCP Python SDK (MCPServer; Ysildir runs only its stdio transport
+# and never starts its HTTP server parts). The standard library has no MCP, and a hand-written JSON-RPC
+# server would track the protocol's versions by hand. Needs Python 3.10+. Native: its dependencies
+# pydantic-core, cryptography, cffi, rpds-py and, on Windows, pywin32 are compiled, so App Control
+# needs IT to approve their DLLs. approval: pending
+# Alternatives if it isn't on-prem: MODULES.md, "mcp".
+mcp==2.3.0
+# Ysildir's argument and result models, from which the SDK builds each tool's schemas (Ysildir imports
+# pydantic itself; mcp installs it too). Native: pydantic-core. approval: pending
+# Alternatives if it isn't on-prem: MODULES.md, "pydantic".
+pydantic==2.14.0

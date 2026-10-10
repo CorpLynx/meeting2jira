@@ -193,13 +193,38 @@ def load_catalog(defaults: Optional[Path] = None,
 # State and launching
 # --------------------------------------------------------------------------
 
-def python_paths() -> Tuple[str, str]:
-    """(python.exe, pythonw.exe) next to the interpreter running Asgard."""
+def python_paths(target: Optional[str] = None) -> Tuple[str, str]:
+    """(python.exe, pythonw.exe) next to the interpreter running Asgard.
+
+    In the packaged build, Asgard's own scripts run under asgard-cli.exe and Asgard.exe. A script
+    outside it (Odin's, say) needs a real Python with its own packages, so it gets the one on PATH.
+    """
+    if paths.FROZEN:
+        inside = target is None or _within(Path(target), paths.CODE_ROOT)
+        return paths.frozen_programs() if inside else system_python()
     exe = Path(sys.executable)
     if os.name != "nt":
         return str(exe), str(exe)
     py, pyw = exe.with_name("python.exe"), exe.with_name("pythonw.exe")
     return (str(py) if py.exists() else str(exe)), (str(pyw) if pyw.exists() else str(exe))
+
+
+def system_python() -> Tuple[str, str]:
+    """(console, windowless) Python from PATH, or the py launcher; the packaged build has none of its own."""
+    if os.name != "nt":
+        found = shutil.which("python3") or shutil.which("python") or "python3"
+        return found, found
+    py = shutil.which("python.exe") or shutil.which("py.exe") or "py.exe"
+    pyw = shutil.which("pythonw.exe") or shutil.which("pyw.exe") or "pyw.exe"
+    return py, pyw
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def expand(value: str) -> str:
@@ -279,7 +304,7 @@ def build_spec(app: App) -> LaunchSpec:
     args = [expand(a) for a in launch.get("args", [])]
     console = bool(launch.get("console", False))
     if kind == "python":
-        py, pyw = python_paths()
+        py, pyw = python_paths(target)
         interpreter = expand(launch["interpreter"]) if launch.get("interpreter") else (py if console else pyw)
         argv = [interpreter, target] + args
     elif kind == "powershell":
@@ -323,6 +348,36 @@ def save_launch_override(app_id: str, launch: Dict[str, Any], local: Optional[Pa
     entry["launch"] = launch
     data["apps"] = apps
     _write_json(local, data)
+
+
+def retire_launch_override(app_id: str, inside: Path, local: Optional[Path] = None) -> Optional[str]:
+    """Drop a tile's launch setting that points outside Asgard's code folder, for an app that now
+    ships with Asgard (Odin, Oct 2026): the old setting would keep opening the copy from before.
+    Other settings for the tile (name, colour) stay. Returns the target removed, if any.
+    """
+    local = local or paths.local_manifest()
+    if not local.exists():
+        return None
+    try:
+        data = _read_json(local)
+    except CatalogError:
+        return None                       # a broken file is the person's to fix; never overwrite it
+    apps = data.get("apps")
+    entry = apps.get(app_id) if isinstance(apps, dict) else None
+    launch = entry.get("launch") if isinstance(entry, dict) else None
+    if not isinstance(launch, dict) or not launch.get("target"):
+        return None
+    target = Path(expand(str(launch["target"])))
+    try:
+        target.resolve().relative_to(Path(inside).resolve())
+        return None                       # already the copy that ships with Asgard
+    except ValueError:
+        pass
+    del entry["launch"]
+    if entry.get("status") == "external":
+        del entry["status"]
+    _write_json(local, data)
+    return str(target)
 
 
 def _write_json(path: Path, data: Dict[str, Any]) -> None:

@@ -46,16 +46,17 @@ def jira_issue(jira_id="10234", key="ABC-123", status="In Progress", category="i
 class Base(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         self.dir = Path(self.tmp.name)
         os.environ["ASGARD_HOME"] = str(self.dir)
         self.path = self.dir / "muninn.db"
         muninn.prepare(self.path, backups=self.dir / "backups")
         self.con = muninn.connect(self.path)
+        # A cleanup, not tearDown: it also runs when setUp skips, and before the folder goes.
+        self.addCleanup(lambda: self.con.close())
 
     def tearDown(self) -> None:
-        self.con.close()
         os.environ.pop("ASGARD_HOME", None)
-        self.tmp.cleanup()
 
     def jira(self):
         sid = muninn.ensure_source(self.con, "jira", "jira-dc", BASE)
@@ -132,13 +133,12 @@ class OpeningTests(Base):
 class MigrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         self.dir = Path(self.tmp.name)
         self.folder = self.dir / "migrations"
         self.folder.mkdir()
         shutil.copy(db.MIGRATIONS_DIR / "0001_initial.sql", self.folder / "0001_initial.sql")
 
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
 
     def add(self, name, sql):
         (self.folder / name).write_text(sql, encoding="utf-8")
@@ -431,8 +431,17 @@ class IssueTests(Base):
     def test_jql_time_overlaps_the_cursor(self):
         jql = odin.jql_time("2026-10-01T13:05:30Z")
         self.assertRegex(jql, r"^\d{4}/\d\d/\d\d \d\d:\d\d$")
-        local = muninn.from_ts("2026-10-01T13:03:30Z").astimezone().strftime("%Y/%m/%d %H:%M")
+        local = muninn.from_ts("2026-09-30T11:05:30Z").astimezone().strftime("%Y/%m/%d %H:%M")
         self.assertEqual(jql, local)
+
+    def test_jql_time_reaches_back_past_any_profile_time_zone(self):
+        """Review 2026-10-10 #3: Jira reads the date in the Jira profile's zone, not this computer's.
+        Read in the zone furthest behind (UTC-12), where a wall-clock time is latest, it must still
+        be at or before the cursor, whatever zone this computer is in (at most UTC+14)."""
+        cursor = muninn.from_ts("2026-10-01T13:05:30Z").replace(tzinfo=None)
+        wall = dt.datetime.strptime(odin.jql_time("2026-10-01T13:05:30Z"), "%Y/%m/%d %H:%M")
+        read_in_utc_minus_12 = wall + dt.timedelta(hours=12)
+        self.assertLessEqual(read_in_utc_minus_12, cursor)
 
     def test_mine_sticks_after_reassignment(self):
         sid, ctx = self.jira()

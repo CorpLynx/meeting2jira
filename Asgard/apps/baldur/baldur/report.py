@@ -10,11 +10,14 @@ from __future__ import annotations
 import datetime as dt
 import sqlite3
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from . import estimate as E
 from . import store
 from .settings import Settings
+
+if TYPE_CHECKING:                       # assist imports this module's neighbours, not this module
+    from . import assist
 
 WIDTH = 72
 HELD_BY = {"jira": "logged by hand", "baldur": "posted by Odin", "manual": "typed into Odin"}
@@ -168,7 +171,14 @@ def review_text(con: sqlite3.Connection, t: Ticket, dry_run: bool) -> str:
 
 
 def render_day(con: sqlite3.Connection, est: E.Estimate, day: dt.date, settings: Settings, *,
-               plan: Optional[store.Plan] = None, dry_run: bool = False) -> str:
+               plan: Optional[store.Plan] = None, dry_run: bool = False,
+               ai: Optional["assist.DaySuggestions"] = None) -> str:
+    text = _render_day(con, est, day, settings, plan=plan, dry_run=dry_run)
+    return text + "\n\n" + render_ai(ai, day) if ai is not None else text
+
+
+def _render_day(con: sqlite3.Connection, est: E.Estimate, day: dt.date, settings: Settings, *,
+                plan: Optional[store.Plan] = None, dry_run: bool = False) -> str:
     p = E.Params.from_settings(settings)
     d = est.days[day]
     parts = est.parts_on(day)
@@ -272,6 +282,30 @@ def render_day(con: sqlite3.Connection, est: E.Estimate, day: dt.date, settings:
         if any(t.open is not None for t in tickets):
             out.append("")
             out.append(f"  Approve: cli.py approve --date {day.isoformat()}    one ticket: cli.py approve ID [--minutes 1h15m]")
+    return "\n".join(out)
+
+
+def render_ai(ai: "assist.DaySuggestions", day: dt.date) -> str:
+    """The day's AI-assisted figures beside the estimate: what changes, why, and what to check."""
+    out = [f"{day_name(day)}  AI-assisted figures, from {ai.source}"]
+    changed = ai.changed()
+    if ai.tickets:
+        out.append(f"  {'Ticket':<14}{'Estimate':>9}{'AI-assisted':>13}   Why")
+        for t in ai.tickets.values():
+            why = t.reason if t.changed else "no change"
+            out.append(f"  {t.key:<14}{E.fmt(t.baseline):>9}{E.fmt(t.figure):>13}   {why[:60]}")
+    for flag in ai.flags:
+        out.append(f"  ! {flag}")
+    if changed:
+        total = sum(t.figure for t in ai.tickets.values()) - sum(t.baseline for t in ai.tickets.values())
+        out.append(f"  Day: {'unchanged' if total == 0 else E.fmt(-total) + ' lower'}; an AI figure never raises a day.")
+        out.append("  If you take them, Odin's worklog comments will say:")
+        for t in changed:
+            out.append(f"    {t.key}: {ai.posted_line(t.key)}")
+        out.append(f"  Take them: cli.py approve --date {day.isoformat()} --ai {ai.digest()}    "
+                   "or set your own: --set KEY=TIME")
+    elif ai.tickets:
+        out.append("  The estimate stands: nothing here changes a figure.")
     return "\n".join(out)
 
 

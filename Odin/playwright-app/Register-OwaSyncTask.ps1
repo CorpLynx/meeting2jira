@@ -47,11 +47,16 @@ if (-not (Test-Path -LiteralPath $entryPoint)) {
     throw "meeting2jira-owa.cmd not found in $appRoot."
 }
 
+# Odin's files live under Asgard's folder: ASGARD_HOME\odin when set (as in Asgard's own tests),
+# else %LOCALAPPDATA%\Asgard\odin. Odin doesn't need Asgard installed; it only shares the folder.
+$asgardDir = if ($env:ASGARD_HOME) { $env:ASGARD_HOME } else { Join-Path $env:LOCALAPPDATA 'Asgard' }
+$dataDir = Join-Path $asgardDir 'odin'
+
 # Derive the run time from the tour of duty when one is configured, so the task fires after the
 # day's meetings have ended rather than in the middle of them.
 if (-not $At) {
     $At = '16:45'
-    $configPath = Join-Path $env:LOCALAPPDATA 'meeting2jira\config.json'
+    $configPath = Join-Path $dataDir 'config.json'
     if (Test-Path $configPath) {
         $config = Get-Content -LiteralPath $configPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
         $tour = $null
@@ -89,7 +94,7 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Pr
     -Description 'meeting2jira: export the OWA calendar and push ended meetings to Jira sub-tasks' -Force | Out-Null
 
 Write-Host "Registered '$TaskName': weekdays at $At, running as you while logged on."
-Write-Host "Logs: $(Join-Path $env:LOCALAPPDATA 'meeting2jira\logs')"
+Write-Host "Logs: $(Join-Path $dataDir 'logs')"
 Write-Host "Test it now with: Start-ScheduledTask -TaskName '$TaskName'"
 Write-Host ''
 Write-Host "If the browser session expires the task will fail until you run: .\meeting2jira-owa login"

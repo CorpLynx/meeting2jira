@@ -1,18 +1,18 @@
 # Integrating an app with Muninn
 
-Oct 9, 2026 · schema v3 · Asgard 0.4.0 (unshipped)
+Oct 9, 2026 · schema v4 · Asgard 0.4.0 (unshipped)
 
 Muninn is one SQLite file per user (`%LOCALAPPDATA%\Asgard\muninn.db`) that every Asgard app shares. Apps never call each other: each writes the facts it owns and reads what the others wrote. This folder is the contract for doing that. Start here, then read your app's page.
 
 | Page | App | Status |
 | --- | --- | --- |
-| [odin.md](odin.md) | Odin: Jira issues, calendar, worklogs; the only Jira writer | Package ready; Odin's move is in progress elsewhere |
+| [odin.md](odin.md) | Odin: meetings to sub-tasks; Jira issues, calendar and worklogs; the only Jira writer | Built (`apps/odin`, Muninn v5) |
 | [baldur.md](baldur.md) | Baldur: git, GitHub, time estimates and approvals | Integrated |
 | [freya.md](freya.md) | Freya: accomplishments and review drafts | Spec |
 | [loki.md](loki.md) | Loki: meeting recaps, action items, BLUFs | Spec |
 | [heimdall.md](heimdall.md) | Heimdall: SeCcHm submissions | Diverging on-prem; contract only |
 | [bifrost.md](bifrost.md) | Bifrost: BEARs workbooks and Confluence uploads | Spec |
-| [ysildir.md](ysildir.md) | Ysildir: MCP server over Muninn, read-only first | Spec |
+| [ysildir.md](ysildir.md) | Ysildir: MCP server that teaches AI agents Baldur and Muninn, takes their estimates, answers questions | Built (`apps/ysildir/`); not yet tried on the workstation |
 | [valkyrie.md](valkyrie.md) | Valkyrie and Valhalla: install and uninstall | Spec |
 | [huginn.md](huginn.md) | Huginn: scheduled collection | Spec |
 | [mimir.md](mimir.md) | Mímir: the one AI switch; writes nothing itself | Spec |
@@ -172,6 +172,7 @@ flowchart LR
     Bifrost -- submissions --> Muninn
     Heimdall -- submissions --> Muninn
     Muninn -- read-only tools --> Ysildir
+    Ysildir -- agent estimates, through muninn.baldur --> Muninn
     Muninn -- v_tile_badges --> Launcher[Asgard launcher]
     Odin == worklogs ==> Jira
 ```
@@ -197,6 +198,8 @@ Kinds are `noun.verb`, lower case. Emit inside the transaction that made the cha
 | `worklog.posted`, `.failed` | Odin | origin, seconds, proposal_id, calendar_event_id; error | Baldur (status beside the day) |
 | `day_proposal.approved` | Baldur | local_date, minutes | Odin posts on its next run |
 | `estimate_run.created` | Baldur | date range, counts | Ysildir |
+| `calibration.accepted` | Baldur | days, from/to settings, error before and after | Ysildir |
+| `agent_estimate.recorded`, `.withdrawn` | Baldur (from the CLI or Ysildir) | local_date, minutes, agent, commit count, replaced ids / — | Ysildir |
 | `meeting.recapped`, `action_item.created`, `bluf.drafted`, `.approved`, `.posted` | Loki (planned) | external ids, subject_ref | Freya (decisions as evidence), Ysildir |
 | `accomplishment.recorded`, `review_draft.created`, `.final` | Freya (planned) | jira_id, period | Ysildir |
 | `submission.created`, `.approved`, `.submitted`, `.status_changed` | Heimdall, Bifrost (planned) | system, external_id, from/to state | Ysildir; tile badges |

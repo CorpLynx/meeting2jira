@@ -1,5 +1,7 @@
 <!-- Snapshot exported 2026-10-04 from the live Claude Doc: https://claude.ai/code/artifact/cdb819cb-6de0-4832-b107-cce9d234efb7
-     The live doc is the source of truth; diagrams appear here only as placeholders. -->
+     The live doc is the source of truth; diagrams appear here only as placeholders.
+     Edited here on 2026-10-09 (branch claude/baldur-estimation), not yet in the live doc: the
+     "Decided (2026-10-09): the SDK" bullet under "Ysildir: MCP server". Carry it over to the live doc. -->
 
 # Asgard toolset evaluation
 
@@ -113,6 +115,7 @@ Ysildir should be a thin stdio MCP server over Asgard's core functions. Whether 
 
 - **The gate.** For Copilot Business and Enterprise, the ["MCP servers in Copilot" policy is disabled by default](https://docs.github.com/en/copilot/concepts/about-mcp); an org admin must enable it. VS Code adds an [enterprise `ChatMCP` policy](https://code.visualstudio.com/docs/enterprise/ai-settings) that limits where MCP servers can come from. Your GitHub is GitHub Enterprise Server, and Copilot isn't part of the server: you sign in with the enterprise's GitHub.com or GHE.com account, which holds the Copilot license and this policy, and Copilot works on your local clone ([Copilot on GHES](https://docs.github.com/en/enterprise-server@3.21/copilot/copilot-on-ghes/about-copilot-on-ghes)). Without that account, Ysildir starts at the terminal or clipboard fallback.
 - **Why the stdlib fallback.** The SDK pulls compiled wheels such as pydantic-core, which App Control can block. MCP over stdio is plain JSON-RPC, so the protocol itself needs nothing extra.
+- **Decided (2026-10-09): the SDK.** Ysildir is built on `mcp` 2.x, the best module for the job. Its compiled wheels need IT approval. The standard-library server is now the third alternative, after `mcp` 1.x and `fastmcp`, if the SDK isn't available on-premises (`.kiro/specs/ysildir-mcp/design.md`, "Modules").
 - **No port.** Stdio means nothing listens on the network, so there is no firewall rule to request.
 - **Prompts as commands.** MCP prompts appear as slash commands in VS Code chat: the cheapest way to share Freya and Loki with teammates.
 - **Treat Jira text as untrusted.** A ticket can carry instructions aimed at the model; keep write tools (create issue, submit) behind VS Code's confirmation prompt.

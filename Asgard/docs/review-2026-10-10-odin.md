@@ -1,0 +1,55 @@
+# Independent review of Odin's Jira-writing paths (2026-10-10)
+
+One review by an agent with no part in writing the code, of Odin on Muninn at `e04daff` (branch `claude/baldur-estimation`): creating meeting sub-tasks, logging meeting time, posting approved Baldur days, settling interrupted posts, the Jira sync that posting depends on, the `state.db` import, the journal and the run lock. The reviewer changed nothing and proved its findings with three scripts it ran, all failing against that commit.
+
+| Severity | Confirmed | Worst |
+| --- | --- | --- |
+| Blocker | 2 | A worklog sync stopped at its 500-issue limit still counted as finished, so 2h approved in Baldur was posted on top of 2h already logged by hand (Jira held 4h). A sub-task Jira made but Odin never recorded (a failed search after a 504, an answer cut off mid-body, Ctrl+C, a full disk) was made again by the next run |
+| Should fix | 3 | Cursors written in this computer's time zone skipped six hours of updates a run for a Jira profile in another zone, and `startAt` paging could skip an issue; most failures left the last "OK" in `last_run.json`; a 404 while settling an interrupted post offered the time again |
+| Minor | 5 | One bad worklog stalled the sync, the lock and journal followed `--config`, a refused meeting worklog didn't fail the run, the token followed redirects to other hosts, Stop in the window left Python running |
+
+Every confirmed finding is fixed, each with regression tests (listed per finding). The reviewer's three scripts were re-run against the fixed code and pass. Two were adapted first: `post_approved` now takes a sync run and the Jira context, and the 504 outage now starts with the create, since a search failing *before* it now creates nothing. The scripts aren't kept in the repo. While verifying on Python 3.10, one more defect turned up, older than the review (below, F1).
+
+## Blockers
+
+| # | Defect | Fix | Test |
+| --- | --- | --- | --- |
+| 1 | `worklogs_ok = not run.problems`: stopping at `max_issues_per_run` wasn't a problem, so approved days were posted while the newest issues, which hold this week's time logged by hand, were unread. A year of meeting sub-tasks alone passes 500 on the first run | A sync that stopped at its limit isn't finished (`CollectResult.worklogs_left`): approved days wait, as a warning ("still catching up"), not an error. And `post_approved` reads each issue's worklogs from Jira again just before its time goes (one GET per issue, at most `max_posts_per_run`), so `begin_post()` re-checks the view against Jira as it is; an issue whose worklogs can't be read isn't posted. It refuses to run without a sync run and the context | `test_odin_posting`: `test_a_worklog_sync_cut_short_by_its_limit_doesnt_count_as_finished`, `test_time_logged_by_hand_after_the_sync_isnt_posted_again`, `test_an_issue_whose_worklogs_cant_be_read_isnt_posted`, `test_posting_without_reading_worklogs_first_is_refused` |
+| 2 | The label search ran only right after an ambiguous `JiraError`. So these duplicated the sub-task on the next run: (a) a 504 followed by a failed or empty search; (b) a failure that wasn't a `JiraError` once the POST was sent (`http.client.IncompleteRead`, malformed JSON, a body without `key`, Ctrl+C, a kill); (c) a 500 from a post-function after the commit, marked not ambiguous; (d) a full disk, where `Journal.append` raised too | Before every create, `sync.find_created_issue` searches `labels = "m2j-..." AND creator = currentUser()` across all projects (a rule may have moved the parent; a colleague's Odin labels the same meeting the same way). One match is adopted, read back, and its worklogs read before any time is logged; several, or a failed search, create nothing. The client turns every failure into a `JiraError`, ambiguous on a write: `http.client.HTTPException`, unreadable JSON, a non-JSON answer, any 5xx, a create answered without a key. `record_subtask` survives a journal it can't write and says the next run will find the sub-task. `odin forget` now means: delete it in Jira first, or the next run finds it again. With `jira.dedupe_label` off there's nothing to search for; the docs say so | `test_odin_recovery.LookBeforeCreatingTests` (8 tests: each of (a) to (d), a colleague's sub-task, another project, a failed search, time logged by hand on a found sub-task); `test_odin_jira_client.ReviewFindingTests` (cut off, garbled, 500, no key); `test_odin_meetings.test_a_forgotten_sub_task_still_in_jira_is_found_again_not_duplicated` |
+
+## Should fix
+
+| # | Defect | Fix | Test |
+| --- | --- | --- | --- |
+| 3 | `jql_time` wrote the cursor in this computer's zone, but Jira reads JQL dates in the Jira profile's zone: Berlin laptop, New York profile, six hours skipped every run (also the fall-back hour). `startAt` paging in `updated` order skipped the issue at a page boundary when one already read was updated meanwhile, and the cursor moved past it | `jql_time` reads back 26 hours (the widest gap between zones; Windows has no zone database to convert with). Re-reads write nothing and don't count toward the limit. `JiraClient.search` starts each page five issues early and continues after the last of the previous page's issues it finds unchanged; if none is there the list moved too far, and it stops with a `JiraError` rather than carry on past a gap. An issue updated meanwhile comes again later | `test_muninn.test_jql_time_reaches_back_past_any_profile_time_zone`; `test_odin_jira_client`: `test_paging_doesnt_skip_an_issue_when_one_already_read_is_updated`, `test_paging_stops_with_an_error_when_the_list_moved_too_far`, `test_paging_reads_a_quiet_list_once` |
+| 4 | `_record_failure` ran only for five error types; an `OSError`, `ValueError`, `KeyError` or `http.client.HTTPException` left the last "OK" in `last_run.json` and raised no alert, and the last printed a traceback | `_run` records any failure (Ctrl+C included) and re-raises; `main` ends with a last-resort handler that prints a message, logs the traceback to `odin.log` and exits 2 | `test_odin_posting.test_any_failure_leaves_its_breadcrumb_and_no_traceback` |
+| 5 | A 404 while settling an interrupted post marked it failed and offered the time again; Jira DC answers 404 for lost browse permission too, so the time could post twice once access came back | A 404 leaves the row `sending` (it blocks nothing else, and a deleted issue has nothing due once the sync marks it) and is reported as unsettled | `test_odin_posting.test_a_404_while_settling_an_interrupted_post_leaves_it_in_doubt` |
+
+## Minor
+
+| # | Defect | Fix | Test |
+| --- | --- | --- | --- |
+| 6 | The worklog stream caught only `JiraError` per issue: one odd worklog (`ValueError`) stopped it on every run, and a permanent per-issue error pinned it | Data errors are a problem for that issue and the stream goes on; an issue Jira no longer shows (404) since the search is skipped quietly | `test_odin_collect`: `test_one_bad_worklog_doesnt_stop_the_others`, `test_an_issue_gone_since_the_search_is_skipped_quietly` |
+| 7 | The lock and journal sat beside the config file, so a run with `--config` elsewhere got its own; the lock was taken over after two hours even with its process alive; two runs starting after a crash could both delete a stale lock | `odin.lock`, the journal and `state.db` are found beside Muninn (`%LOCALAPPDATA%\Asgard\odin`) whatever `--config` says. The lock is an OS file lock (`msvcrt.locking` on a byte past the holder's details, `flock` elsewhere): released when its process ends however it ends, never deleted, never held twice. `odin forget` takes it, and drops the sub-task from the journal too | `test_odin_meetings.LockTests` (child processes: holding, killed); `test_odin_posting.test_the_lock_and_journal_go_with_muninn_whatever_config_is_used`; `test_odin_meetings.test_forget_drops_a_sub_task_from_the_journal_too` |
+| 8 | A refused meeting worklog was a warning, while a refused approved day failed the run | A refusal of either is an error: exit 1, and the alert after `alert_after_failures` | `test_odin_posting.test_a_meeting_worklog_jira_refuses_fails_the_run` |
+| 9 | urllib copies `Authorization: Bearer` to wherever a redirect points, so a 302 to an SSO host received the token | A redirect is followed only to the same host, never from HTTPS to HTTP; anything else is a `JiraError` saying the token wasn't sent | `test_odin_jira_client`: `test_a_redirect_to_another_host_isnt_followed`, `test_a_redirect_within_jira_is_followed_with_the_token` |
+| 10 | Stop in the window killed PowerShell and left Python running the daily run | The shared window's Stop ends the whole tree first (`winutil.kill_tree`, `taskkill /T /F`), then the process. A kill mid-create is covered by finding 2, mid-post by the `sending` row | `test_install.KillTreeTests` |
+
+The reviewer also suggested caching `Journal.holds` (done: the file is read once per run) and noted that the worklog-linking SQL is repeated in `store.recent` and `cli.REPORT_SQL` (left: it's read-only and tested both ways).
+
+## Found while verifying
+
+| # | Defect | Fix | Test |
+| --- | --- | --- | --- |
+| F1 | `models.parse_utc` relied on Python 3.11's `fromisoformat`, which reads Jira's `+0000` offsets; on 3.9 and 3.10 the token-expiry warning never fired (four tests failed on 3.10). Odin on Windows runs on 3.11+ for Muninn's SQLite, so nobody saw it | `+0000` becomes `+00:00` before parsing | `test_odin_health.test_jiras_compact_offset_is_read_on_every_supported_python`, and the four token-expiry tests on 3.10 |
+
+## Checked and sound (the reviewer's words, condensed)
+
+The posting protocol (the `sending` row committed before the call, `fail_post` only on a definite 4xx, settling by marker, the view blocking a doubtful issue and day, a failed `finish_post` treated as unknown); no write transaction held across a network call, at every call site; no `INSERT OR REPLACE`, and Odin writing only its own and shared tables; the record written right after the create, the journal replayed first and idempotently; meeting worklog retries reading the sub-task's worklogs first, and the twin check across calendars; the `state.db` import (a savepoint per row, `state.db` kept and consulted on any failure, only owed worklogs carried, with their original `created_at`); the retry rules; the PowerShell orchestrator under Constrained Language Mode.
+
+## Open
+
+- **`jira.dedupe_label` off** leaves a run stopped mid-create able to make that sub-task again. Kept optional for projects that refuse labels; `Odin/README.md` says what it costs.
+- **A 404 while settling** stays `sending` until access returns or a person looks (it shows as "posts to check" on the tile). Posting less was preferred to guessing.
+- **Search-index lag**: a run started seconds after a crash could miss a sub-task Jira hasn't indexed yet. Jira Data Center indexes on create, so this needs checking on the workstation's Jira rather than more code.
+- **Cost**: one search per create, up to `max_posts_per_run` worklog reads per run, and 26 hours of re-reads per stream per run.

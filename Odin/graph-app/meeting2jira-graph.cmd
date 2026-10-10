@@ -25,7 +25,7 @@ rem  rather than duplicated. So there is one Jira config, one Jira token, one st
 rem  switching between the COM, OWA and Graph paths cannot create duplicate sub-tasks: dedupe is on
 rem  a content hash that does not depend on which source produced the export.
 rem
-rem  Set M2J_APP_DIR if the COM app does not sit at ..\app.
+rem  Set ODIN_APP_DIR if Odin (Asgard's apps\odin) is somewhere this can't find.
 rem
 rem  No -ExecutionPolicy Bypass here either.
 rem =============================================================================================
@@ -33,12 +33,30 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
-if not defined M2J_APP_DIR set "M2J_APP_DIR=%ROOT%\..\app"
-set "APPCMD=%M2J_APP_DIR%\meeting2jira.cmd"
+rem Odin is an Asgard app: the Jira side is apps\odin\odin.cmd in Asgard's folder. ODIN_APP_DIR names
+rem that folder when it is somewhere else (M2J_APP_DIR, its old name, still works); otherwise the
+rem installed copy in %LOCALAPPDATA%\Asgard\app, then a checkout of the repository beside this one.
+if defined M2J_APP_DIR if not defined ODIN_APP_DIR set "ODIN_APP_DIR=%M2J_APP_DIR%"
+if defined ASGARD_HOME (set "ASGARDAPP=%ASGARD_HOME%\app") else (set "ASGARDAPP=%LOCALAPPDATA%\Asgard\app")
+if not defined ODIN_APP_DIR if exist "%ASGARDAPP%\apps\odin\odin.cmd" set "ODIN_APP_DIR=%ASGARDAPP%\apps\odin"
+if not defined ODIN_APP_DIR set "ODIN_APP_DIR=%ROOT%\..\..\Asgard\apps\odin"
+set "APPCMD=%ODIN_APP_DIR%\odin.cmd"
 set "EXPORTER=%ROOT%\export_graph.py"
 set "TASKPS=%ROOT%\Register-GraphSyncTask.ps1"
 set "PSEXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
-set "EXPORTDIR=%LOCALAPPDATA%\meeting2jira\exports"
+rem Odin's files live under Asgard's folder: ASGARD_HOME\odin when set, else %LOCALAPPDATA%\Asgard\odin.
+rem A folder from before (%LOCALAPPDATA%\meeting2jira) moves there the first time, in one rename, so
+rem the DPAPI token files come across unchanged. Odin doesn't need Asgard installed for this.
+if defined ASGARD_HOME (set "ODINDATA=%ASGARD_HOME%\odin") else (set "ODINDATA=%LOCALAPPDATA%\Asgard\odin")
+if not defined ASGARD_HOME if not exist "%ODINDATA%\" if exist "%LOCALAPPDATA%\meeting2jira\" (
+    if not exist "%LOCALAPPDATA%\Asgard\" mkdir "%LOCALAPPDATA%\Asgard"
+    move "%LOCALAPPDATA%\meeting2jira" "%ODINDATA%" >nul || (
+        echo ERROR: Odin's files are moving to "%ODINDATA%", but "%LOCALAPPDATA%\meeting2jira" couldn't be moved.
+        echo Close anything using that folder, then run this again.
+        exit /b 2
+    )
+)
+set "EXPORTDIR=%ODINDATA%\exports"
 
 rem Collect the action and the rest separately: `shift` does not rewrite %*, so reusing %* would
 rem pass the action through twice.
@@ -77,6 +95,9 @@ if /i "%ACTION%"=="schedule"      goto :schedule
 if /i "%ACTION%"=="unschedule"    goto :unschedule
 if /i "%ACTION%"=="selftest"      goto :selftest
 rem Everything else belongs to the COM app: one Jira config, one token, one state database.
+if /i "%ACTION%"=="sync"          goto :delegate
+if /i "%ACTION%"=="post"          goto :delegate
+if /i "%ACTION%"=="report"        goto :delegate
 if /i "%ACTION%"=="status"        goto :delegate
 if /i "%ACTION%"=="doctor"        goto :delegate
 if /i "%ACTION%"=="forget"        goto :delegate
@@ -101,7 +122,7 @@ if errorlevel 1 exit /b 2
 call :daysback "%ARG1%" 1
 call :runexport %DAYS%
 if errorlevel 1 exit /b %ERRORLEVEL%
-call "%APPCMD%" cli push --input "%EXPORTFILE%"
+call "%APPCMD%" cli daily --input "%EXPORTFILE%"
 set "RC=%ERRORLEVEL%"
 call :cleanexport %RC%
 exit /b %RC%
@@ -112,7 +133,7 @@ if errorlevel 1 exit /b 2
 call :daysback "%ARG1%" 1
 call :runexport %DAYS%
 if errorlevel 1 exit /b %ERRORLEVEL%
-call "%APPCMD%" cli push --input "%EXPORTFILE%" --dry-run
+call "%APPCMD%" cli daily --input "%EXPORTFILE%" --dry-run
 set "RC=%ERRORLEVEL%"
 call :cleanexport %RC%
 exit /b %RC%
@@ -126,7 +147,7 @@ echo.
 echo Kept: %EXPORTFILE%
 echo It contains calendar data, including meeting subjects. Delete it when you are done.
 echo.
-echo Push it with:  meeting2jira-graph cli push --input "%EXPORTFILE%" --dry-run
+echo Push it with:  meeting2jira-graph cli daily --input "%EXPORTFILE%" --dry-run
 exit /b 0
 
 :initcfg
@@ -220,7 +241,7 @@ echo Step 2 of 5: write graph.json
 %PYCMD% "%EXPORTER%" --init
 echo.
 echo Step 3 of 5: fill in the client_id
-echo Open %LOCALAPPDATA%\meeting2jira\graph.json and set client_id to the Application
+echo Open %ODINDATA%\graph.json and set client_id to the Application
 echo ^(client^) ID from IT. Set "cloud" too if you are in GCC High or DoD.
 echo.
 pause
@@ -267,7 +288,7 @@ if exist "%APPCMD%" (
     call "%APPCMD%" selftest
     exit /b %ERRORLEVEL%
 )
-echo COM app not found at "%M2J_APP_DIR%"; skipped its tests.
+echo Odin not found at "%ODIN_APP_DIR%"; skipped its tests.
 exit /b 0
 
 rem ---------------------------------------------------------------------------------------------
@@ -281,7 +302,7 @@ call "%APPCMD%" %ACTION%%ARGS%
 exit /b %ERRORLEVEL%
 
 :lastexport
-set "LASTEXPORT=%LOCALAPPDATA%\meeting2jira\last_export.json"
+set "LASTEXPORT=%ODINDATA%\last_export.json"
 if not exist "%LASTEXPORT%" (
     echo No Graph export has run yet.
     echo.
@@ -337,10 +358,10 @@ exit /b 0
 
 :requireapp
 if exist "%APPCMD%" exit /b 0
-echo ERROR: the meeting2jira app was not found at "%M2J_APP_DIR%".
+echo ERROR: Odin ^(Asgard's apps\odin\odin.cmd^) was not found at "%ODIN_APP_DIR%".
 echo.
-echo This exporter handles the calendar only; the Jira side lives in the main app.
-echo Put them side by side, or set M2J_APP_DIR to the folder containing meeting2jira.cmd.
+echo This exporter handles the calendar only; the Jira side is Odin, an Asgard app.
+echo Install Asgard, or set ODIN_APP_DIR to the folder containing odin.cmd.
 exit /b 1
 
 :resolvepython
@@ -422,7 +443,7 @@ echo   -IncludeOrganizer    include the organizer name ^(extra personal data; of
 echo   -AttendeeCount       request attendees so appointments can be told from meetings
 echo   -Verbose             more detail
 echo.
-echo Jira app:     %M2J_APP_DIR%
-echo Jira config:  %LOCALAPPDATA%\meeting2jira\config.json
-echo Graph config: %LOCALAPPDATA%\meeting2jira\graph.json
+echo Jira app:     %ODIN_APP_DIR%
+echo Jira config:  %ODINDATA%\config.json
+echo Graph config: %ODINDATA%\graph.json
 exit /b 0

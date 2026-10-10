@@ -9,7 +9,7 @@ inclusion: always
   repo root. It runs pytest (config in `pyproject.toml`), prints a compact grouped summary, and keeps
   the full log in `.test-output/last-run.log`. Use its `--lf`, not pytest's: it also catches subTests.
 - While fixing, run the narrowest scope: one module, `-k`, or `--lf`. `--changed` runs the tests
-  that cover git-changed files (it always adds `test_guardrails` for changes under `Odin/app/src`).
+  that cover git-changed files (it always adds `test_odin_guardrails` for changes under `Asgard/apps/odin`).
 - Full-suite runs (before saying you're done, or after a multi-file change): delegate to the
   `test-runner` subagent rather than running the full suite yourself.
 - If you need more detail on one failure, rerun that test id with `--tb long --trace-lines 60`, or
@@ -20,7 +20,7 @@ inclusion: always
 - An import error in a test module hides every test in it; fix it before anything else.
 - If the same failure survives two fix attempts, stop and state your hypothesis and what you'd check
   next instead of trying a third variant. Use `#debug-playbook` for known gotchas.
-- Never weaken `test_guardrails.py` to get green, and don't change any other test to make it pass
+- Never weaken `test_odin_guardrails.py` or `test_dependencies.py` to get green, and don't change any other test to make it pass
   unless the user asked or the test is clearly wrong; say so explicitly.
 
 ## Context discipline
@@ -33,5 +33,5 @@ inclusion: always
 - Full suite green via `test-runner`, no lint findings on files you changed.
 - If any `.ps1` or `.cmd` changed: the PowerShell syntax check from `tech.md` passed, and anything
   needing Outlook, DPAPI, Task Scheduler or real 5.1 runtime is labeled
-  "needs target-machine verification" and added to the checklist in `HANDOFF.md`.
+  "needs target-machine verification" and added to `Asgard/HANDOFF.md`.
 - Reply briefly: what changed, the RESULT line, next step. `/handoff` follows `handoff.md`.

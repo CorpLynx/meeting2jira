@@ -50,11 +50,12 @@ def _own(app: str, *tables: str) -> None:
 
 
 _own("muninn", "meta")
-_own("odin", "work_items", "work_item_transitions", "work_item_aliases", "calendar_events", "worklogs")
+_own("odin", "work_items", "work_item_transitions", "work_item_aliases", "calendar_events", "worklogs",
+     "meeting_subtasks")
 _own("baldur", "repos", "commits", "commit_work_items", "reflog_entries", "pull_requests", "pull_request_commits",
      "pr_reviews",
      "estimate_runs", "work_sessions", "session_commits", "session_allocations", "day_proposals",
-     "calibration_runs", "time_actuals")
+     "calibration_runs", "time_actuals", "agent_estimates", "agent_estimate_commits")
 _own("loki", "meetings", "action_items", "blufs")
 # A BLUF's citations live beside review drafts' (owner_type 'bluf'); asgard.muninn.citations keeps
 # each app to its own owner_type, which a table-level guard can't see.

@@ -281,7 +281,9 @@ class SchemaV3Tests(WorklogBase):
         self.assertEqual(integrity.search_drift(old), {"pull_requests": (0, 1, 0)})
         old.close()
         st = muninn.prepare(path, backups=self.dir / "bk")
-        self.assertEqual((st.version, st.migrated[-1]), (muninn.SCHEMA_VERSION, "0003_hardening.sql"))
+        self.assertEqual(st.version, muninn.SCHEMA_VERSION)
+        self.assertEqual(st.migrated, [m.name for m in db.available_migrations()[2:]])
+        self.assertEqual(st.migrated[0], "0003_hardening.sql")
         new = muninn.connect(path)
         self.addCleanup(new.close)
         self.assertEqual(integrity.search_drift(new), {})
@@ -316,6 +318,24 @@ class DamageAndRestoreTests(Base):
         with self.assertRaises(muninn.CorruptError):
             muninn.open_app("odin", supported=(1, muninn.SCHEMA_VERSION), path=self.path)
         self.assertTrue(self.path.exists(), "nothing is moved until you ask")
+
+    def test_a_file_that_fails_to_open_isnt_left_open(self):
+        """Windows locks an open file: a leaked handle would stop a restore from replacing it."""
+        closed = []
+
+        class Refusing:
+            row_factory = None
+
+            def execute(self, sql):
+                raise sqlite3.DatabaseError("file is not a database")
+
+            def close(self):
+                closed.append(True)
+
+        with mock.patch.object(sqlite3, "connect", return_value=Refusing()):
+            with self.assertRaises(sqlite3.DatabaseError):
+                muninn.connect(self.dir / "other.db")
+        self.assertEqual(closed, [True])
 
     def test_a_damaged_file_with_no_backup_says_so(self):
         self.damage()
@@ -571,6 +591,18 @@ class CliTests(Base):
         code, text = self.run_cli("retention", "on")
         self.assertIn("Retention is on", text)
         self.assertTrue(integrity.retention_on(self.con))
+
+    def test_prepare_creates_or_updates_without_a_window(self):
+        fresh = self.dir / "fresh" / "muninn.db"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(["--db", str(fresh), "--backups", str(self.dir / "fresh-backups"), "prepare"])
+        self.assertEqual(code, 0)
+        self.assertIn(f"schema v{muninn.SCHEMA_VERSION}", out.getvalue())
+        self.assertIn("(created)", out.getvalue())
+        code, text = self.run_cli("prepare")              # already current: nothing to migrate
+        self.assertEqual(code, 0)
+        self.assertNotIn("migrated", text)
 
     def test_check_exits_1_on_an_error(self):
         self.con.execute("DROP TRIGGER event_cursors_within_log_ins")

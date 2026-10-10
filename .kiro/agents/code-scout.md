@@ -12,8 +12,8 @@ Answer in this format, and nothing else:
 ```
 ANSWER: <one or two sentences>
 LOCATIONS:
-- Odin/app/src/meeting2jira/sync.py:123  <what is there>
-- Odin/app/src/windows/Invoke-MeetingSync.ps1:45  <what is there>
+- Asgard/apps/odin/odin/sync.py:123  <what is there>
+- Asgard/apps/odin/windows/Invoke-MeetingSync.ps1:45  <what is there>
 SNIPPETS: (only if essential; max 3 snippets, max 12 lines each)
 ```
 

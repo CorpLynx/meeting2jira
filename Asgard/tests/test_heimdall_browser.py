@@ -75,10 +75,10 @@ class BrowserTests(unittest.TestCase):
         self.page = self.context.new_page()
         self.log = []
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
 
     def tearDown(self):
         self.context.close()
-        self.tmp.cleanup()
 
     def open(self, form):
         return browser.open_catalog_item(self.page, form, self.log.append)

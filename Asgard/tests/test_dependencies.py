@@ -88,6 +88,31 @@ class DependencyTests(unittest.TestCase):
         offenders = sorted({f"{p.relative_to(ROOT)}: {name}" for p, name in imports(core) if name not in allowed})
         self.assertEqual(offenders, [], "a package here becomes every app's (and Odin's) dependency")
 
+    def test_odins_daily_run_uses_only_the_standard_library(self):
+        """The scheduled task runs on whatever Python Asgard found, which may carry no packages."""
+        app = ROOT / "apps" / "odin"
+        files = [app / "cli.py"] + sorted((app / "odin").glob("*.py"))
+        allowed = set(sys.stdlib_module_names) | {"odin", "asgard"}  # novermin (skipped before 3.10)
+        offenders = []
+        for path in files:
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Import):
+                    names = [a.name for a in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    # "from asgard import ui" names asgard.ui
+                    names = ([f"asgard.{a.name}" for a in node.names] if node.module == "asgard"
+                             else [node.module])
+                else:
+                    continue
+                for name in names:
+                    top = name.split(".")[0]
+                    # Only the standard-library parts of Asgard: Muninn and its paths, never asgard.ui.
+                    if top not in allowed or (top == "asgard"
+                                              and not name.startswith(("asgard.muninn", "asgard.paths"))):
+                        offenders.append(f"{path.relative_to(ROOT)}: {name}")
+        self.assertGreater(len(files), 10)
+        self.assertEqual(offenders, [], "Odin's daily run stays standard library (AGENTS.md); the window may not")
+
     def test_every_declared_package_is_used(self):
         used = {name for _, name in imports(runtime_files())}
         self.assertEqual(sorted(declared()[0] - used), [], "remove packages nothing imports")

@@ -19,9 +19,10 @@ Keep the folder out of OneDrive: a synced database fights the sync engine for it
 
 ## Commands
 
-Run from a console with `python.exe` (not `pythonw.exe`, which prints nothing), in Asgard's install folder (`%LOCALAPPDATA%\Asgard\app`):
+Run from a console with `python.exe` (not `pythonw.exe`, which prints nothing), in Asgard's install folder (`%LOCALAPPDATA%\Asgard\app`). In the packaged build, run `asgard-cli.exe --muninn status` and so on in its folder ([packaging.md](packaging.md)):
 
 ```
+python Asgard.pyw --muninn prepare           create Muninn or bring it up to date, as opening Asgard does
 python Asgard.pyw --muninn status            version, sizes, backups, last housekeeping
 python Asgard.pyw --muninn check             look for damage and for anything that should never happen
 python Asgard.pyw --muninn repair            rebuild the search index; fix event cursors

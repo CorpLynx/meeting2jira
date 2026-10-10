@@ -1,0 +1,410 @@
+"""Minimal Jira REST v2 client for Jira Data Center, using only the standard library.
+
+Position in the flow
+    The only module that talks to the network. sync.py, collect.py, posting.py and cli.py call it;
+    it knows nothing about meetings, filters, or Muninn. Tests drive it against a local http.server,
+    never real Jira.
+
+Why urllib instead of requests
+    On Windows, ssl.create_default_context() loads the Windows certificate store, so an agency root
+    CA or TLS-inspection certificate that Windows already trusts is trusted here too. `requests`
+    ships its own CA bundle (certifi) and typically fails behind TLS inspection. Proxy settings come
+    from the Windows user settings (static proxy; PAC scripts are not evaluated).
+
+Authentication
+    Data Center personal access token, sent as a bearer header. There is no Cloud/basic-auth path.
+
+Retry policy, which is a correctness matter rather than a convenience
+    * GET is safe to repeat, so it retries 429, 502, 503 and 504.
+    * Anything else retries only 429, which Jira rejects before processing. A 5xx, a timeout, a
+      reset or an answer cut off on a POST may mean Jira applied the write and the response was lost
+      on the way back (a failing post-function answers 500 after the issue is committed); retrying
+      that would create a duplicate issue.
+    * Such failures are raised with `ambiguous=True` so the caller can look before leaping. See
+      sync.find_created_issue. Every failure is a JiraError, so no caller sees a raw http.client
+      or JSON exception.
+
+Redirects
+    A redirect to another host (an SSO page, usually) is refused rather than followed: urllib would
+    send the bearer token along to it.
+
+Errors carry advice
+    _STATUS_HINTS and _network_hint turn bare HTTP codes into something actionable, and an HTML
+    response is reported as "an SSO page is probably intercepting API calls" rather than a JSON
+    parse error, because that is what it almost always means on a federal network.
+"""
+from __future__ import annotations
+
+import http.client
+import json
+import logging
+import ssl
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
+from urllib.parse import quote, urlencode, urlsplit
+
+from . import __version__
+
+log = logging.getLogger(__name__)
+
+_RETRY_CODES = (429, 502, 503, 504)
+# A 5xx or a timeout on a POST is ambiguous: Jira may have applied it before the proxy gave up, or a
+# post-function failed after the issue was committed. Retrying would risk a duplicate, so non-GET
+# calls only retry 429, which is rejected before processing.
+_RETRY_CODES_UNSAFE_METHODS = (429,)
+# What Muninn stores of an issue (asgard.muninn.odin.issue_row), plus the custom fields Odin finds.
+ISSUE_FIELDS = ("summary", "status", "issuetype", "project", "resolution", "resolutiondate", "priority", "parent",
+                "assignee", "reporter", "labels", "components", "created", "updated", "duedate")
+_STATUS_HINTS = {
+    401: " (personal access token rejected: expired, revoked, or for a different Jira. Create a new one under Profile > Personal Access Tokens, then run set-token again)",
+    403: " (authenticated but not allowed; after several failed logins Jira may require a CAPTCHA - log in once in a browser)",
+    404: " (check jira.base_url and the issue/project key)",
+}
+
+
+class JiraError(Exception):
+    """A failed Jira call.
+
+    ambiguous=True means the request may have been applied server-side anyway: a proxy timeout,
+    a connection reset, or a 502/503/504 on a non-GET. The caller must not simply retry such a
+    call; for issue creation it has to look for the issue first (see sync.find_created_issue).
+    """
+
+    def __init__(self, message: str, status: Optional[int] = None, ambiguous: bool = False):
+        super().__init__(message)
+        self.status = status
+        self.ambiguous = ambiguous
+
+    @property
+    def refused(self) -> bool:
+        """Jira answered and definitely didn't apply the request: a 4xx. Only then may a write be
+        recorded as failed and tried again; a timeout or a 5xx may have landed."""
+        return self.status is not None and 400 <= self.status < 500 and not self.ambiguous
+
+
+def _identity(issue: Dict[str, Any]) -> Tuple[str, str]:
+    """An issue as it stood when listed: an issue updated since is a different entry."""
+    return str(issue.get("key")), str((issue.get("fields") or {}).get("updated"))
+
+
+def _error_detail(exc: urllib.error.HTTPError) -> str:
+    try:
+        body = exc.read().decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 - best effort only
+        return exc.reason or ""
+    try:
+        data = json.loads(body)
+        parts = list(data.get("errorMessages") or [])
+        parts += [f"{k}: {v}" for k, v in (data.get("errors") or {}).items()]
+        if parts:
+            return "; ".join(parts)
+    except (ValueError, AttributeError):
+        pass
+    return body[:300].strip() or str(exc.reason)
+
+
+def _network_hint(reason: Any) -> str:
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return (" - the server certificate isn't trusted by Python. If your agency CA isn't in the "
+                "Windows certificate store, export the chain as PEM and set jira.ca_bundle.")
+    if isinstance(reason, ssl.SSLError):
+        return (" - TLS handshake failed. If Jira requires a CAC/PIV client certificate, ask the Jira "
+                "admins which endpoint accepts personal access tokens.")
+    return " - check jira.base_url, VPN, and proxy settings (jira.proxy)."
+
+
+class _RefusedRedirect(urllib.error.URLError):
+    pass
+
+
+class _SameHostRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only to the same host over HTTPS. urllib copies every header to the new
+    URL, the bearer token included, so a 302 to an SSO host would hand it the token."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401 - urllib's hook
+        old, new = urlsplit(req.full_url), urlsplit(newurl)
+        if (new.hostname or "").lower() != (old.hostname or "").lower() or (old.scheme == "https" and new.scheme != "https"):
+            fp.close()                      # urllib closes the 302's connection only when it follows it
+            raise _RefusedRedirect(
+                f"Jira redirected the request to {new.scheme}://{new.hostname}, which isn't this Jira, so it "
+                "wasn't followed and the token wasn't sent there. An SSO page or proxy is probably intercepting "
+                "API calls; ask the Jira admins which URL accepts token-authenticated REST calls")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class JiraClient:
+    def __init__(self, base_url: str, token: str, ca_bundle: Optional[str] = None,
+                 proxy: Optional[str] = None, timeout: float = 30, max_retries: int = 3):
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self._headers = {
+            # Data Center personal access tokens are bearer tokens. There is no basic-auth path.
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": f"asgard-odin/{__version__}",
+        }
+        context = ssl.create_default_context()      # includes the Windows cert store
+        if ca_bundle:
+            context.load_verify_locations(cafile=ca_bundle)
+        handlers: list = [urllib.request.HTTPSHandler(context=context), _SameHostRedirects()]
+        if proxy:
+            handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+        self._opener = urllib.request.build_opener(*handlers)
+
+    @classmethod
+    def from_config(cls, jcfg: Dict[str, Any], token: str) -> "JiraClient":
+        return cls(jcfg["base_url"], token, ca_bundle=jcfg.get("ca_bundle"),
+                   proxy=jcfg.get("proxy"), timeout=float(jcfg.get("timeout_seconds") or 30))
+
+    # ---- transport -------------------------------------------------------------------------
+    def request(self, method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Any:
+        url = self.base_url + path
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        attempt = 0
+        while True:
+            req = urllib.request.Request(url, data=data, method=method, headers=self._headers)
+            try:
+                with self._opener.open(req, timeout=self.timeout) as resp:
+                    raw = resp.read()
+                    content_type = resp.headers.get("Content-Type", "")
+            except urllib.error.HTTPError as exc:
+                detail = _error_detail(exc)
+                exc.close()                 # its connection, before a retry opens another
+                retryable = _RETRY_CODES if method == "GET" else _RETRY_CODES_UNSAFE_METHODS
+                if exc.code in retryable and attempt < self.max_retries:
+                    delay = self._retry_delay(exc, attempt)
+                    log.warning("Jira returned %s; retrying in %ss", exc.code, delay)
+                    time.sleep(delay)
+                    attempt += 1
+                    continue
+                hint = _STATUS_HINTS.get(exc.code, "")
+                # A 5xx on a write may mean Jira applied it and the response was lost on the way
+                # back, or that it failed after committing. GETs change nothing, so never ambiguous.
+                ambiguous = method != "GET" and exc.code >= 500
+                raise JiraError(f"{method} {path} -> HTTP {exc.code}: {detail}{hint}", exc.code,
+                                ambiguous=ambiguous) from None
+            except urllib.error.URLError as exc:
+                hint = "" if isinstance(exc, _RefusedRedirect) else _network_hint(exc.reason)
+                raise JiraError(f"{method} {path} failed: {exc.reason}{hint}", ambiguous=method != "GET") from None
+            except OSError as exc:   # timeouts and resets during read
+                raise JiraError(f"{method} {path} failed: {exc}{_network_hint(exc)}",
+                                ambiguous=method != "GET") from None
+            except http.client.HTTPException as exc:   # an answer cut off mid-body, a garbled status line
+                raise JiraError(f"{method} {path} failed: the answer was cut off or garbled "
+                                f"({type(exc).__name__}){_network_hint(exc)}", ambiguous=method != "GET") from None
+
+            if not raw:
+                return None
+            if "json" not in content_type.lower():
+                raise JiraError(
+                    f"{method} {path} returned '{content_type or 'unknown'}' instead of JSON. An SSO login "
+                    "page or web proxy is probably intercepting API calls; ask the Jira admins which URL "
+                    "accepts token-authenticated REST calls.", ambiguous=method != "GET")
+            try:
+                return json.loads(raw.decode("utf-8"))
+            except ValueError:
+                raise JiraError(f"{method} {path} returned JSON that couldn't be read ({len(raw)} bytes); "
+                                "a proxy may have cut it off", ambiguous=method != "GET") from None
+
+    @staticmethod
+    def _retry_delay(exc: urllib.error.HTTPError, attempt: int) -> float:
+        header = exc.headers.get("Retry-After") if exc.headers else None
+        try:
+            return min(60.0, float(header)) if header else float(2 ** (attempt + 1))
+        except ValueError:
+            return float(2 ** (attempt + 1))
+
+    # ---- API ---------------------------------------------------------------------------------
+    def server_info(self) -> Dict[str, Any]:
+        return self.request("GET", "/rest/api/2/serverInfo")
+
+    def myself(self) -> Dict[str, Any]:
+        return self.request("GET", "/rest/api/2/myself")
+
+    def get_issue(self, key: str, fields: str = "summary,issuetype,project,status") -> Dict[str, Any]:
+        return self.request("GET", f"/rest/api/2/issue/{quote(key)}?fields={fields}")
+
+    def fields(self) -> List[Dict[str, Any]]:
+        """Every field, so Muninn can find Epic Link, Story Points and Sprint's custom field ids."""
+        return list(self.request("GET", "/rest/api/2/field") or [])
+
+    def statuses(self) -> List[Dict[str, Any]]:
+        """Every status with its category, so a status Muninn hasn't seen still files as to do or done."""
+        return list(self.request("GET", "/rest/api/2/status") or [])
+
+    def issue(self, key: str, extra_fields: Sequence[str] = (), changelog: bool = True) -> Optional[Dict[str, Any]]:
+        """One issue as Muninn stores it, or None when Jira answers 404 (no such key, or deleted).
+
+        Jira answers an old key with the issue's current one, which is how a moved issue is found.
+        """
+        query = {"fields": ",".join(ISSUE_FIELDS + tuple(f for f in extra_fields if f))}
+        if changelog:
+            query["expand"] = "changelog"
+        try:
+            return self.request("GET", f"/rest/api/2/issue/{quote(key)}?{urlencode(query)}")
+        except JiraError as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+    SEARCH_OVERLAP = 5
+
+    def search(self, jql: str, extra_fields: Sequence[str] = (), changelog: bool = False,
+               page_size: int = 50, limit: Optional[int] = None) -> Iterator[List[Dict[str, Any]]]:
+        """Issues matching a JQL query, a page at a time (GET, so a lost answer is safe to ask again).
+
+        One bad key fails a whole query, so keys other apps mention are looked up one at a time
+        with issue() instead. limit stops after that many issues.
+
+        Paging by startAt can skip an issue: when one already read is updated, it moves to the end
+        of an `ORDER BY updated` list and everything after it shifts back a place. So each page
+        starts SEARCH_OVERLAP issues early and must contain one of the previous page's last issues,
+        unchanged; what follows it is new. If none is there the list moved too far, and a JiraError
+        says so rather than carrying on past a gap. An issue updated meanwhile comes again later.
+        """
+        position = 0                    # how far into the list this has read
+        tail: List[Tuple[str, str]] = []
+        given = 0
+        while True:
+            ask = max(0, position - self.SEARCH_OVERLAP)
+            query = {"jql": jql, "fields": ",".join(ISSUE_FIELDS + tuple(f for f in extra_fields if f)),
+                     "startAt": ask, "maxResults": page_size}
+            if changelog:
+                query["expand"] = "changelog"
+            data = self.request("GET", f"/rest/api/2/search?{urlencode(query)}") or {}
+            issues = [i for i in data.get("issues") or [] if isinstance(i, dict)]
+            new = issues
+            if tail:
+                head = [_identity(i) for i in issues[:self.SEARCH_OVERLAP]]
+                found = [n for n, ident in enumerate(head) if ident in tail]
+                if not found:
+                    raise JiraError("Jira's list of issues changed too much while it was being read "
+                                    f"({jql[:60]}...); the rest is read next run")
+                new = issues[found[-1] + 1:]
+            if limit is not None:
+                new = new[:max(0, limit - given)]
+            if new:
+                yield new
+                given += len(new)
+            reached = ask + len(issues)
+            total = int(data.get("total") or 0)
+            if not issues or reached <= position or reached >= total or (limit is not None and given >= limit):
+                return
+            position = reached
+            tail = [_identity(i) for i in issues[-self.SEARCH_OVERLAP:]]
+
+    def issue_worklogs(self, key: str) -> List[Dict[str, Any]]:
+        """Every worklog on one issue, oldest first. Each carries issueId, author, started and comment."""
+        out: List[Dict[str, Any]] = []
+        seen = set()
+        start = 0
+        while True:
+            data = self.request("GET", f"/rest/api/2/issue/{quote(key)}/worklog?startAt={start}&maxResults=1000") or {}
+            page = [w for w in data.get("worklogs") or [] if isinstance(w, dict) and str(w.get("id")) not in seen]
+            seen.update(str(w.get("id")) for w in page)
+            out.extend(page)
+            start += len(page)
+            total = int(data.get("total") or 0)
+            if not page or start >= total:      # an older Jira that ignores startAt sends nothing new
+                return out
+
+    def deleted_worklogs(self, since_ms: int, max_pages: int = 50) -> Iterator[Tuple[List[Dict[str, Any]], Optional[int]]]:
+        """Worklogs deleted anywhere in Jira since a time (epoch milliseconds), a page at a time with
+        the time the page reaches. Only ids and times: nothing about whose they were."""
+        since = int(since_ms)
+        for _ in range(max_pages):
+            data = self.request("GET", f"/rest/api/2/worklog/deleted?since={since}") or {}
+            values = [v for v in data.get("values") or [] if isinstance(v, dict)]
+            until = data.get("until")
+            until = int(until) if isinstance(until, (int, float)) else None
+            yield values, until
+            if data.get("lastPage", True) or until is None or until <= since:
+                return
+            since = until
+
+    def find_worklog(self, key: str, marker: str) -> Optional[Dict[str, Any]]:
+        """The worklog on an issue whose comment carries an Asgard marker, if Jira has it."""
+        for worklog in self.issue_worklogs(key):
+            comment = worklog.get("comment")
+            text = comment if isinstance(comment, str) else json.dumps(comment)
+            if marker and marker in (text or ""):
+                return worklog
+        return None
+
+    def get_project(self, key: str) -> Dict[str, Any]:
+        return self.request("GET", f"/rest/api/2/project/{quote(key)}")
+
+    def create_issue(self, fields: Dict[str, Any]) -> str:
+        created = self.request("POST", "/rest/api/2/issue", {"fields": fields})
+        key = created.get("key") if isinstance(created, dict) else None
+        if not key:
+            # Jira answered success but not which issue it made: it may well exist.
+            raise JiraError("POST /rest/api/2/issue answered without the new issue's key", ambiguous=True)
+        return str(key)
+
+    def personal_access_tokens(self) -> Optional[List[Dict[str, Any]]]:
+        """The current user's personal access tokens, or None if this Jira does not expose them.
+
+        Data Center only, and only reasonably recent versions: the endpoint arrived with PATs and is
+        absent or restricted elsewhere. Returns None rather than raising for every "not available"
+        case, because a token-expiry warning is a nicety and must never be the reason a sync fails.
+
+        Note what this cannot do: the response never echoes the token itself, so there is no way to
+        tell which entry is the one in use. The caller has to say so rather than implying certainty.
+        """
+        try:
+            data = self.request("GET", "/rest/pat/latest/tokens")
+        except JiraError as exc:
+            # 404 = version predates the endpoint. 403/401 = present but not permitted here.
+            if exc.status in (401, 403, 404, 405):
+                log.debug("This Jira does not expose personal access tokens (HTTP %s)", exc.status)
+                return None
+            raise
+        if isinstance(data, dict):
+            data = data.get("values") or data.get("tokens") or []
+        if not isinstance(data, list):
+            return None
+        return [token for token in data if isinstance(token, dict)]
+
+    def search_issue_keys(self, jql: str, max_results: int = 5) -> List[str]:
+        """Return issue keys matching a JQL query.
+
+        Used to find out whether an ambiguous create actually landed. GET is deliberate: it is
+        safe to retry, unlike the POST form of /search.
+        """
+        query = urlencode({"jql": jql, "fields": "key", "maxResults": max_results})
+        data = self.request("GET", f"/rest/api/2/search?{query}") or {}
+        return [str(issue["key"]) for issue in data.get("issues") or [] if issue.get("key")]
+
+    def add_worklog(self, key: str, seconds: int, started: Union[datetime, str], comment: str) -> Optional[str]:
+        """Log time against an issue. Returns the new worklog's id when Jira reports one.
+
+        started is a datetime or Jira's own text (2026-10-01T09:20:00.000-0400, as Muninn's
+        PendingPost.started gives it). timeSpentSeconds is the real duration; Jira rejects 0, so it
+        is floored at one minute.
+        """
+        if isinstance(started, datetime):
+            started = started.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+        body = {
+            "timeSpentSeconds": max(60, int(seconds)),
+            "started": started,
+            "comment": comment,
+        }
+        created = self.request("POST", f"/rest/api/2/issue/{quote(key)}/worklog", body) or {}
+        worklog_id = created.get("id") if isinstance(created, dict) else None
+        return str(worklog_id) if worklog_id is not None else None
+
+    def transition(self, key: str, name: str) -> bool:
+        data = self.request("GET", f"/rest/api/2/issue/{quote(key)}/transitions") or {}
+        wanted = name.strip().lower()
+        for t in data.get("transitions", []):
+            names = {str(t.get("name", "")).lower(), str((t.get("to") or {}).get("name", "")).lower()}
+            if wanted in names:
+                self.request("POST", f"/rest/api/2/issue/{quote(key)}/transitions", {"transition": {"id": t["id"]}})
+                return True
+        return False

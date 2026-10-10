@@ -1,0 +1,83 @@
+{
+  "_comment": "Keys starting with '_' are ignored. `init` copies this to %LOCALAPPDATA%\\Asgard\\odin\\config.json. See README > Configuration reference.",
+
+  "jira": {
+    "base_url": "https://jira.example.gov",
+    "_base_url": "Jira Data Center only. Authentication is always a personal access token (Profile > Personal Access Tokens), stored with `set-token`.",
+    "default_parent": "PROJ-123",
+    "subtask_type": "Sub-task",
+    "labels": ["meeting"],
+    "assign_to_me": true,
+    "log_work": false,
+    "transition_to": null,
+    "extra_fields": {},
+    "max_creates_per_run": 40,
+    "ca_bundle": null,
+    "proxy": null,
+    "timeout_seconds": 30
+  },
+
+  "filters": {
+    "meetings_only": true,
+    "teams_only": false,
+    "only_ended": true,
+    "skip_cancelled": true,
+    "skip_declined": true,
+    "skip_not_responded": false,
+    "skip_tentative": false,
+    "skip_free": true,
+    "skip_private": true,
+    "skip_all_day": true,
+    "min_minutes": 5,
+    "max_minutes": 480,
+
+    "_exclusions": "Plain case-insensitive substrings; edit these freely. They match inside words, so use skip_subject_patterns below when you need word boundaries (e.g. PTO vs OPTOMETRIST).",
+    "skip_subject_contains": ["OOO", "out of office", "PTO", "holiday", "do not schedule"],
+    "skip_organizer_contains": [],
+    "skip_location_contains": [],
+    "skip_categories": ["Personal"],
+
+    "_skip_subject_patterns": "Regular expressions, for anchors and word boundaries.",
+    "skip_subject_patterns": ["(?i)^lunch\\b", "(?i)focus time", "(?i)^hold\\b", "(?i)\\bPTO\\b"]
+  },
+
+  "_muninn": "What Odin does with Muninn, Asgard's database, beyond the meeting push: read your Jira issues and worklogs in for Asgard's other apps, and post the days you approved in Baldur (only approved minutes, only what Jira is missing).",
+  "muninn": {
+    "sync_issues": true,
+    "sync_worklogs": true,
+    "post_approved": true,
+    "max_posts_per_run": 20,
+    "history_days": 365,
+    "max_issues_per_run": 500
+  },
+
+  "_tour_of_duty": "Your scheduled working hours, local time. This classifies meetings; it does NOT decide which days are scanned (that is -DaysBack, and re-runs cannot duplicate). A meeting entirely outside your tour triggers outside_action; one that merely runs past the end counts as inside, so work is never dropped.",
+  "tour_of_duty": {
+    "enabled": false,
+    "days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+    "start": "07:00",
+    "end": "15:30",
+    "grace_minutes": 15,
+    "_outside_action": "include = treat it normally | label = add outside_label | route = put it under outside_parent (e.g. a comp-time issue) | skip = exclude it",
+    "outside_action": "label",
+    "outside_label": "outside-tod",
+    "outside_parent": null
+  },
+
+  "_rules": "First match wins. Each rule routes to a parent or skips. Unmatched meetings go to jira.default_parent. Note: an outside-tour meeting with outside_action 'route' or 'skip' is handled before rules.",
+  "rules": [
+    { "name": "standups", "match": { "subject_regex": "(?i)stand-?up|daily scrum" }, "parent": "PROJ-200" },
+    { "name": "training", "match": { "category": "Training" }, "parent": "ADMIN-7" },
+    { "name": "no 1:1s",  "match": { "subject_regex": "(?i)\\b1:1\\b|one[- ]on[- ]one" }, "skip": true }
+  ],
+
+  "templates": {
+    "summary": "Meeting: {subject} ({start_local:%Y-%m-%d %H:%M})",
+    "description": "Logged automatically from my calendar by Odin.\n\nWhen: {start_local:%Y-%m-%d %H:%M} - {end_local:%H:%M} ({minutes} min)\nOrganizer: {organizer}\nLocation: {location}",
+    "worklog_comment": "Meeting: {subject}"
+  },
+
+  "csv": {
+    "datetime_formats": ["%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y %I:%M %p", "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M"]
+  }
+}

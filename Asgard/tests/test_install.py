@@ -10,6 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from unittest import mock  # noqa: E402
+
 from asgard import install, valhalla  # noqa: E402
 
 try:
@@ -24,6 +26,7 @@ except Exception:
 class InstallTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)   # after the test's own cleanups (open files)
         self.home = Path(self.tmp.name) / "Asgard"
         self._saved = {k: os.environ.get(k) for k in ("ASGARD_HOME", "APPDATA")}
         os.environ["ASGARD_HOME"] = str(self.home)
@@ -37,7 +40,6 @@ class InstallTests(unittest.TestCase):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
-        self.tmp.cleanup()
 
     def run_setup(self) -> int:
         with contextlib.redirect_stdout(io.StringIO()):
@@ -106,6 +108,43 @@ class InstallTests(unittest.TestCase):
         result = valhalla.uninstall(purge=False)
         self.assertTrue(result.ok, result.skipped)
         self.assertFalse((self.home / "app").exists())
+
+
+
+class ValhallaTaskTests(unittest.TestCase):
+    def test_uninstall_removes_every_apps_scheduled_task(self) -> None:
+        """Valhalla can't import the apps, so their task names are written out; they must stay in step."""
+        import re
+        sys.path.insert(0, str(ROOT / "apps" / "baldur"))
+        sys.path.insert(0, str(ROOT / "apps" / "odin"))
+        from baldur import cli as baldur_cli
+        from odin import cli as odin_cli
+        task_ps = (ROOT / "apps" / "odin" / "windows" / "Register-MeetingSyncTask.ps1").read_text(encoding="ascii")
+        registered = re.search(r"\[string\]\$TaskName = '([^']+)'", task_ps).group(1)
+        self.assertEqual(registered, odin_cli.TASK_NAME)
+        self.assertLessEqual({baldur_cli.TASK_NAME, odin_cli.TASK_NAME, "meeting2jira-daily"},
+                             set(valhalla.SCHEDULED_TASKS))
+        with mock.patch.object(valhalla.winutil, "IS_WINDOWS", True), \
+                mock.patch.object(valhalla.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=0)
+            self.assertEqual(len(valhalla.remove_scheduled_tasks()), len(valhalla.SCHEDULED_TASKS))
+        self.assertEqual(run.call_args_list[0].args[0][:4], ["schtasks", "/Delete", "/F", "/TN"])
+
+
+class KillTreeTests(unittest.TestCase):
+    def test_stop_ends_the_whole_tree(self):
+        """Review 2026-10-10 #10: Stop on Odin's daily run killed PowerShell and left Python running."""
+        from asgard import winutil
+        with mock.patch.object(winutil, "IS_WINDOWS", True), mock.patch.object(winutil.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=0)
+            self.assertTrue(winutil.kill_tree(4242))
+        self.assertEqual(run.call_args.args[0], ["taskkill", "/PID", "4242", "/T", "/F"])
+        self.assertFalse(winutil.kill_tree(0))
+
+    def test_the_window_stops_the_tree_before_the_process(self):
+        shell = (ROOT / "asgard" / "ui" / "shell.py").read_text(encoding="utf-8")
+        stop = shell[shell.index("    def stop(self)"):shell.index("    def _read(self)")]
+        self.assertLess(stop.index("winutil.kill_tree("), stop.index("self._proc.kill()"))
 
 
 if __name__ == "__main__":
