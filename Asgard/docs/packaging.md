@@ -1,6 +1,6 @@
 # Packaging: the PyInstaller build
 
-Oct 9, 2026 · status: built; first Windows run in CI with this change · owner: Asgard core
+Oct 9, 2026 · status: built, and green on Windows in CI (Oct 10) · owner: Asgard core
 
 Asgard ships two ways. Both hold the same code and keep their data in `%LOCALAPPDATA%\Asgard`:
 
@@ -48,6 +48,8 @@ python3 packaging/build.py               macOS or Linux: that system's build, to
 
 Built on Linux on Oct 9 (Python 3.12.11, PyInstaller 6.22.3): every check passed. The machine had no graphics libraries, so Qt was left out of the self-test; the build does that only when its own Python can't load Qt either, never on Windows. The zip was 151 MB, with 2,468 files. Ysildir answered an MCP client over stdio from the build.
 
+Built on Windows on Oct 10 by the workflow (Windows Server 2025, Python 3.12.10): every check passed, Qt included. The zip was 85 MB, with 3,086 files. The first run had failed 17 unit tests that Linux can't show, because Windows won't delete an open file. One was a real leak in `muninn.connect()`; the rest were the tests' own cleanup order. Both are fixed.
+
 ## In GitHub Actions
 
 `.github/workflows/asgard-package.yml` runs `build.py` on Windows Server 2025 with Python 3.12, and uploads the zip and its `.sha256` as the `asgard-windows-x64` artifact (kept 30 days). It runs:
@@ -81,4 +83,5 @@ In order:
 - [ ] **Signing.** Unsigned programs need App Control rules by path or hash. If the agency signs, add a signing step after the build, before `payload.sha256`.
 - [ ] **Where IT puts it**, and whether they deploy it through the software catalog.
 - [ ] **Updates** ([updates.md](updates.md)): the build already writes `payload.sha256`; the updater that checks it isn't built.
-- [ ] **The first Windows run** of the workflow: check its log, and run the self-test on the workstation.
+- [x] **The first Windows run** of the workflow: green on Oct 10 (run 4 on this branch).
+- [ ] **The self-test on the workstation**, under App Control: `asgard-cli.exe --self-test`.
