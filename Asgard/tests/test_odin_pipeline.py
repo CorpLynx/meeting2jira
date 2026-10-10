@@ -259,6 +259,24 @@ class LastRunTests(OdinTestCase):
         self.assertFalse((self.data / "ATTENTION-Odin.txt").exists(), "a good run takes the notice down")
 
 
+class ReportTests(OdinTestCase):
+    def test_every_sub_task_as_a_csv_with_and_without_subjects(self):
+        import csv as csvmod
+        cfg = example_config(self.data, log_work=True)
+        self.push(load_export(FIXTURES / "sample_export.json"), cfg, FakeJira())
+        out = self.data / "meetings.csv"
+        with contextlib.redirect_stdout(io.StringIO()) as said:
+            self.assertEqual(main(["report", "--config", str(self.data / "config.json")]), 0)
+        rows = list(csvmod.DictReader(open(out, encoding="utf-8-sig")))
+        self.assertEqual(len(rows), 4)
+        self.assertEqual({r["worklog_logged"] for r in rows}, {"1"})
+        self.assertIn("Sprint Planning", rows[0]["summary"])
+        self.assertIn("meeting subjects", said.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["report", "--config", str(self.data / "config.json"), "--no-subjects", "--out", str(out)])
+        self.assertNotIn("summary", next(csvmod.DictReader(open(out, encoding="utf-8-sig"))))
+
+
 class FailureTests(OdinTestCase):
     """A broken state.db, a busy Odin or a missing Muninn must exit 2 with advice, not a traceback."""
 

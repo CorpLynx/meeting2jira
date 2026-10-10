@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from asgard import catalog, paths  # noqa: E402
-from asgard.catalog import COMING_SOON, MISSING, NEEDS_SETUP, READY, CatalogError  # noqa: E402
+from asgard.catalog import COMING_SOON, MISSING, READY, CatalogError  # noqa: E402
 
 
 def contrast(a: str, b: str) -> float:
@@ -50,7 +50,7 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(ids[-1], "valhalla")
         self.assertEqual(len(ids), len(set(ids)))
         states = {a.id: catalog.state(a) for a in apps}
-        self.assertEqual(states["odin"], NEEDS_SETUP)
+        self.assertEqual(states["odin"], READY, "Odin ships with Asgard (0.4.0)")
         self.assertEqual(states["valhalla"], READY)
         self.assertEqual(states["baldur"], READY, "Baldur's window ships with Asgard (0.3.1)")
         self.assertEqual(states["heimdall"], READY, "Heimdall's window ships with Asgard (the shared Qt window)")
@@ -76,6 +76,24 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(catalog.state(odin), READY)
         script.unlink()
         self.assertEqual(catalog.state(odin), MISSING)
+
+    def test_an_old_odin_location_is_retired_once_odin_ships_with_asgard(self) -> None:
+        old = self.home / "Tools" / "meeting2jira" / "gui.pyw"
+        self.write_local({"apps": {"odin": {"launch": {"type": "python", "target": str(old)}, "status": "external",
+                                            "color": "#0B5CAD"},
+                                   "jira": {"name": "Jira", "launch": {"type": "url", "target": "https://j.example.gov"}}}})
+        app = self.home / "app"
+        self.assertEqual(catalog.retire_launch_override("odin", app, self.local), str(old))
+        data = json.loads(self.local.read_text(encoding="utf-8"))
+        self.assertEqual(data["apps"]["odin"], {"color": "#0B5CAD"}, "the person's other choices stay")
+        self.assertIn("launch", data["apps"]["jira"])
+        self.assertIsNone(catalog.retire_launch_override("odin", app, self.local), "once")
+        mine = app / "apps" / "odin" / "odin.pyw"
+        self.write_local({"apps": {"odin": {"launch": {"type": "python", "target": str(mine)}}}})
+        self.assertIsNone(catalog.retire_launch_override("odin", app, self.local), "Asgard's own copy stays")
+        self.local.write_text('{"apps": {"odin": ', encoding="utf-8")
+        self.assertIsNone(catalog.retire_launch_override("odin", app, self.local))
+        self.assertEqual(self.local.read_text(encoding="utf-8"), '{"apps": {"odin": ', "never overwrites a broken file")
 
     def test_add_hide_and_order(self) -> None:
         self.write_local({

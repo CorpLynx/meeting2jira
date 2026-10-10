@@ -39,10 +39,12 @@ Commands
   post        steps 1-2, the key lookups and worklog sync, then 6 and 7; --dry-run to list
   status      the last run, then recent sub-tasks and what waits to be posted
   forget      drop a sub-task's record so its meeting can be pushed again
+  report      every meeting sub-task as a CSV, for Power BI or Excel (read-only)
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import getpass
 import json
 import logging
@@ -746,6 +748,43 @@ def cmd_forget(args: argparse.Namespace) -> int:
     return 0
 
 
+REPORT_SQL = (
+    "SELECT ms.issue_key, ms.parent_key, ms.summary, ms.started_at, ms.minutes, ms.created_at, ms.origin, "
+    "EXISTS (SELECT 1 FROM worklogs l WHERE l.state = 'posted' AND "
+    "  ((ms.calendar_event_id IS NOT NULL AND l.calendar_event_id = ms.calendar_event_id) OR "
+    "   l.work_item_id = (SELECT a.work_item_id FROM work_item_aliases a WHERE a.key = ms.issue_key "
+    "                     AND a.status <> 'not_found'))) AS worklog_logged "
+    "FROM meeting_subtasks ms ORDER BY ms.started_at, ms.id")
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    """Every meeting sub-task as a CSV (Power BI has no SQLite connector). Reads Muninn, writes one file."""
+    out = Path(args.out) if args.out else _data_dir(args) / "meetings.csv"
+    columns = ["issue_key", "parent", "start_utc", "minutes", "worklog_logged", "created_at", "origin"]
+    if not args.no_subjects:
+        columns.insert(2, "summary")
+    con = store.open_muninn(readonly=True)
+    try:
+        rows = con.execute(REPORT_SQL).fetchall()
+    finally:
+        con.close()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", newline="", encoding="utf-8-sig") as fh:     # BOM so Excel and Power BI detect UTF-8
+        writer = csv.writer(fh)
+        writer.writerow(columns + ["hours", "meeting_date"])
+        for r in rows:
+            local = muninn.from_ts(r["started_at"]).astimezone()
+            values = {"issue_key": r["issue_key"], "parent": r["parent_key"], "summary": r["summary"],
+                      "start_utc": r["started_at"], "minutes": r["minutes"], "worklog_logged": int(r["worklog_logged"]),
+                      "created_at": r["created_at"], "origin": r["origin"]}
+            writer.writerow([values[c] for c in columns] + [round(r["minutes"] / 60.0, 2), f"{local:%Y-%m-%d}"])
+    log.info("%d row(s) -> %s", len(rows), out)
+    if not args.no_subjects:
+        log.info("NOTE: this file contains meeting subjects. Treat it as you would your calendar; "
+                 "--no-subjects leaves them out.")
+    return 0
+
+
 # ---- parser ------------------------------------------------------------------------------------
 def _positive_int(text: str) -> int:
     """argparse type for --max. Rejects 0, which used to quietly mean 'no cap at all'."""
@@ -805,6 +844,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("status", parents=[common], help="the last run, recent sub-tasks, what waits to be posted")
     p.add_argument("--limit", type=int, default=20)
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("report", parents=[common], help="every meeting sub-task as a CSV (read-only)")
+    p.add_argument("--out", help="the CSV to write (default: meetings.csv in Odin's folder)")
+    p.add_argument("--no-subjects", action="store_true", help="leave meeting subjects out of the file")
+    p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("forget", parents=[common], help="drop a sub-task's record so its meeting is pushed again")
     p.add_argument("issue_key")

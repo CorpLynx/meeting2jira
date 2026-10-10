@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import json
 import os
 import platform
 import re
@@ -220,6 +221,18 @@ def smoke(python: Path, bundle: Path = BUNDLE) -> None:
             say("     skipped: Baldur from setup to estimate (git isn't on PATH)")
         check(bundle / "apps" / "ysildir" / "cli.py", "check", contains="baldur_record_estimate")
         check(bundle / "apps" / "heimdall" / "cli.py", "--help", contains="usage")
+        # Odin's meeting push as far as it goes without Jira: config, CSV, rules, and Muninn (a dry run).
+        odin_dir = Path(tmp) / "odin"
+        odin_dir.mkdir()
+        (odin_dir / "config.json").write_text(json.dumps({"jira": {"base_url": "https://jira.invalid.example",
+                                                                   "default_parent": "PROBE-1"},
+                                                          "filters": {"only_ended": False}}), encoding="utf-8")
+        (odin_dir / "calendar.csv").write_text(
+            "Subject,Start Date,Start Time,End Date,End Time,All day event,Meeting Organizer,Required Attendees,"
+            "Location,Show time as,Private,Categories\nSprint Planning,9/21/2026,10:00:00 AM,9/21/2026,11:00:00 AM,"
+            "False,Alex Kim,me@agency.gov,Microsoft Teams Meeting,2,False,\n", encoding="utf-8")
+        check(bundle / "apps" / "odin" / "cli.py", "push", "--config", odin_dir / "config.json",
+              "--csv", odin_dir / "calendar.csv", "--dry-run", contains="Would create 1")
         if os.name != "nt" or os.environ.get("CI"):
             env["APPDATA"] = str(Path(tmp) / "appdata")      # shortcuts go to the temporary folder
             check(bundle / "asgard" / "install.py", "--no-launch", contains="Asgard is installed")

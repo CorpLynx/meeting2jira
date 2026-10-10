@@ -1,17 +1,19 @@
-"""Keep this exporter's entry point in step with the COM app's.
+"""Keep this exporter's entry point in step with Odin's (Asgard/apps/odin/odin.cmd) and graph-app's.
 
-The dependency runs one way: playwright-app knows about app/, never the reverse. So these checks
-live here rather than in app/tests, which is forbidden from reaching outside app/.
+The dependency runs one way: the exporters know about Odin, never the reverse. So these checks
+live here rather than in Asgard's tests.
 
 Two things are asserted:
 
-1. The command surface covers the COM app's, so muscle memory transfers and documentation does not
+1. The command surface covers Odin's, so muscle memory transfers and documentation does not
    quietly become wrong.
-2. The Python discovery block matches. That logic was rewritten after it failed on a real agency
-   install, and a copy that drifts back to the brittle version would fail the same way - except
-   only on this path, which is harder to notice.
+2. The Python discovery block matches graph-app's. That logic was rewritten after it failed on a
+   real agency install, and a copy that drifts back to the brittle version would fail the same
+   way - except only on this path, which is harder to notice. (Odin's own discovery differs on
+   purpose since it moved into Asgard: it looks for Asgard's Python, one that can run Muninn;
+   the exporters need one with their own packages.)
 
-Skips cleanly when app/ is not present, so this folder remains usable on its own.
+Skips cleanly when Odin is not present, so this folder remains usable on its own.
 """
 import re
 import unittest
@@ -19,13 +21,12 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
 OWA_CMD = HERE / "meeting2jira-owa.cmd"
-APP_CMD = HERE.parent / "app" / "meeting2jira.cmd"
+APP_CMD = HERE.parent.parent / "Asgard" / "apps" / "odin" / "odin.cmd"
+GRAPH_CMD = HERE.parent / "graph-app" / "meeting2jira-graph.cmd"
 
-# COM-specific, so the OWA entry point is not expected to offer them.
+# Outlook-specific, so the OWA entry point is not expected to offer them.
 NOT_APPLICABLE = {
-    "sync",      # Invoke-MeetingSync.ps1 passthrough; the OWA path has its own exporter
-    "csv",       # delegated instead, and handled by the COM app
-    "init",      # reached via delegation
+    "run",       # Invoke-MeetingSync.ps1 passthrough; the OWA path has its own exporter
 }
 
 
@@ -65,14 +66,14 @@ def discovery_logic(path: Path):
     return kept
 
 
-@unittest.skipUnless(APP_CMD.is_file(), f"COM app not found at {APP_CMD}")
+@unittest.skipUnless(APP_CMD.is_file(), f"Odin not found at {APP_CMD}")
 class EntryPointParityTests(unittest.TestCase):
     def test_command_surface_covers_the_com_app(self):
         app_actions = actions(APP_CMD) - NOT_APPLICABLE
         owa_actions = actions(OWA_CMD)
         missing = sorted(app_actions - owa_actions)
         self.assertEqual(missing, [],
-                         f"meeting2jira-owa.cmd is missing commands the COM app has: {missing}")
+                         f"meeting2jira-owa.cmd is missing commands Odin has: {missing}")
 
     def test_owa_specific_commands_exist(self):
         """The three things this path needs that the COM path does not."""
@@ -80,9 +81,15 @@ class EntryPointParityTests(unittest.TestCase):
         for expected in ("login", "discover", "export"):
             self.assertIn(expected, owa_actions)
 
-    def test_python_discovery_matches_the_com_app(self):
-        """The fix for brittle discovery must not exist in only one of the two entry points."""
-        self.assertEqual(discovery_logic(OWA_CMD), discovery_logic(APP_CMD))
+    @unittest.skipUnless(GRAPH_CMD.is_file(), f"graph-app not found at {GRAPH_CMD}")
+    def test_python_discovery_matches_graph_app(self):
+        """The fix for brittle discovery must not exist in only one of the two exporters."""
+        self.assertEqual(discovery_logic(OWA_CMD), discovery_logic(GRAPH_CMD))
+
+    def test_it_hands_off_to_odins_daily_run(self):
+        text = OWA_CMD.read_text(encoding="utf-8")
+        self.assertIn('cli daily --input "%EXPORTFILE%"', text)
+        self.assertNotIn("cli push", text)
 
     def test_discovery_proves_candidates_by_running_them(self):
         """Guards the specific regression: accepting a candidate because it merely exists.

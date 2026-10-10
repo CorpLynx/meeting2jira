@@ -1,0 +1,16 @@
+{
+  "_help": "Odin's views in Asgard's shared window. See asgard/ui/registry.py for the format.",
+  "app": "odin",
+  "name": "Odin",
+  "subtitle": "Jira issues, meetings and worklogs",
+  "theme": {
+    "light": {"accent": "#2B5797"},
+    "dark": {"accent": "#8FB3E8"}
+  },
+  "backend": "odin.ui_backend:Backend",
+  "views": [
+    {"id": "today", "title": "Today", "icon": "Td", "qml": "Today.qml"},
+    {"id": "meetings", "title": "Meetings", "icon": "Mt", "qml": "Meetings.qml"},
+    {"id": "issues", "title": "My issues", "icon": "Is", "qml": "Issues.qml"}
+  ]
+}

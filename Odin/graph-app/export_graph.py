@@ -5,7 +5,7 @@ no COM, no browser automation, and reads only documented APIs. The output is con
 existing, unmodified pipeline:
 
     python export_graph.py --days-back 1 --out week.json
-    cd ../app && PYTHONPATH=src python -m meeting2jira push --input ../graph-app/week.json --dry-run
+    odin cli push --input ../graph-app/week.json --dry-run     (odin.cmd is Asgard's apps\\odin\\odin.cmd)
 
 First run:
 
@@ -238,7 +238,7 @@ def main(argv=None) -> int:
         log.warning("  skipped %s", line)
     log.info("")
     log.info("Next: push it (dry run first)")
-    log.info("  cd ../app && PYTHONPATH=src python -m meeting2jira push --input %s --dry-run",
+    log.info("  odin cli push --input %s --dry-run   (Asgard's apps\\odin\\odin.cmd)",
              out_path)
     return 0
 

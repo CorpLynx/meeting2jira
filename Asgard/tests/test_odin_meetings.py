@@ -180,6 +180,19 @@ class LockTests(OdinTestCase):
         with store.RunLock(self.data):
             pass                                # released on the way out
 
+    def test_a_lock_whose_process_has_gone_is_taken_over_at_once(self):
+        """Stop in Odin's window kills the run; the next one mustn't wait two hours for it."""
+        lock = self.data / store.LOCK
+        lock.write_text("999999999 2026-09-24T00:00:00Z\n", encoding="utf-8")
+        with store.RunLock(self.data):
+            self.assertIn(str(os.getpid()), lock.read_text(encoding="utf-8"))
+
+    def test_a_lock_held_by_a_running_process_is_respected(self):
+        (self.data / store.LOCK).write_text(f"{os.getpid()} 2026-09-24T00:00:00Z\n", encoding="utf-8")
+        with self.assertRaises(store.StoreError):
+            with store.RunLock(self.data):
+                pass
+
     def test_a_lock_left_by_a_run_that_died_is_taken_over(self):
         lock = self.data / store.LOCK
         lock.write_text("4242 2026-09-24T00:00:00Z\n", encoding="utf-8")

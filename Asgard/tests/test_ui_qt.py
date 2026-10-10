@@ -127,6 +127,25 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(s.shell.title, "Heimdall")
         self.visit_all(s)
 
+    def test_odin_window_loads_every_page_cleanly_before_setup(self):
+        """No settings, no token, no Muninn: every page still loads and says what to do."""
+        s = self.open(app="odin")
+        self.assertEqual(s.shell.title, "Odin")
+        self.visit_all(s)
+
+    def test_odin_window_loads_every_page_cleanly_with_muninn_and_settings(self):
+        from asgard import muninn
+        muninn.prepare(self.dir / "muninn.db", backups=self.dir / "backups")
+        odin = self.dir / "odin"
+        odin.mkdir()
+        (odin / "config.json").write_text(json.dumps({"jira": {"base_url": "https://jira.example.gov",
+                                                               "default_parent": "PROJ-1"}}), encoding="utf-8")
+        (odin / "last_run.json").write_text(json.dumps({"finished_utc": "2026-10-09T21:00:00Z", "exit_code": 1,
+                                                        "command": "daily", "first_error": "HTTP 401"}),
+                                            encoding="utf-8")
+        s = self.open(app="odin")
+        self.visit_all(s)
+
     def test_heimdall_pages_load_cleanly_with_a_form_and_templates(self):
         self.write_form()
         from heimdall.ui_backend import Backend

@@ -81,8 +81,10 @@ $argument = "-NoProfile -NonInteractive -WindowStyle Hidden -File `"$syncScript`
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argument -WorkingDirectory $appRoot
 $trigger = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At $At
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+# 45 minutes: the first daily run also reads a year of your issues and worklogs from Jira into
+# Muninn (later runs read only what changed, in a minute or two).
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 45)
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
     -Description 'Odin (Asgard): meetings to Jira sub-tasks, Jira into Muninn, approved Baldur days to Jira' -Force | Out-Null

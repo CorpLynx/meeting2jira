@@ -23,7 +23,7 @@ rem  Jira side, config, token storage, state, reporting - is delegated to the CO
 rem  rather than duplicated here. So there is one config file, one token, one state database, and
 rem  running both paths cannot create duplicate sub-tasks.
 rem
-rem  Set M2J_APP_DIR if the COM app does not sit at ..\app.
+rem  Set ODIN_APP_DIR if Odin (Asgard's apps\odin) is somewhere this can't find.
 rem
 rem  No -ExecutionPolicy Bypass here either.
 rem =============================================================================================
@@ -31,8 +31,14 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
-if not defined M2J_APP_DIR set "M2J_APP_DIR=%ROOT%\..\app"
-set "APPCMD=%M2J_APP_DIR%\meeting2jira.cmd"
+rem Odin is an Asgard app: the Jira side is apps\odin\odin.cmd in Asgard's folder. ODIN_APP_DIR names
+rem that folder when it is somewhere else (M2J_APP_DIR, its old name, still works); otherwise the
+rem installed copy in %LOCALAPPDATA%\Asgard\app, then a checkout of the repository beside this one.
+if defined M2J_APP_DIR if not defined ODIN_APP_DIR set "ODIN_APP_DIR=%M2J_APP_DIR%"
+if defined ASGARD_HOME (set "ASGARDAPP=%ASGARD_HOME%\app") else (set "ASGARDAPP=%LOCALAPPDATA%\Asgard\app")
+if not defined ODIN_APP_DIR if exist "%ASGARDAPP%\apps\odin\odin.cmd" set "ODIN_APP_DIR=%ASGARDAPP%\apps\odin"
+if not defined ODIN_APP_DIR set "ODIN_APP_DIR=%ROOT%\..\..\Asgard\apps\odin"
+set "APPCMD=%ODIN_APP_DIR%\odin.cmd"
 set "EXPORTER=%ROOT%\export_owa.py"
 set "TASKPS=%ROOT%\Register-OwaSyncTask.ps1"
 set "PSEXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -85,6 +91,9 @@ if /i "%ACTION%"=="unschedule" goto :unschedule
 if /i "%ACTION%"=="selftest"   goto :selftest
 rem Everything else belongs to the COM app: one config, one token, one state database.
 if /i "%ACTION%"=="check"      goto :delegate
+if /i "%ACTION%"=="sync"       goto :delegate
+if /i "%ACTION%"=="post"       goto :delegate
+if /i "%ACTION%"=="report"     goto :delegate
 if /i "%ACTION%"=="status"     goto :delegate
 if /i "%ACTION%"=="doctor"     goto :delegate
 if /i "%ACTION%"=="forget"     goto :delegate
@@ -110,7 +119,7 @@ if errorlevel 1 exit /b 2
 call :daysback "%ARG1%" 1
 call :runexport %DAYS%
 if errorlevel 1 exit /b %ERRORLEVEL%
-call "%APPCMD%" cli push --input "%EXPORTFILE%"
+call "%APPCMD%" cli daily --input "%EXPORTFILE%"
 set "RC=%ERRORLEVEL%"
 call :cleanexport %RC%
 exit /b %RC%
@@ -121,7 +130,7 @@ if errorlevel 1 exit /b 2
 call :daysback "%ARG1%" 1
 call :runexport %DAYS%
 if errorlevel 1 exit /b %ERRORLEVEL%
-call "%APPCMD%" cli push --input "%EXPORTFILE%" --dry-run
+call "%APPCMD%" cli daily --input "%EXPORTFILE%" --dry-run
 set "RC=%ERRORLEVEL%"
 call :cleanexport %RC%
 exit /b %RC%
@@ -135,7 +144,7 @@ echo.
 echo Kept: %EXPORTFILE%
 echo It contains calendar data, including meeting subjects. Delete it when you are done.
 echo.
-echo Push it with:  meeting2jira-owa cli push --input "%EXPORTFILE%" --dry-run
+echo Push it with:  meeting2jira-owa cli daily --input "%EXPORTFILE%" --dry-run
 exit /b 0
 
 :login
@@ -233,7 +242,7 @@ if exist "%APPCMD%" (
     call "%APPCMD%" selftest
     exit /b %ERRORLEVEL%
 )
-echo COM app not found at "%M2J_APP_DIR%"; skipped its tests.
+echo Odin not found at "%ODIN_APP_DIR%"; skipped its tests.
 exit /b 0
 
 rem ---------------------------------------------------------------------------------------------
@@ -303,10 +312,10 @@ exit /b 0
 
 :requireapp
 if exist "%APPCMD%" exit /b 0
-echo ERROR: the meeting2jira app was not found at "%M2J_APP_DIR%".
+echo ERROR: Odin ^(Asgard's apps\odin\odin.cmd^) was not found at "%ODIN_APP_DIR%".
 echo.
-echo This exporter handles the calendar only; the Jira side lives in the main app.
-echo Put them side by side, or set M2J_APP_DIR to the folder containing meeting2jira.cmd.
+echo This exporter handles the calendar only; the Jira side is Odin, an Asgard app.
+echo Install Asgard, or set ODIN_APP_DIR to the folder containing odin.cmd.
 exit /b 1
 
 :resolvepython
@@ -387,6 +396,6 @@ echo Extra flags accepted by the export commands:
 echo   -IncludeOrganizer    include the organizer name ^(extra personal data; off by default^)
 echo   -Verbose             more detail, including the endpoint that was discovered
 echo.
-echo Jira app:  %M2J_APP_DIR%
+echo Jira app:  %ODIN_APP_DIR%
 echo Config:    %ODINDATA%\config.json
 exit /b 0

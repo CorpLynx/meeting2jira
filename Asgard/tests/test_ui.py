@@ -166,6 +166,14 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual([v.key for v in heimdall[0].views], ["heimdall:templates", "heimdall:form"])
         self.assertTrue(all(v.qml.is_file() for v in heimdall[0].views))
 
+    def test_odin_ships_a_valid_manifest(self):
+        apps, warnings = registry.discover()
+        self.assertEqual(warnings, [])
+        odin = [a for a in apps if a.id == "odin"]
+        self.assertEqual([v.key for v in odin[0].views], ["odin:today", "odin:meetings", "odin:issues"])
+        self.assertTrue(all(v.qml.is_file() for v in odin[0].views))
+        self.assertEqual(odin[0].backend, "odin.ui_backend:Backend")
+
     def test_discovers_apps_and_filters_one(self):
         self.app("demo", self.good())
         self.app("other", self.good("other", name="Other"))

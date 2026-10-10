@@ -141,6 +141,11 @@ def install(desktop: bool = False) -> Dict[str, Any]:
 
     paths.log_dir().mkdir(parents=True, exist_ok=True)
     catalog.ensure_local_manifest()
+    # Odin ships with Asgard from 0.4.0; a tile set up to open a copy of Odin from before would
+    # keep opening that copy instead.
+    old = catalog.retire_launch_override("odin", app)
+    if old:
+        say("ok", f"Odin is part of Asgard now: its tile opens Asgard's own Odin, not {old}")
     # The installed copy's programs: the packaged build's own (in app\), or the Python running setup.
     python, pythonw = paths.frozen_programs(app) if paths.FROZEN else catalog.python_paths()
     entry, icon = app / "Asgard.pyw", app / "asgard" / "asgard.ico"

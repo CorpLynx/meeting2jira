@@ -350,6 +350,36 @@ def save_launch_override(app_id: str, launch: Dict[str, Any], local: Optional[Pa
     _write_json(local, data)
 
 
+def retire_launch_override(app_id: str, inside: Path, local: Optional[Path] = None) -> Optional[str]:
+    """Drop a tile's launch setting that points outside Asgard's code folder, for an app that now
+    ships with Asgard (Odin, Oct 2026): the old setting would keep opening the copy from before.
+    Other settings for the tile (name, colour) stay. Returns the target removed, if any.
+    """
+    local = local or paths.local_manifest()
+    if not local.exists():
+        return None
+    try:
+        data = _read_json(local)
+    except CatalogError:
+        return None                       # a broken file is the person's to fix; never overwrite it
+    apps = data.get("apps")
+    entry = apps.get(app_id) if isinstance(apps, dict) else None
+    launch = entry.get("launch") if isinstance(entry, dict) else None
+    if not isinstance(launch, dict) or not launch.get("target"):
+        return None
+    target = Path(expand(str(launch["target"])))
+    try:
+        target.resolve().relative_to(Path(inside).resolve())
+        return None                       # already the copy that ships with Asgard
+    except ValueError:
+        pass
+    del entry["launch"]
+    if entry.get("status") == "external":
+        del entry["status"]
+    _write_json(local, data)
+    return str(target)
+
+
 def _write_json(path: Path, data: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")

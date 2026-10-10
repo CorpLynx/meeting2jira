@@ -368,8 +368,9 @@ class RunLock:
     """odin.lock in Odin's folder, held while a run may write to Jira.
 
     Created exclusively, so a second run (a manual sync while the scheduled task is going) stops
-    with a message instead of creating the same meeting's sub-task twice. A lock older than two
-    hours is from a run that died, and is taken over.
+    with a message instead of creating the same meeting's sub-task twice. The lock names its
+    process: one whose process has gone (a run stopped from Odin's window, or a crash) is taken
+    over at once, and one older than two hours is taken over whatever it says.
     """
 
     def __init__(self, data_dir: Path):
@@ -384,9 +385,11 @@ class RunLock:
             except FileExistsError:
                 try:
                     age = time.time() - self.path.stat().st_mtime
+                    holder = self.path.read_text(encoding="utf-8").split()
                 except OSError:
                     continue
-                if age > LOCK_STALE_SECONDS:
+                pid = int(holder[0]) if holder and holder[0].isdigit() else 0
+                if age > LOCK_STALE_SECONDS or (pid and not _alive(pid)):
                     try:
                         self.path.unlink()
                     except OSError:
@@ -408,3 +411,35 @@ class RunLock:
             except OSError:
                 pass
             self.held = False
+
+
+def _alive(pid: int) -> bool:
+    """Whether a process with this id is still running (the run that holds the lock)."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel32.OpenProcess(0x1000, False, pid)      # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() == 5                 # access denied: it exists
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == 259                            # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)                                         # signal 0 checks; it sends nothing
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True

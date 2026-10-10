@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
 
 SCRIPT_SUFFIXES = (".py", ".pyw")
-APP_FOLDERS = ("baldur", "heimdall", "ysildir")       # apps/<name>, each with its own package
+APP_FOLDERS = ("baldur", "heimdall", "odin", "ysildir")       # apps/<name>, each with its own package
 
 
 class Refused(Exception):
@@ -141,13 +141,13 @@ def _check_mcp() -> str:
 def _check_apps() -> str:
     root = bundle_root()
     for name in ("asgard.launcher", "asgard.install", "asgard.valhalla", "baldur.cli", "baldur.window",
-                 "heimdall.cli", "ysildir.config"):
+                 "heimdall.cli", "odin.cli", "odin.ui_backend", "ysildir.config"):
         module = importlib.import_module(name)
         where = Path(getattr(module, "__file__", "") or "")
         # Asgard's code must run from the shipped .py files, or its paths (prompts, QML, migrations) break.
         if where.suffix != ".py" or root not in where.resolve().parents:
             raise RuntimeError(f"{name} loaded from {where or 'the archive'}, not from {root}")
-    return "the launcher, setup, Valhalla, Baldur, Heimdall and Ysildir load, from the shipped .py files"
+    return "the launcher, setup, Valhalla, Baldur, Heimdall, Odin and Ysildir load, from the shipped .py files"
 
 
 def _check_tls() -> str:

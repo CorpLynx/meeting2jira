@@ -4,7 +4,7 @@ For machines where classic Outlook (and therefore COM) is unavailable - that is,
 The output is consumed by the existing, unmodified pipeline:
 
     python export_owa.py --days-back 1 --out week.json
-    cd ../app && PYTHONPATH=src python -m meeting2jira push --input ../playwright-app/week.json --dry-run
+    odin cli push --input ../playwright-app/week.json --dry-run     (odin.cmd is Asgard's apps\\odin\\odin.cmd)
 
 First run needs a visible sign-in:
 
@@ -273,7 +273,7 @@ def main(argv=None) -> int:
     for line in skipped:
         log.warning("  skipped %s", line)
     log.info("\nNext: push it (dry run first)\n"
-             "  cd ../app && PYTHONPATH=src python -m meeting2jira push --input %s --dry-run",
+             "  odin cli push --input %s --dry-run   (Asgard's apps\\odin\\odin.cmd)",
              out_path)
     return 0
 

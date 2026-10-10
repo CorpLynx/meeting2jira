@@ -8,8 +8,8 @@
       "description": "Jira issues, meetings and worklogs",
       "monogram": "Od",
       "color": "#2B5797",
-      "status": "external",
-      "launch": {}
+      "status": "available",
+      "launch": {"type": "python", "target": "{app}/apps/odin/odin.pyw"}
     },
     {
       "id": "freya",
