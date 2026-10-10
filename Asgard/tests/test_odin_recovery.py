@@ -10,13 +10,21 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from meeting2jira.config import build_config
-from meeting2jira.jira import JiraError
-from meeting2jira.sources import load_export
-from meeting2jira.state import State
-from meeting2jira.sync import dedupe_label, run
+import sys
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
+ROOT = Path(__file__).resolve().parent.parent
+APP = ROOT / "apps" / "odin"
+for folder in (ROOT, APP):
+    if str(folder) not in sys.path:
+        sys.path.insert(0, str(folder))
+
+from odin.config import build_config  # noqa: E402
+from odin.jira import JiraError  # noqa: E402
+from odin.sources import load_export  # noqa: E402
+from odin.state import State  # noqa: E402
+from odin.sync import dedupe_label, run  # noqa: E402
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "odin"
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 
 

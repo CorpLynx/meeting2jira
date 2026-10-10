@@ -1,10 +1,10 @@
-"""Command-line entry point:  py -3 -m meeting2jira <command>
+"""Command-line entry point:  python apps\\odin\\cli.py <command>
 
 Position in the flow
     Wiring, not logic. Parses arguments, sets up logging, loads config, picks a source, opens state,
     builds a Jira client, and calls sync.run. The decisions live in rules.py and sync.py.
 
-    Invoked either directly or through the `meeting2jira.cmd` / `m2j` entry points, which is why the
+    Invoked either directly or through the `odin.cmd` entry point, which is why the
     command names, flags, and exit codes below are a compatibility surface: `Invoke-MeetingSync.ps1`
     and the scheduled task depend on them.
 
@@ -55,9 +55,9 @@ from .sources import load_export, load_outlook_csv
 from .state import State
 from .sync import run
 
-log = logging.getLogger("meeting2jira")
-# app/ root: this file is app/src/meeting2jira/__main__.py, so climb three parents.
-APP_ROOT = Path(__file__).resolve().parents[2]
+log = logging.getLogger("odin")
+# apps/odin: this file is apps/odin/odin/cli.py.
+APP_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _data_dir(args: argparse.Namespace) -> Path:
@@ -378,11 +378,11 @@ def write_alert(cfg: Dict[str, Any], data_dir: Path, summary: str, detail: str,
         "Details\n-------\n"
         f"{detail}\n\n"
         "What to do\n----------\n"
-        "  1. Open a PowerShell window in the meeting2jira folder\n"
-        "  2. Run:  .\\meeting2jira check\n"
+        "  1. Open a Command Prompt in Odin's folder (apps\\odin in Asgard's)\n"
+        "  2. Run:  odin check\n"
         "     That reports the specific problem: an expired token, a moved parent issue,\n"
         "     a proxy intercepting the API, or a certificate that is not trusted.\n"
-        "  3. Fix what it names, then:  .\\meeting2jira\n\n"
+        "  3. Fix what it names, then:  odin\n\n"
         "Meetings are not lost. Nothing has been pushed twice either: re-running is safe,\n"
         "because already-synced meetings are recognised and skipped.\n\n"
         "This file is deleted automatically on the next successful run.\n"
@@ -497,7 +497,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--config", help=f"config file (default: {default_config_path()})")
     common.add_argument("-v", "--verbose", action="store_true", help="more detail on the console")
 
-    parser = argparse.ArgumentParser(prog="meeting2jira", description="Push calendar meetings into Jira as sub-tasks.")
+    parser = argparse.ArgumentParser(prog="odin", description="Push calendar meetings into Jira as sub-tasks.")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -540,7 +540,7 @@ def main(argv=None) -> int:
         # damaged, and the state database is what prevents duplicates, so just say so plainly.
         log.error("ERROR: local state database problem: %s", exc)
         if "locked" in str(exc).lower():
-            log.error("Another meeting2jira run is probably in progress. Wait for it to finish, "
+            log.error("Another Odin run is probably in progress. Wait for it to finish, "
                       "or check Task Scheduler for 'meeting2jira-daily', then try again.")
         return 2
     except sqlite3.DatabaseError as exc:

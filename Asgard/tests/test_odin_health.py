@@ -12,8 +12,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from meeting2jira.__main__ import (ALERT_FILE, clear_alert, token_expiry_warning, write_alert)
-from meeting2jira.config import build_config
+import sys
+
+ROOT = Path(__file__).resolve().parent.parent
+APP = ROOT / "apps" / "odin"
+for folder in (ROOT, APP):
+    if str(folder) not in sys.path:
+        sys.path.insert(0, str(folder))
+
+from odin.cli import (ALERT_FILE, clear_alert, token_expiry_warning, write_alert)  # noqa: E402
+from odin.config import build_config  # noqa: E402
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 
@@ -74,7 +82,7 @@ class AlertFileTests(unittest.TestCase):
         # Point the Desktop lookup at a temp dir so the real Desktop is never touched by tests.
         self.desktop = self.tmp / "Desktop"
         self.desktop.mkdir()
-        self.patcher = mock.patch("meeting2jira.__main__._desktop_dir", return_value=self.desktop)
+        self.patcher = mock.patch("odin.cli._desktop_dir", return_value=self.desktop)
         self.patcher.start()
 
     def tearDown(self):
@@ -92,7 +100,7 @@ class AlertFileTests(unittest.TestCase):
                     "PROJ-1: HTTP 401", consecutive_failures=1)
         body = (self.desktop / ALERT_FILE).read_text(encoding="utf-8")
         self.assertIn("HTTP 401", body)
-        self.assertIn("meeting2jira check", body)
+        self.assertIn("odin check", body)
         # Reassurance matters: the user should not fear duplicates before they investigate.
         self.assertIn("re-running is safe", body)
 
@@ -117,7 +125,7 @@ class AlertFileTests(unittest.TestCase):
         clear_alert(self.tmp)     # must not raise
 
     def test_falls_back_to_the_data_dir_when_the_desktop_is_unwritable(self):
-        with mock.patch("meeting2jira.__main__._desktop_dir", return_value=None):
+        with mock.patch("odin.cli._desktop_dir", return_value=None):
             write_alert(self.config(), self.tmp, "s", "d", consecutive_failures=1)
         self.assertTrue((self.tmp / ALERT_FILE).exists())
 
@@ -127,7 +135,7 @@ class FailureStreakTests(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        cfg = json.loads((Path(__file__).resolve().parent.parent / "config.example.json")
+        cfg = json.loads((APP / "config.example.json")
                          .read_text(encoding="utf-8"))
         cfg["jira"].update(base_url="https://j.example.gov", default_parent="PROJ-1")
         cfg["rules"] = []
@@ -144,21 +152,22 @@ class FailureStreakTests(unittest.TestCase):
     def test_streak_increments_on_failure_and_resets_on_success(self):
         import contextlib
         import io
-        from meeting2jira.__main__ import main
-        from tests.test_pipeline import FakeJira
+        from odin.cli import main
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from test_odin_pipeline import FakeJira
 
-        fixture = Path(__file__).resolve().parent / "fixtures" / "sample_outlook.csv"
+        fixture = Path(__file__).resolve().parent / "fixtures" / "odin" / "sample_outlook.csv"
         argv = ["push", "--config", str(self.cfg_path), "--csv", str(fixture)]
 
         class FailingJira(FakeJira):
             def create_issue(self, fields):
-                from meeting2jira.jira import JiraError
+                from odin.jira import JiraError
                 raise JiraError("POST -> HTTP 401: token rejected", 401)
 
         def run_with(client):
-            with mock.patch("meeting2jira.__main__.load_token", return_value=("t", "env")), \
-                 mock.patch("meeting2jira.__main__.JiraClient.from_config", return_value=client), \
-                 mock.patch("meeting2jira.__main__._desktop_dir", return_value=None), \
+            with mock.patch("odin.cli.load_token", return_value=("t", "env")), \
+                 mock.patch("odin.cli.JiraClient.from_config", return_value=client), \
+                 mock.patch("odin.cli._desktop_dir", return_value=None), \
                  contextlib.redirect_stdout(io.StringIO()):
                 return main(list(argv))
 

@@ -10,15 +10,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from meeting2jira.__main__ import main
-from meeting2jira.config import ConfigError, build_config, load_config
-from meeting2jira.rules import Router
-from meeting2jira.sources import load_export, load_outlook_csv
-from meeting2jira.state import State
-from meeting2jira.sync import run
+import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
+APP = ROOT / "apps" / "odin"
+for folder in (ROOT, APP):
+    if str(folder) not in sys.path:
+        sys.path.insert(0, str(folder))
+
+from odin.cli import main  # noqa: E402
+from odin.config import ConfigError, build_config, load_config  # noqa: E402
+from odin.rules import Router  # noqa: E402
+from odin.sources import load_export, load_outlook_csv  # noqa: E402
+from odin.state import State  # noqa: E402
+from odin.sync import run  # noqa: E402
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "odin"
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 
 
@@ -46,7 +53,7 @@ class FakeJira:
 
 def example_config(tmp: Path, **jira_overrides) -> dict:
     """The shipped config.example.json, loaded the real way, so the example itself stays valid."""
-    raw = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+    raw = json.loads((APP / "config.example.json").read_text(encoding="utf-8"))
     raw["jira"].update(jira_overrides)
     path = tmp / "config.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
@@ -206,7 +213,7 @@ class PrivacyTests(unittest.TestCase):
         self.assertTrue(any(m.is_private and "Dentist" in m.subject for m in meetings))
 
         with State(self.tmp / "state.db") as state, \
-                self.assertLogs("meeting2jira.sync", level="INFO") as logged:
+                self.assertLogs("odin.sync", level="INFO") as logged:
             result = run(meetings, cfg, state, None, dry_run=True, now=NOW)
 
         written = " ".join(logged.output)
@@ -227,7 +234,7 @@ class LastRunTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _push(self, extra_argv=()):
-        raw = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+        raw = json.loads((APP / "config.example.json").read_text(encoding="utf-8"))
         raw["jira"]["base_url"] = "https://j.example.gov"
         raw["jira"]["default_parent"] = "PROJ-123"
         raw["filters"]["only_ended"] = False
@@ -241,8 +248,8 @@ class LastRunTests(unittest.TestCase):
         self.assertFalse((self.tmp / "last_run.json").exists())
 
     def test_push_records_the_outcome(self):
-        with mock.patch("meeting2jira.__main__.load_token", return_value=("tok", "env")), \
-             mock.patch("meeting2jira.__main__.JiraClient.from_config", return_value=FakeJira()):
+        with mock.patch("odin.cli.load_token", return_value=("tok", "env")), \
+             mock.patch("odin.cli.JiraClient.from_config", return_value=FakeJira()):
             self.assertEqual(self._push(), 0)
         recorded = json.loads((self.tmp / "last_run.json").read_text(encoding="utf-8"))
         self.assertEqual(recorded["exit_code"], 0)
@@ -288,10 +295,10 @@ class StateFailureTests(unittest.TestCase):
             conn.execute("CREATE TABLE IF NOT EXISTS lockme (x)")
             conn.execute("BEGIN EXCLUSIVE")
             # Don't wait out the real lock timeout just to assert the message.
-            with mock.patch("meeting2jira.state.LOCK_TIMEOUT_SECONDS", 0.05):
+            with mock.patch("odin.state.LOCK_TIMEOUT_SECONDS", 0.05):
                 code, output = self._push()
             self.assertEqual(code, 2)
-            self.assertIn("another meeting2jira run", output)
+            self.assertIn("another odin run", output)
         finally:
             conn.close()
 
@@ -319,7 +326,7 @@ class ExportFormatTests(unittest.TestCase):
 class CsvTests(unittest.TestCase):
     def test_outlook_csv(self):
         cfg = build_config({"jira": {"base_url": "https://j.example.gov", "default_parent": "P-1"}})
-        with self.assertLogs("meeting2jira.sources", level="WARNING"):
+        with self.assertLogs("odin.sources", level="WARNING"):
             meetings = load_outlook_csv(FIXTURES / "sample_outlook.csv", cfg["csv"]["datetime_formats"])
         self.assertEqual(len(meetings), 3)   # the broken row is skipped with a warning
 

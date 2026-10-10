@@ -10,11 +10,19 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from meeting2jira.config import ConfigError, build_config
-from meeting2jira.models import Meeting
-from meeting2jira.rules import INSIDE, OUTSIDE, PARTIAL, UNKNOWN, Router, TourOfDuty
-from meeting2jira.state import State
-from meeting2jira.sync import run
+import sys
+
+ROOT = Path(__file__).resolve().parent.parent
+APP = ROOT / "apps" / "odin"
+for folder in (ROOT, APP):
+    if str(folder) not in sys.path:
+        sys.path.insert(0, str(folder))
+
+from odin.config import ConfigError, build_config  # noqa: E402
+from odin.models import Meeting  # noqa: E402
+from odin.rules import INSIDE, OUTSIDE, PARTIAL, UNKNOWN, Router, TourOfDuty  # noqa: E402
+from odin.state import State  # noqa: E402
+from odin.sync import run  # noqa: E402
 
 NOW = datetime(2099, 1, 1, tzinfo=timezone.utc)   # far future, so nothing is "not ended yet"
 

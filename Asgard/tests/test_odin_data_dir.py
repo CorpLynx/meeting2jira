@@ -4,7 +4,7 @@
 - A folder from before (%LOCALAPPDATA%\\meeting2jira) moves there once, whole, in one rename, so the
   DPAPI token files, state.db, logs and exports come across unchanged.
 - A move that fails stops with a message instead of starting an empty folder beside the old one.
-- The three apps (meeting2jira, graph-app, playwright-app) and the scripts agree on the folder.
+- Odin and its two exporters (graph-app, playwright-app) and the scripts agree on the folder.
 """
 import importlib.util
 import os
@@ -16,9 +16,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from meeting2jira import config
+ROOT = Path(__file__).resolve().parent.parent
+APP = ROOT / "apps" / "odin"
+for folder in (ROOT, APP):
+    if str(folder) not in sys.path:
+        sys.path.insert(0, str(folder))
 
-ODIN = Path(__file__).resolve().parents[2]
+from odin import config  # noqa: E402
+
+ODIN = ROOT.parent / "Odin"                  # the exporters that stay outside Asgard
 
 
 def load(name, path, extra_path=None):
@@ -113,13 +119,13 @@ class DataDirTests(unittest.TestCase):
     def test_no_script_still_writes_to_the_old_folder(self):
         """Only the move itself may name %LOCALAPPDATA%\\meeting2jira."""
         offenders = []
-        for path in sorted(ODIN.rglob("*")):
+        for path in sorted(ODIN.rglob("*")) + sorted(APP.rglob("*")):
             if path.suffix.lower() not in (".py", ".ps1", ".cmd") or "tests" in path.parts or not path.is_file():
                 continue
             for n, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
                 if re.search(r"LOCALAPPDATA%?\\?\)?[\\/ ,'\"]+\\?'?meeting2jira", line, re.I) and not re.search(
                         r"legacy|move|before|exist|rem |#|\"\"\"|^\s*\(", line, re.I):
-                    offenders.append(f"{path.relative_to(ODIN)}:{n}: {line.strip()}")
+                    offenders.append(f"{path}:{n}: {line.strip()}")
         self.assertEqual(offenders, [])
 
 

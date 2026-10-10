@@ -7,7 +7,16 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
-from meeting2jira.jira import JiraClient, JiraError
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+APP = ROOT / "apps" / "odin"
+for folder in (ROOT, APP):
+    if str(folder) not in sys.path:
+        sys.path.insert(0, str(folder))
+
+from odin.jira import JiraClient, JiraError  # noqa: E402
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -102,13 +111,13 @@ class JiraClientTests(unittest.TestCase):
 
     def test_retries_on_503(self):
         _Handler.fail_next_with[:] = [503, 503]
-        with mock.patch("meeting2jira.jira.time.sleep") as sleep:
+        with mock.patch("odin.jira.time.sleep") as sleep:
             self.assertEqual(self.client.myself()["name"], "jdoe")
         self.assertEqual(sleep.call_count, 2)
 
     def test_post_is_not_retried_on_ambiguous_5xx(self):
         _Handler.fail_next_with[:] = [504]
-        with mock.patch("meeting2jira.jira.time.sleep") as sleep, self.assertRaises(JiraError) as ctx:
+        with mock.patch("odin.jira.time.sleep") as sleep, self.assertRaises(JiraError) as ctx:
             self.client.create_issue({"summary": "x"})
         self.assertEqual(ctx.exception.status, 504)
         self.assertEqual(sleep.call_count, 0)
@@ -117,7 +126,7 @@ class JiraClientTests(unittest.TestCase):
     def test_ambiguity_is_flagged_only_where_the_write_may_have_landed(self):
         # 504 on a POST: Jira may have created the issue before the gateway gave up.
         _Handler.fail_next_with[:] = [504]
-        with mock.patch("meeting2jira.jira.time.sleep"), self.assertRaises(JiraError) as ctx:
+        with mock.patch("odin.jira.time.sleep"), self.assertRaises(JiraError) as ctx:
             self.client.create_issue({"summary": "x"})
         self.assertTrue(ctx.exception.ambiguous)
 
@@ -129,7 +138,7 @@ class JiraClientTests(unittest.TestCase):
 
         # A GET changes nothing, so it is never ambiguous however it fails.
         _Handler.fail_next_with[:] = [504] * 5
-        with mock.patch("meeting2jira.jira.time.sleep"), self.assertRaises(JiraError) as ctx:
+        with mock.patch("odin.jira.time.sleep"), self.assertRaises(JiraError) as ctx:
             self.client.myself()
         self.assertFalse(ctx.exception.ambiguous)
 
@@ -143,7 +152,7 @@ class JiraClientTests(unittest.TestCase):
 
     def test_post_is_retried_on_429(self):
         _Handler.fail_next_with[:] = [429]
-        with mock.patch("meeting2jira.jira.time.sleep"):
+        with mock.patch("odin.jira.time.sleep"):
             self.assertEqual(self.client.create_issue({"summary": "x"}), "PROJ-501")
 
     def test_html_response_is_flagged(self):

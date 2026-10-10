@@ -1,8 +1,9 @@
-"""Guardrails for the project's non-negotiables (documented in the repo: HANDOFF.md, .kiro/steering/tech.md).
+"""Guardrails for Odin's non-negotiables (AGENTS.md, docs/integration/odin.md).
 
-These fail loudly if an iteration adds an undeclared or undocumented dependency (see ../MODULES.md), weakens TLS, reads guarded Outlook
-properties by default, adds an execution-policy bypass, or breaks Constrained Language Mode safety.
-Change a rule here only with a deliberate, documented decision.
+These fail loudly if an iteration weakens TLS, reads guarded Outlook properties by default, adds an
+execution-policy bypass, breaks Constrained Language Mode safety, or lets an Odin exporter pin a
+package without documenting it in Odin/MODULES.md. Odin's own imports are checked with the rest of
+Asgard's (tests/test_dependencies.py). Change a rule here only with a deliberate, documented decision.
 """
 import ast
 import re
@@ -10,9 +11,13 @@ import sys
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent          # app/
-PACKAGE = ROOT / "src" / "meeting2jira"
-PS_DIR = ROOT / "src" / "windows"
+ROOT = Path(__file__).resolve().parent.parent          # Asgard/
+APP = ROOT / "apps" / "odin"
+PACKAGE = APP / "odin"
+PS_DIR = APP / "windows"
+for folder in (ROOT, APP):
+    if str(folder) not in sys.path:
+        sys.path.insert(0, str(folder))
 
 
 def _ps_code(path: Path) -> str:
@@ -45,7 +50,7 @@ class GuardrailWiringTests(unittest.TestCase):
         pattern = re.compile(r"^function Resolve-Python\(\[string\]\$Override\) \{.*?^\}",
                              re.DOTALL | re.MULTILINE)
         bodies = {}
-        for path in sorted(ROOT.glob("src/windows/*.ps1")) + sorted(ROOT.glob("tools/*.ps1")):
+        for path in sorted(PS_DIR.glob("*.ps1")) + sorted(APP.glob("tools/*.ps1")):
             text = path.read_text(encoding="utf-8")
             match = pattern.search(text)
             if match:
@@ -66,65 +71,10 @@ class GuardrailWiringTests(unittest.TestCase):
                                  "Register-MeetingSyncTask.ps1", "Test-Environment.ps1"])
 
 
-REQUIREMENTS = ROOT / "requirements.txt"
 _PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._\-]*)(\[[A-Za-z0-9,._\-]+\])?==[A-Za-z0-9.+!_\-]+(\s*;.*)?$")
 
 
-def _declared():
-    """Package names in requirements.txt, normalised, and any lines that aren't exact pins."""
-    names, loose = set(), []
-    for line in REQUIREMENTS.read_text(encoding="utf-8").splitlines():
-        line = line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        m = _PIN.match(line)
-        if m:
-            names.add(m.group(1).lower().replace("-", "_"))
-        else:
-            loose.append(line)
-    return names, loose
-
-
-def _imports():
-    for path in _py_files():
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.Import):
-                for a in node.names:
-                    yield path, a.name
-            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                yield path, node.module
-
-
 class PythonGuardrails(unittest.TestCase):
-    """Dependencies: allowed since Oct 2026 when declared and pinned (Asgard/docs/dependency-policy.md).
-
-    This replaced test_stdlib_only. A package is a reviewed decision, so an import must appear in
-    Odin/app/requirements.txt pinned with ==; nothing else gets in by accident.
-    """
-
-    def test_requirements_are_exact_pins(self):
-        self.assertTrue(REQUIREMENTS.is_file(), f"{REQUIREMENTS} is missing")
-        _, loose = _declared()
-        self.assertEqual(loose, [], "pin every requirement exactly (name==1.2.3)")
-
-    def test_every_import_is_stdlib_or_declared(self):
-        stdlib = getattr(sys, "stdlib_module_names", None)
-        if stdlib is None:
-            self.skipTest("sys.stdlib_module_names needs Python 3.10+; run this check on a newer Python")
-        declared, _ = _declared()
-        offenders = [f"{path.name}: import {name}" for path, name in _imports()
-                     if name.split(".")[0] not in stdlib and name.split(".")[0] != "meeting2jira"
-                     and name.split(".")[0].lower() not in declared]
-        self.assertEqual(offenders, [], "declare each package, pinned, in Odin/app/requirements.txt")
-
-    def test_odin_never_imports_asgard(self):
-        """Odin must run with no Asgard installed. Allowing an optional Muninn import is a decision
-        recorded in Asgard/docs/integration/odin.md; change this test only with it."""
-        hits = [f"{path.name}: import {name}" for path, name in _imports() if name.split(".")[0] == "asgard"]
-        self.assertEqual(hits, [])
-        declared, _ = _declared()
-        self.assertNotIn("asgard", declared)
-
     def test_tls_verification_never_disabled(self):
         banned = re.compile(r"CERT_NONE|_create_unverified_context|check_hostname\s*=\s*False|verify\s*=\s*False")
         hits = [f"{p.name}:{i}" for p in _py_files()
@@ -132,15 +82,16 @@ class PythonGuardrails(unittest.TestCase):
         self.assertEqual(hits, [], "TLS verification must never be disabled")
 
     def test_https_required_by_config_validation(self):
-        from meeting2jira.config import ConfigError, build_config
+        from odin.config import ConfigError, build_config
         with self.assertRaises(ConfigError):
             build_config({"jira": {"base_url": "http://jira.example.gov", "default_parent": "P-1"}})
 
 
-ODIN = ROOT.parent                                      # Odin/: app/ and its sibling deliverables
+ODIN = ROOT.parent / "Odin"                             # Odin's optional exporters, outside Asgard
 MODULES_DOC = ODIN / "MODULES.md"
-# Every Odin deliverable that may pin packages, and the folder its code lives in.
-DELIVERABLES = {"app": ROOT, "graph-app": ODIN / "graph-app", "playwright-app": ODIN / "playwright-app"}
+# Every Odin deliverable that may pin packages, and the folder its code lives in. Odin itself is
+# an Asgard app now: its packages are Asgard's (requirements.txt, MODULES.md).
+DELIVERABLES = {"graph-app": ODIN / "graph-app", "playwright-app": ODIN / "playwright-app"}
 DOC_ROWS = ("Used in", "If it's missing", "Stdlib alternative", "Package alternatives")
 
 
@@ -169,17 +120,17 @@ def _doc_sections(text: str):
 
 
 class ModulesDocGuardrails(unittest.TestCase):
-    """Odin/MODULES.md says, for every package any Odin deliverable pins, where it's used and what
+    """Odin/MODULES.md says, for every package an Odin exporter pins, where it's used and what
     to use instead if it isn't available on-prem.
 
-    Docs don't ship inside app/, so on a workstation copy of app/ alone (no ../MODULES.md and no
-    sibling folders) this skips; in the repo it always runs.
+    The exporters don't ship inside Asgard, so an installed copy (no ../Odin) skips this; in the
+    repo it always runs.
     """
 
     def setUp(self):
         present = {name: folder for name, folder in DELIVERABLES.items() if (folder / "requirements.txt").is_file()}
-        if not MODULES_DOC.is_file() and set(present) == {"app"}:
-            self.skipTest("app/ copied on its own: Odin/MODULES.md isn't shipped with it")
+        if not ODIN.is_dir():
+            self.skipTest("Odin's exporters aren't beside this copy of Asgard")
         self.assertTrue(MODULES_DOC.is_file(), "write Odin/MODULES.md: each package, where it's used, alternatives")
         self.pins = {pkg: name for name, folder in present.items() for pkg in _pins(folder / "requirements.txt")}
         self.sections = _doc_sections(MODULES_DOC.read_text(encoding="utf-8"))

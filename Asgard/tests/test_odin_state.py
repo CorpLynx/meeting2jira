@@ -9,10 +9,18 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from meeting2jira.jira import JiraError
-from meeting2jira.models import Meeting
-from meeting2jira.state import MAX_WORKLOG_ATTEMPTS, State
-from meeting2jira.sync import RunResult, retry_pending_worklogs
+import sys
+
+ROOT = Path(__file__).resolve().parent.parent
+APP = ROOT / "apps" / "odin"
+for folder in (ROOT, APP):
+    if str(folder) not in sys.path:
+        sys.path.insert(0, str(folder))
+
+from odin.jira import JiraError  # noqa: E402
+from odin.models import Meeting  # noqa: E402
+from odin.state import MAX_WORKLOG_ATTEMPTS, State  # noqa: E402
+from odin.sync import RunResult, retry_pending_worklogs  # noqa: E402
 
 # Exactly the v0.1.0 schema, before worklog_id / worklog_comment / worklog_attempts existed.
 V0_1_0_SCHEMA = """
