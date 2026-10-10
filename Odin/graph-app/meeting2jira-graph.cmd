@@ -38,7 +38,19 @@ set "APPCMD=%M2J_APP_DIR%\meeting2jira.cmd"
 set "EXPORTER=%ROOT%\export_graph.py"
 set "TASKPS=%ROOT%\Register-GraphSyncTask.ps1"
 set "PSEXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
-set "EXPORTDIR=%LOCALAPPDATA%\meeting2jira\exports"
+rem Odin's files live under Asgard's folder: ASGARD_HOME\odin when set, else %LOCALAPPDATA%\Asgard\odin.
+rem A folder from before (%LOCALAPPDATA%\meeting2jira) moves there the first time, in one rename, so
+rem the DPAPI token files come across unchanged. Odin doesn't need Asgard installed for this.
+if defined ASGARD_HOME (set "ODINDATA=%ASGARD_HOME%\odin") else (set "ODINDATA=%LOCALAPPDATA%\Asgard\odin")
+if not defined ASGARD_HOME if not exist "%ODINDATA%\" if exist "%LOCALAPPDATA%\meeting2jira\" (
+    if not exist "%LOCALAPPDATA%\Asgard\" mkdir "%LOCALAPPDATA%\Asgard"
+    move "%LOCALAPPDATA%\meeting2jira" "%ODINDATA%" >nul || (
+        echo ERROR: Odin's files are moving to "%ODINDATA%", but "%LOCALAPPDATA%\meeting2jira" couldn't be moved.
+        echo Close anything using that folder, then run this again.
+        exit /b 2
+    )
+)
+set "EXPORTDIR=%ODINDATA%\exports"
 
 rem Collect the action and the rest separately: `shift` does not rewrite %*, so reusing %* would
 rem pass the action through twice.
@@ -220,7 +232,7 @@ echo Step 2 of 5: write graph.json
 %PYCMD% "%EXPORTER%" --init
 echo.
 echo Step 3 of 5: fill in the client_id
-echo Open %LOCALAPPDATA%\meeting2jira\graph.json and set client_id to the Application
+echo Open %ODINDATA%\graph.json and set client_id to the Application
 echo ^(client^) ID from IT. Set "cloud" too if you are in GCC High or DoD.
 echo.
 pause
@@ -281,7 +293,7 @@ call "%APPCMD%" %ACTION%%ARGS%
 exit /b %ERRORLEVEL%
 
 :lastexport
-set "LASTEXPORT=%LOCALAPPDATA%\meeting2jira\last_export.json"
+set "LASTEXPORT=%ODINDATA%\last_export.json"
 if not exist "%LASTEXPORT%" (
     echo No Graph export has run yet.
     echo.
@@ -423,6 +435,6 @@ echo   -AttendeeCount       request attendees so appointments can be told from m
 echo   -Verbose             more detail
 echo.
 echo Jira app:     %M2J_APP_DIR%
-echo Jira config:  %LOCALAPPDATA%\meeting2jira\config.json
-echo Graph config: %LOCALAPPDATA%\meeting2jira\graph.json
+echo Jira config:  %ODINDATA%\config.json
+echo Graph config: %ODINDATA%\graph.json
 exit /b 0

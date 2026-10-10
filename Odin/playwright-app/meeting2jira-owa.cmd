@@ -36,7 +36,19 @@ set "APPCMD=%M2J_APP_DIR%\meeting2jira.cmd"
 set "EXPORTER=%ROOT%\export_owa.py"
 set "TASKPS=%ROOT%\Register-OwaSyncTask.ps1"
 set "PSEXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
-set "EXPORTDIR=%LOCALAPPDATA%\meeting2jira\exports"
+rem Odin's files live under Asgard's folder: ASGARD_HOME\odin when set, else %LOCALAPPDATA%\Asgard\odin.
+rem A folder from before (%LOCALAPPDATA%\meeting2jira) moves there the first time, in one rename, so
+rem the DPAPI token files come across unchanged. Odin doesn't need Asgard installed for this.
+if defined ASGARD_HOME (set "ODINDATA=%ASGARD_HOME%\odin") else (set "ODINDATA=%LOCALAPPDATA%\Asgard\odin")
+if not defined ASGARD_HOME if not exist "%ODINDATA%\" if exist "%LOCALAPPDATA%\meeting2jira\" (
+    if not exist "%LOCALAPPDATA%\Asgard\" mkdir "%LOCALAPPDATA%\Asgard"
+    move "%LOCALAPPDATA%\meeting2jira" "%ODINDATA%" >nul || (
+        echo ERROR: Odin's files are moving to "%ODINDATA%", but "%LOCALAPPDATA%\meeting2jira" couldn't be moved.
+        echo Close anything using that folder, then run this again.
+        exit /b 2
+    )
+)
+set "EXPORTDIR=%ODINDATA%\exports"
 
 rem Collect the action and the rest separately: `shift` does not rewrite %*, so reusing %* would
 rem pass the action through twice.
@@ -235,7 +247,7 @@ call "%APPCMD%" %ACTION%%ARGS%
 exit /b %ERRORLEVEL%
 
 :lastexport
-set "LASTEXPORT=%LOCALAPPDATA%\meeting2jira\last_export.json"
+set "LASTEXPORT=%ODINDATA%\last_export.json"
 if not exist "%LASTEXPORT%" (
     echo No OWA export has run yet.
     echo.
@@ -376,5 +388,5 @@ echo   -IncludeOrganizer    include the organizer name ^(extra personal data; of
 echo   -Verbose             more detail, including the endpoint that was discovered
 echo.
 echo Jira app:  %M2J_APP_DIR%
-echo Config:    %LOCALAPPDATA%\meeting2jira\config.json
+echo Config:    %ODINDATA%\config.json
 exit /b 0

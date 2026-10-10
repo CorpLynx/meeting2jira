@@ -34,12 +34,17 @@ if ($Unregister) {
 $syncScript = Join-Path $PSScriptRoot 'Invoke-MeetingSync.ps1'
 $appRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
+# Odin's files live under Asgard's folder: ASGARD_HOME\odin when set (as in Asgard's own tests),
+# else %LOCALAPPDATA%\Asgard\odin. Odin doesn't need Asgard installed; it only shares the folder.
+$asgardDir = if ($env:ASGARD_HOME) { $env:ASGARD_HOME } else { Join-Path $env:LOCALAPPDATA 'Asgard' }
+$dataDir = Join-Path $asgardDir 'odin'
+
 # Without -At, run shortly after the tour of duty ends, so the day's meetings have finished and
 # `only_ended` does not have to defer them to tomorrow. Anything later than the tour still gets
 # picked up by the next run's -DaysBack window; re-runs cannot duplicate.
 if (-not $At) {
     $At = '16:45'
-    $configPath = Join-Path $env:LOCALAPPDATA 'meeting2jira\config.json'
+    $configPath = Join-Path $dataDir 'config.json'
     if (Test-Path $configPath) {
         $config = Get-Content -LiteralPath $configPath -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
         $tour = $null
@@ -71,5 +76,5 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Pr
     -Description 'meeting2jira: push ended calendar meetings to Jira sub-tasks' -Force | Out-Null
 
 Write-Host "Registered '$TaskName': weekdays at $At, window = last $DaysBack day(s) through now."
-Write-Host "Logs: $(Join-Path $env:LOCALAPPDATA 'meeting2jira\logs')"
+Write-Host "Logs: $(Join-Path $dataDir 'logs')"
 Write-Host "Test it now with: Start-ScheduledTask -TaskName '$TaskName'"

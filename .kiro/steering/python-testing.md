@@ -13,7 +13,7 @@ fileMatchPattern: ["Odin/app/tests/**/*.py"]
 - Each test has a 60s timeout (pytest-timeout); a test that waits on a socket or lock must not hang.
 - Use `self.subTest(...)` instead of copy-pasted near-duplicate tests.
 - Temporary files: `tempfile.TemporaryDirectory()` or `tempfile.mkdtemp()` cleaned up in `tearDown`.
-  Never write into `Odin/app/` or the real `%LOCALAPPDATA%\meeting2jira`.
+  Never write into `Odin/app/` or the real `%LOCALAPPDATA%\Asgard\odin`.
 - Patch with `unittest.mock.patch("meeting2jira.<module>.<name>")`, e.g. `_desktop_dir`,
   `load_token`, `JiraClient.from_config`, `jira.time.sleep` (keeps retry tests instant).
 - Python 3.8 compatible, same as the app (see tech.md).

@@ -20,7 +20,7 @@ Operational breadcrumb
     failing is visible without opening a log file.
 
 Commands
-  init        create %LOCALAPPDATA%\\meeting2jira\\config.json from config.example.json
+  init        create %LOCALAPPDATA%\\Asgard\\odin\\config.json from config.example.json
   set-token   store your Jira PAT, DPAPI-encrypted for your Windows user
   check       verify config, token, Jira reachability, parent issues, and sub-task type
   push        read an export (--input JSON or --csv) and create sub-tasks (--dry-run to preview)

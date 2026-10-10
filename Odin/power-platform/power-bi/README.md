@@ -8,7 +8,7 @@ one needs nothing new: the data already exists.
 
 ### `state.db` — local, free, already populated
 
-`%LOCALAPPDATA%\meeting2jira\state.db`, table `synced`, one row per sub-task created:
+`%LOCALAPPDATA%\Asgard\odin\state.db`, table `synced`, one row per sub-task created:
 
 | Column | Use |
 |---|---|

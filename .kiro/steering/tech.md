@@ -23,7 +23,7 @@ inclusion: always
 6. **Outlook data minimization.** The exporter must not read guarded or sensitive properties (`Body`, `RequiredAttendees`, `OptionalAttendees`, `Recipients`, …).
    - `Organizer` is read only behind `-IncludeOrganizer`.
    - Reading guarded properties triggers Outlook's security prompt, and it widens what data is handled.
-7. **No admin rights** required for any step. Per-user data lives in `%LOCALAPPDATA%\meeting2jira`.
+7. **No admin rights** required for any step. Per-user data lives in `%LOCALAPPDATA%\Asgard\odin`.
 8. **Secrets**: the Jira PAT is stored only via DPAPI (`credstore.py`). Never log it, print it, or write it in plain text.
 9. **No EWS.** Exchange Online is disabling it starting Oct 2026. Microsoft Graph is the only acceptable future network source, and it needs an IT-registered app.
 

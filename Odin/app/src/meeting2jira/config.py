@@ -161,9 +161,67 @@ class ConfigError(Exception):
     """Raised for missing or invalid configuration."""
 
 
-def default_data_dir() -> Path:
+def asgard_dir() -> Path:
+    """Asgard's per-user folder, the way asgard.paths finds it (Odin doesn't import Asgard)."""
+    home = os.environ.get("ASGARD_HOME")
+    if home:
+        return Path(home)
     base = os.environ.get("LOCALAPPDATA")
-    return Path(base) / "meeting2jira" if base else Path.home() / ".meeting2jira"
+    return Path(base) / "Asgard" if base else Path.home() / ".local" / "share" / "Asgard"
+
+
+def legacy_data_dirs() -> List[Path]:
+    """Where Odin kept its files before they moved under Asgard (Oct 2026)."""
+    base = os.environ.get("LOCALAPPDATA")
+    if base:
+        return [Path(base) / "meeting2jira"]
+    return [Path.home() / ".meeting2jira", Path.home() / "meeting2jira"]
+
+
+def move_legacy_data(target: Path) -> Optional[Path]:
+    """Move Odin's old folder to target, once. Returns the folder moved, if any.
+
+    One rename on the same drive, so everything comes across as it was: config, state.db, logs,
+    exports, and the DPAPI token files, which open for the same Windows user wherever they sit.
+    Nothing happens when target already exists, or under ASGARD_HOME (tests point that at a
+    temporary folder, and must never move a real one).
+    """
+    if os.environ.get("ASGARD_HOME"):
+        return None
+    if target.exists():
+        # Something made the new folder before the move (by hand, or an old script). The history must
+        # never be left behind: without state.db the next run re-creates every meeting ever synced.
+        for old in legacy_data_dirs():
+            if (old / "state.db").is_file() and not (target / "state.db").exists():
+                raise ConfigError(
+                    f"Odin's history (state.db) is still in {old}, but its files now live in {target}, "
+                    f"which doesn't have it. Move everything from {old} into {target} (or delete {target} "
+                    "if it holds nothing you need), then run again. Running now would re-create every "
+                    "meeting already synced.")
+        return None
+    for old in legacy_data_dirs():
+        if old.is_dir():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.replace(old, target)
+            except OSError as exc:
+                raise ConfigError(
+                    f"Odin's files are moving to {target}, but {old} couldn't be moved ({exc}). Close "
+                    "anything using it (Odin's window, a sync that's running, a log open in an editor) and "
+                    "run again.") from None
+            return old
+    return None
+
+
+def default_data_dir() -> Path:
+    """Odin's files: %LOCALAPPDATA%\\Asgard\\odin, beside Asgard's (ASGARD_HOME\\odin when set).
+
+    Odin still runs without Asgard installed; it only shares the folder. A folder from before
+    (%LOCALAPPDATA%\\meeting2jira) is moved here the first time.
+    """
+    target = asgard_dir() / "odin"
+    move_legacy_data(target)
+    return target
 
 
 def default_config_path() -> Path:

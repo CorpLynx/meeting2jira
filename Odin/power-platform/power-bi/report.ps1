@@ -129,7 +129,21 @@ function Resolve-Python([string]$Override) {
     return $null
 }
 
-$dataDir = Join-Path $env:LOCALAPPDATA 'meeting2jira'
+# Odin's files live under Asgard's folder: ASGARD_HOME\odin when set (as in Asgard's own tests),
+# else %LOCALAPPDATA%\Asgard\odin. Odin doesn't need Asgard installed; it only shares the folder.
+$asgardDir = if ($env:ASGARD_HOME) { $env:ASGARD_HOME } else { Join-Path $env:LOCALAPPDATA 'Asgard' }
+$dataDir = Join-Path $asgardDir 'odin'
+# A folder from before (%LOCALAPPDATA%\meeting2jira) moves here the first time, in one rename, so the
+# DPAPI token files come across unchanged (they open for the same Windows user wherever they are).
+$legacyDir = Join-Path $env:LOCALAPPDATA 'meeting2jira'
+if (-not $env:ASGARD_HOME -and -not (Test-Path -LiteralPath $dataDir) -and (Test-Path -LiteralPath $legacyDir)) {
+    New-Item -ItemType Directory -Force -Path $asgardDir | Out-Null
+    try {
+        Move-Item -LiteralPath $legacyDir -Destination $dataDir -ErrorAction Stop
+    } catch {
+        throw "Odin's files are moving to $dataDir, but $legacyDir couldn't be moved ($($_.Exception.Message)). Close anything using it and run again."
+    }
+}
 if (-not $StateDb) { $StateDb = Join-Path $dataDir 'state.db' }
 if (-not $OutFile) { $OutFile = Join-Path $dataDir 'meetings.csv' }
 

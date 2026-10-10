@@ -1,0 +1,96 @@
+# Odin's checks on Windows: what a Linux or macOS checkout can't prove. The full target-machine
+# checks (Outlook COM, DPAPI round trip, Task Scheduler) stay in Odin/app/tools/Invoke-WindowsChecks.ps1
+# on the lab VM and the workstation; this covers the rest on every change to Odin:
+#   - the unit tests of all three Odin apps, on Windows;
+#   - every PowerShell script parsing under Windows PowerShell 5.1, the version on the workstation;
+#   - each .cmd launcher moving Odin's old %LOCALAPPDATA%\meeting2jira folder to
+#     %LOCALAPPDATA%\Asgard\odin, whole, the first time it runs.
+# Actions are pinned to full commit SHAs (the tag each was is in its comment).
+name: Odin checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - "Odin/**"
+      - ".github/workflows/odin-checks.yml"
+  pull_request:
+    paths:
+      - "Odin/**"
+      - ".github/workflows/odin-checks.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: odin-checks-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Odin on Windows
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Unit tests (app, graph-app, playwright-app)
+        shell: pwsh
+        run: |
+          Push-Location Odin/app
+          $env:PYTHONPATH = "src;."
+          python -m unittest discover -s tests
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Pop-Location
+          foreach ($app in @("graph-app", "playwright-app")) {
+            Push-Location "Odin/$app"
+            python -m unittest discover -s tests
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            Pop-Location
+          }
+
+      - name: PowerShell scripts parse under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $failed = 0
+          Get-ChildItem -Path Odin -Recurse -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errors)
+            if ($errors.Count) { $failed++; Write-Host "FAIL $($_.FullName)"; $errors | ForEach-Object { Write-Host "  $_" } }
+            else { Write-Host "OK   $($_.Name)" }
+          }
+          Write-Host "PowerShell $($PSVersionTable.PSVersion)"
+          if ($failed) { exit 1 }
+
+      - name: Each launcher moves the old folder under Asgard
+        shell: cmd
+        run: |
+          setlocal
+          for %%L in (app\meeting2jira.cmd graph-app\meeting2jira-graph.cmd playwright-app\meeting2jira-owa.cmd) do call :moves "%%L" || exit /b 1
+          echo All three launchers moved the folder.
+          exit /b 0
+
+          :moves
+          set "LOCALAPPDATA=%RUNNER_TEMP%\odin-move-%RANDOM%"
+          set "ASGARD_HOME="
+          mkdir "%LOCALAPPDATA%\meeting2jira\logs"
+          echo ciphertext> "%LOCALAPPDATA%\meeting2jira\jira_token.dpapi"
+          call "Odin\%~1" help >nul 2>&1
+          if exist "%LOCALAPPDATA%\meeting2jira\" (echo FAIL %~1 left the old folder & exit /b 1)
+          if not exist "%LOCALAPPDATA%\Asgard\odin\jira_token.dpapi" (echo FAIL %~1 didn't move the token & exit /b 1)
+          if not exist "%LOCALAPPDATA%\Asgard\odin\logs\" (echo FAIL %~1 didn't move the logs & exit /b 1)
+          echo OK   %~1 moved it to %LOCALAPPDATA%\Asgard\odin
+          rem A second run with the new folder in place moves nothing and still works.
+          mkdir "%LOCALAPPDATA%\meeting2jira"
+          call "Odin\%~1" help >nul 2>&1
+          if not exist "%LOCALAPPDATA%\meeting2jira\" (echo FAIL %~1 moved over an existing folder & exit /b 1)
+          exit /b 0

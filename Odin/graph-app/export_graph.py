@@ -37,8 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--days-back", type=int, default=1,
                    help="midnight this many days ago through now (default 1). Wider is safe: "
                         "re-runs cannot duplicate, because the pipeline dedupes.")
-    p.add_argument("--out", help="output file (default: %%LOCALAPPDATA%%\\meeting2jira\\exports\\graph_<stamp>.json)")
-    p.add_argument("--config", help="path to graph.json (default: in %%LOCALAPPDATA%%\\meeting2jira)")
+    p.add_argument("--out", help="output file (default: %%LOCALAPPDATA%%\\Asgard\\odin\\exports\\graph_<stamp>.json)")
+    p.add_argument("--config", help="path to graph.json (default: in %%LOCALAPPDATA%%\\Asgard\\odin)")
     p.add_argument("--init", action="store_true",
                    help="write a starter graph.json and exit")
     p.add_argument("--login", action="store_true",

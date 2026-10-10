@@ -28,7 +28,6 @@ from owa import capture, mapping
 
 log = logging.getLogger("owa-export")
 
-DEFAULT_PROFILE = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "meeting2jira" / "owa-profile"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,9 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--days-back", type=int, default=1,
                    help="midnight this many days ago through now (default 1). Wider is safe: "
                         "re-runs cannot duplicate, because the pipeline dedupes.")
-    p.add_argument("--out", help="output file (default: %%LOCALAPPDATA%%\\meeting2jira\\exports\\owa_<stamp>.json)")
-    p.add_argument("--profile", default=str(DEFAULT_PROFILE),
-                   help="browser profile directory holding the signed-in session")
+    p.add_argument("--out", help="output file (default: %%LOCALAPPDATA%%\\Asgard\\odin\\exports\\owa_<stamp>.json)")
+    p.add_argument("--profile", default=None,
+                   help="browser profile directory holding the signed-in session "
+                        "(default: %%LOCALAPPDATA%%\\Asgard\\odin\\owa-profile)")
     p.add_argument("--login", action="store_true",
                    help="open a visible browser to sign in, then save the session and exit")
     p.add_argument("--headed", action="store_true", help="show the browser (for diagnosis)")
@@ -63,7 +63,30 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def data_dir() -> Path:
-    return Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "meeting2jira"
+    """Odin's files: %LOCALAPPDATA%\\Asgard\\odin (ASGARD_HOME\\odin when set), beside Asgard's.
+
+    The same rule as meeting2jira.config.default_data_dir, kept here so this app stands alone
+    (app/tests/test_guardrails.py checks all three agree). A folder from before
+    (%LOCALAPPDATA%\\meeting2jira) is moved here the first time, in one rename, so the DPAPI files
+    come across unchanged; never under ASGARD_HOME, which tests point at a temporary folder.
+    """
+    home = os.environ.get("ASGARD_HOME")
+    base = os.environ.get("LOCALAPPDATA")
+    asgard = Path(home) if home else (Path(base) / "Asgard" if base else Path.home() / ".local" / "share" / "Asgard")
+    target = asgard / "odin"
+    if not home and not target.exists():
+        legacy = [Path(base) / "meeting2jira"] if base else [Path.home() / ".meeting2jira", Path.home() / "meeting2jira"]
+        for old in legacy:
+            if old.is_dir():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.replace(old, target)
+                except OSError as exc:
+                    raise OSError(
+                        "Odin's files are moving to {}, but {} couldn't be moved ({}). Close anything using "
+                        "it and run again.".format(target, old, exc)) from None
+                break
+    return target
 
 
 def default_out_path() -> Path:
@@ -148,7 +171,7 @@ def main(argv=None) -> int:
     # Before anything else, so housekeeping still happens on a run that then fails to export.
     prune_old_exports(args.retention_days)
 
-    profile_dir = Path(args.profile)
+    profile_dir = Path(args.profile) if args.profile else data_dir() / "owa-profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
 
     # A visible browser for sign-in and for diagnosis; headless for normal runs.

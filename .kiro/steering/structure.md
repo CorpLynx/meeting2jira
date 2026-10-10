@@ -106,7 +106,7 @@ power-platform/           Power Automate / Power BI feasibility only. No runtime
   the folder portable.
 - Nothing in `Odin/app/` may reference `../`, the repo root, `infra/`, or `.kiro/`. (Moving the
   product under `Odin/` did not change this: `app/` reaches nothing outside itself.)
-- Runtime data belongs in `%LOCALAPPDATA%\meeting2jira`, never inside `app/`. The folder should stay
+- Runtime data belongs in `%LOCALAPPDATA%\Asgard\odin`, never inside `app/`. The folder should stay
   safe to replace wholesale during an upgrade without losing config, token, or state.
 
 ## How Python is located
@@ -138,7 +138,7 @@ Save and restore `PYTHONPATH` around the call rather than leaking it.
    - COM `key` = `GlobalAppointmentID|start_utc`. CSV `key` = `csv:` + content_hash.
    - `content_hash` = sha256(normalized subject | start | end)[:32]. It prevents duplicates across sources.
    - Changing either formula re-creates every past meeting. It needs a state migration plan.
-3. **State DB** (`%LOCALAPPDATA%\meeting2jira\state.db`, table `synced`).
+3. **State DB** (`%LOCALAPPDATA%\Asgard\odin\state.db`, table `synced`).
    - Schema changes must be additive migrations (`ALTER TABLE ... ADD COLUMN`) that run on open in `State.__init__`.
    - Never drop user state.
    - Rows are written immediately after the issue is created, before the worklog or transition, so a later failure can't cause duplicates.

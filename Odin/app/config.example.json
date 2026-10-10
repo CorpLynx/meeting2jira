@@ -1,5 +1,5 @@
 {
-  "_comment": "Keys starting with '_' are ignored. `init` copies this to %LOCALAPPDATA%\\meeting2jira\\config.json. See README > Configuration reference.",
+  "_comment": "Keys starting with '_' are ignored. `init` copies this to %LOCALAPPDATA%\\Asgard\\odin\\config.json. See README > Configuration reference.",
 
   "jira": {
     "base_url": "https://jira.example.gov",

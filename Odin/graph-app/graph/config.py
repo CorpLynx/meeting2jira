@@ -70,8 +70,30 @@ class GraphConfigError(Exception):
 
 
 def data_dir() -> Path:
-    """Per-user state, outside this folder so an upgrade can replace the folder wholesale."""
-    return Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "meeting2jira"
+    """Odin's files: %LOCALAPPDATA%\\Asgard\\odin (ASGARD_HOME\\odin when set), beside Asgard's.
+
+    The same rule as meeting2jira.config.default_data_dir, kept here so this app stands alone
+    (app/tests/test_guardrails.py checks all three agree). A folder from before
+    (%LOCALAPPDATA%\\meeting2jira) is moved here the first time, in one rename, so the DPAPI files
+    come across unchanged; never under ASGARD_HOME, which tests point at a temporary folder.
+    """
+    home = os.environ.get("ASGARD_HOME")
+    base = os.environ.get("LOCALAPPDATA")
+    asgard = Path(home) if home else (Path(base) / "Asgard" if base else Path.home() / ".local" / "share" / "Asgard")
+    target = asgard / "odin"
+    if not home and not target.exists():
+        legacy = [Path(base) / "meeting2jira"] if base else [Path.home() / ".meeting2jira", Path.home() / "meeting2jira"]
+        for old in legacy:
+            if old.is_dir():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.replace(old, target)
+                except OSError as exc:
+                    raise GraphConfigError(
+                        "Odin's files are moving to {}, but {} couldn't be moved ({}). Close anything using "
+                        "it and run again.".format(target, old, exc)) from None
+                break
+    return target
 
 
 def config_path() -> Path:

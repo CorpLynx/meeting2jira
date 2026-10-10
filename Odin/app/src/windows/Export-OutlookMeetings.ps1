@@ -102,7 +102,21 @@ while ($null -ne $item -and $guard -lt 5000) {
 if ($guard -ge 5000) { Write-Warning 'Stopped after 5000 items; narrow the date range.' }
 
 if (-not $OutFile) {
-    $exportDir = Join-Path $env:LOCALAPPDATA 'meeting2jira\exports'
+    # Odin's folder, under Asgard's: ASGARD_HOME\odin when set, else %LOCALAPPDATA%\Asgard\odin.
+    $asgardDir = if ($env:ASGARD_HOME) { $env:ASGARD_HOME } else { Join-Path $env:LOCALAPPDATA 'Asgard' }
+    $dataDir = Join-Path $asgardDir 'odin'
+    # A folder from before (%LOCALAPPDATA%\meeting2jira) moves here the first time, in one rename, so the
+    # DPAPI token files come across unchanged (they open for the same Windows user wherever they are).
+    $legacyDir = Join-Path $env:LOCALAPPDATA 'meeting2jira'
+    if (-not $env:ASGARD_HOME -and -not (Test-Path -LiteralPath $dataDir) -and (Test-Path -LiteralPath $legacyDir)) {
+        New-Item -ItemType Directory -Force -Path $asgardDir | Out-Null
+        try {
+            Move-Item -LiteralPath $legacyDir -Destination $dataDir -ErrorAction Stop
+        } catch {
+            throw "Odin's files are moving to $dataDir, but $legacyDir couldn't be moved ($($_.Exception.Message)). Close anything using it and run again."
+        }
+    }
+    $exportDir = Join-Path $dataDir 'exports'
     New-Item -ItemType Directory -Force -Path $exportDir | Out-Null
     $OutFile = Join-Path $exportDir ('outlook_{0}.json' -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
 }

@@ -22,16 +22,18 @@ import export_owa
 class PruneTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        self._saved = os.environ.get("LOCALAPPDATA")
+        self._saved = {k: os.environ.get(k) for k in ("LOCALAPPDATA", "ASGARD_HOME")}
         os.environ["LOCALAPPDATA"] = str(self.tmp)
-        self.exports = self.tmp / "meeting2jira" / "exports"
+        os.environ.pop("ASGARD_HOME", None)
+        self.exports = self.tmp / "Asgard" / "odin" / "exports"
         self.exports.mkdir(parents=True)
 
     def tearDown(self):
-        if self._saved is None:
-            os.environ.pop("LOCALAPPDATA", None)
-        else:
-            os.environ["LOCALAPPDATA"] = self._saved
+        for key, value in self._saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def make(self, name, age_days):

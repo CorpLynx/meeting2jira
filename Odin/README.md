@@ -28,7 +28,7 @@ Everything is also reachable directly, which is what the entry point calls under
 
 ```powershell
 .\src\windows\Test-Environment.ps1                      # read-only environment report
-py -3 -m meeting2jira init                             # %LOCALAPPDATA%\meeting2jira\config.json
+py -3 -m meeting2jira init                             # %LOCALAPPDATA%\Asgard\odin\config.json
 py -3 -m meeting2jira set-token                        # paste your Jira PAT; stored DPAPI-encrypted
 py -3 -m meeting2jira check                            # Jira access, parent issues, sub-task type
 .\src\windows\Invoke-MeetingSync.ps1 -DryRun            # export + push, creating nothing
@@ -109,7 +109,7 @@ Safety rails:
 .\src\windows\Invoke-MeetingSync.ps1 -KeepExport -Verbose   # keep the JSON for inspection
 ```
 
-This exports your calendar to `%LOCALAPPDATA%\meeting2jira\exports\`, pushes it, and deletes the export after a successful run. Re-running over the same window is safe.
+This exports your calendar to `%LOCALAPPDATA%\Asgard\odin\exports\`, pushes it, and deletes the export after a successful run. Re-running over the same window is safe.
 
 By default it does not read the organizer. `-IncludeOrganizer` adds it, but Outlook guards that property and may show an "a program is trying to access e-mail address information" prompt, depending on policy.
 
@@ -150,9 +150,9 @@ py -3 -m meeting2jira forget PROJ-456     # after deleting a sub-task in Jira, a
 py -3 -m meeting2jira push --input <file> --max 100    # raise the per-run cap once (e.g. backfill)
 ```
 
-Logs are written to `%LOCALAPPDATA%\meeting2jira\logs\`: `meeting2jira.log` from Python and `sync_*.log` transcripts from PowerShell. Transcripts older than 30 days are pruned on each run (`-TranscriptRetentionDays`).
+Logs are written to `%LOCALAPPDATA%\Asgard\odin\logs\`: `meeting2jira.log` from Python and `sync_*.log` transcripts from PowerShell. Transcripts older than 30 days are pruned on each run (`-TranscriptRetentionDays`).
 
-Each real run also writes `%LOCALAPPDATA%\meeting2jira\last_run.json` with the timestamp, counts, exit code, and first error. `status` and `Test-Environment.ps1` read it, so a scheduled task that quietly started failing is visible without opening a log.
+Each real run also writes `%LOCALAPPDATA%\Asgard\odin\last_run.json` with the timestamp, counts, exit code, and first error. `status` and `Test-Environment.ps1` read it, so a scheduled task that quietly started failing is visible without opening a log.
 
 ### Staying out of trouble
 
@@ -166,7 +166,7 @@ Two things make repeated runs safe:
 
 ## Configuration reference
 
-The config file is `%LOCALAPPDATA%\meeting2jira\config.json`. It's JSON, and any key starting with `_` is treated as a comment. Anything you omit falls back to the defaults in `meeting2jira/config.py`.
+The config file is `%LOCALAPPDATA%\Asgard\odin\config.json`. It's JSON, and any key starting with `_` is treated as a comment. Anything you omit falls back to the defaults in `meeting2jira/config.py`.
 
 **`jira`**
 
@@ -305,9 +305,9 @@ A summary to share with your ISSO:
 
 - **Data sent to Jira**: subject, start/end, duration, location, categories, and optionally the organizer. The meeting body and attendee lists are **never** read on Path A.
 - **Private/confidential meetings are skipped** by default (`skip_private`). Consider whether meeting subjects in your org can carry CUI before pushing them to Jira, and use `skip_subject_patterns` or rules as needed.
-- **Credentials**: the Jira PAT is encrypted with Windows DPAPI, bound to your user account on this machine, in `%LOCALAPPDATA%\meeting2jira\jira_token.dpapi`. It is never logged. Give the PAT an expiry date. The `JIRA_PAT` environment variable overrides the file; it's meant for testing, so don't leave it set.
+- **Credentials**: the Jira PAT is encrypted with Windows DPAPI, bound to your user account on this machine, in `%LOCALAPPDATA%\Asgard\odin\jira_token.dpapi`. It is never logged. Give the PAT an expiry date. The `JIRA_PAT` environment variable overrides the file; it's meant for testing, so don't leave it set.
 - **Transport**: HTTPS only, with certificate verification always on. There is intentionally no option to disable TLS verification.
-- **Data at rest**: everything stays inside `%LOCALAPPDATA%\meeting2jira` in your own profile.
+- **Data at rest**: everything stays inside `%LOCALAPPDATA%\Asgard\odin` in your own profile, beside Asgard's files (`ASGARD_HOME\odin` when that's set). Odin used `%LOCALAPPDATA%\meeting2jira` before Oct 2026; the first run of any command moves it here whole (INSTALL.md).
   - `state.db` keeps issue keys, meeting summaries, start times, and durations, because that is what makes re-runs safe.
   - JSON exports are deleted after a successful run (kept on failure for diagnosis, or with `-KeepExport`).
   - Logs contain meeting subjects: `meeting2jira.log` rotates at 1 MB with 3 backups (so ~4 MB at most, size-capped rather than time-limited), and the PowerShell `sync_*.log` transcripts are pruned after 30 days.
@@ -415,7 +415,7 @@ The tests ship inside `app/` on purpose: running them on the target machine is t
 that the install is sound, and they need nothing but the standard library.
 
 Runtime data never lands in `app/` — config, token, state and logs all live in
-`%LOCALAPPDATA%\meeting2jira`, so you can replace the folder wholesale to upgrade.
+`%LOCALAPPDATA%\Asgard\odin`, so you can replace the folder wholesale to upgrade.
 
 ## Tests
 

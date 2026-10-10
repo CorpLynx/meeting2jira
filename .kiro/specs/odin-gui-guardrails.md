@@ -66,7 +66,7 @@ test, and do not silently refactor the GUI either.
 6. **Outlook data minimization.** The exporter must not read guarded or sensitive properties
    (`Body`, `RequiredAttendees`, `OptionalAttendees`, `Recipients`, …). Reading them triggers
    Outlook's security prompt and widens the data handled. `Organizer` only behind an explicit opt-in.
-7. **No admin rights** for any step. Per-user data lives in `%LOCALAPPDATA%\meeting2jira` (or Odin's
+7. **No admin rights** for any step. Per-user data lives in `%LOCALAPPDATA%\Asgard\odin` (or Odin's
    equivalent — discover it), never inside the program folder.
 8. **Secrets**: the Jira PAT is stored only via DPAPI. Never logged, printed, or written in plain
    text.

@@ -49,8 +49,15 @@ Get-ChildItem -Recurse "$env:USERPROFILE\meeting2jira" | Unblock-File
 ```
 
 Your config, token, state database, and logs are kept separately in
-`%LOCALAPPDATA%\meeting2jira`, not in this folder. That means upgrading is just replacing the folder
-— nothing you have set up is lost.
+`%LOCALAPPDATA%\Asgard\odin`, beside Asgard's own files, not in this folder. That means upgrading is
+just replacing the folder — nothing you have set up is lost. Odin doesn't need Asgard installed; it
+only shares the folder.
+
+**Coming from an earlier Odin?** It kept these files in `%LOCALAPPDATA%\meeting2jira`. The first run of
+any Odin command moves that folder to `%LOCALAPPDATA%\Asgard\odin` whole, in one rename, so your Jira
+token (DPAPI, tied to your Windows account, not to the folder), config, history and logs carry on as
+they were. If the move can't happen (a file is open), Odin says so and changes nothing; close what's
+using the folder and run again. A scheduled task needs no change.
 
 If your policy is `AllSigned`, the `.ps1` files have to be signed through your organization's
 code-signing process. Do not use `-ExecutionPolicy Bypass` to get around either case.
@@ -69,7 +76,7 @@ That walks through all of it:
 
 1. **Environment check.** Reports language mode, execution policy, Python, classic Outlook, and
    proxy configuration, then says whether you can use the automatic export or need the CSV path.
-2. **Creates the config** at `%LOCALAPPDATA%\meeting2jira\config.json`.
+2. **Creates the config** at `%LOCALAPPDATA%\Asgard\odin\config.json`.
 3. **Opens it in Notepad.** Fill in the two required values, save, and close to continue:
    - `jira.base_url` — e.g. `https://jira.agency.gov`
    - `jira.default_parent` — the issue every meeting hangs off by default, e.g. `PROJ-123`

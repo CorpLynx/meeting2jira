@@ -10,7 +10,7 @@ Asgard's apps were built one at a time, so each carries its own copy of things e
 2. **Move a thing to core when a second app needs it, or when correctness needs exactly one copy** (atomic writes, TLS, secrets, the schema). Not before: a core module with one caller is a guess about the second.
 3. **One rule, one place, one test.** A consolidated module comes with the test that would have caught the drift, and a guardrail that stops a new copy appearing.
 4. **Policies may differ; mechanisms may not.** Two apps can want different behaviour for a broken settings file (refuse vs. reset); they should share the code that reads it and pass the policy in.
-5. **Never centralize what Odin depends on.** Odin must run with no Asgard present (its guardrail). Its data folder, Jira write path, DPAPI token, exit codes and PowerShell `Resolve-Python` copies stay Odin's. Core may offer equivalents that Odin adopts later by choice, never a dependency Odin must take.
+5. **Never centralize what Odin depends on.** Odin must run with no Asgard present (its guardrail). Its Jira write path, DPAPI token, exit codes and PowerShell `Resolve-Python` copies stay Odin's. Its data folder is `%LOCALAPPDATA%\Asgard\odin` (Brandon, Oct 10), found the way `asgard.paths` finds Asgard's, with no import of Asgard. Core may offer equivalents that Odin adopts later by choice, never a dependency Odin must take.
 6. **Heimdall's on-prem fork is out of scope.** The copy here is a pattern sample; nothing in core is shaped around it.
 
 ## How to interrogate the codebase
@@ -45,7 +45,7 @@ Run this before each release and whenever an app is added; it is how the invento
 
 | # | Concern | Copies today | Verdict |
 | --- | --- | --- | --- |
-| 1 | Data folder | `asgard.paths.data_dir()` (ASGARD_HOME > `%LOCALAPPDATA%\Asgard`); the launcher exports `ASGARD_DATA` to apps, which nothing reads; Odin's `%LOCALAPPDATA%\meeting2jira` | Apps use `asgard.paths` only; drop `ASGARD_DATA` or make it the one override children read. Odin's folder stays (principle 5) |
+| 1 | Data folder | `asgard.paths.data_dir()` (ASGARD_HOME > `%LOCALAPPDATA%\Asgard`); the launcher exports `ASGARD_DATA` to apps, which nothing reads; Odin's `%LOCALAPPDATA%\Asgard\odin` (moved from `%LOCALAPPDATA%\meeting2jira`, Oct 10) | Apps use `asgard.paths` only; drop `ASGARD_DATA` or make it the one override children read. Odin computes the same folder itself (principle 5) |
 | 2 | Atomic JSON writes | `baldur/settings.save`, `catalog._write_json`, Heimdall `templates.save`, the install ledger in `install.py` | Consolidate: `asgard.jsonfile`. None has the Windows `PermissionError` retry Muninn's backup needed in the lab |
 | 3 | Reading a broken JSON file | The catalog raises with the line and column; Baldur returns defaults marked `broken` with a warning; the ledger readers fall back silently | Keep the policies, share the reader (principle 4) |
 | 4 | Ledger loading | `install.load_ledger` (empty dict) and `valhalla.load_ledger` (None) | Consolidate into the lifecycle module |

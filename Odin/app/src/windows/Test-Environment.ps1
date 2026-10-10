@@ -241,7 +241,15 @@ if (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue) {
 } else {
     Write-Check WARN 'ScheduledTasks cmdlets unavailable; run syncs manually'
 }
-$dataDir = Join-Path $env:LOCALAPPDATA 'meeting2jira'
+# Odin's files live under Asgard's folder: ASGARD_HOME\odin when set (as in Asgard's own tests),
+# else %LOCALAPPDATA%\Asgard\odin. Odin doesn't need Asgard installed; it only shares the folder.
+$asgardDir = if ($env:ASGARD_HOME) { $env:ASGARD_HOME } else { Join-Path $env:LOCALAPPDATA 'Asgard' }
+$dataDir = Join-Path $asgardDir 'odin'
+$legacyDir = Join-Path $env:LOCALAPPDATA 'meeting2jira'
+if (-not $env:ASGARD_HOME -and -not (Test-Path -LiteralPath $dataDir) -and (Test-Path -LiteralPath $legacyDir)) {
+    Write-Check INFO "Odin's files are still in $legacyDir; the next run moves them to $dataDir"
+    $dataDir = $legacyDir
+}
 if (Test-Path (Join-Path $dataDir 'config.json')) { Write-Check OK "Config exists in $dataDir" } else { Write-Check INFO 'No config yet: py -3 -m meeting2jira init' }
 if (Test-Path (Join-Path $dataDir 'jira_token.dpapi')) { Write-Check OK 'Jira token stored' } else { Write-Check INFO 'No token yet: py -3 -m meeting2jira set-token' }
 

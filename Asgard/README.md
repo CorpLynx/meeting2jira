@@ -285,6 +285,7 @@ Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > 
 | `%LOCALAPPDATA%\Asgard\settings\ui.json` | Your choices for the shared window: mode, text size, colours |
 | `%LOCALAPPDATA%\Asgard\settings\heimdall.json` | Heimdall's form file: the SeCcHm catalog item and its fields |
 | `%LOCALAPPDATA%\Asgard\settings\heimdall-templates.json` | Your Heimdall templates. Heimdall won't overwrite this file if it can't read it |
+| `%LOCALAPPDATA%\Asgard\odin` | Odin's own files: its config, DPAPI-protected Jira token, `state.db`, logs and exports. Odin moves its old `%LOCALAPPDATA%\meeting2jira` here the first time it runs |
 | `%LOCALAPPDATA%\Asgard\heimdall\edge-profile` | The Edge profile Heimdall signs in with; delete it to sign out. Traces from `--trace` go in `heimdall\traces` |
 
 To upgrade, download the new zip and run setup again. Your tile settings stay. Close Asgard first. The packaged build upgrades the same way: run the new download's setup.

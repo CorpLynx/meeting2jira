@@ -16,7 +16,7 @@ Asgard is a per-user desktop tool set. It runs on the catalog's Python as the si
 | `settings\`, `apps.local.json` | Preferences, folder paths, server URLs | Low |
 | `logs\` | Errors and run summaries | Low; credentials are masked (below) |
 | Windows Credential Manager | GitHub token (Baldur); other service tokens as apps arrive | Secret |
-| `%LOCALAPPDATA%\meeting2jira\` | Odin's own config, DPAPI-protected Jira token, state | Odin's existing review applies |
+| `%LOCALAPPDATA%\Asgard\odin\` | Odin's own config, DPAPI-protected Jira token, state | Odin's existing review applies |
 
 ## What leaves the machine
 

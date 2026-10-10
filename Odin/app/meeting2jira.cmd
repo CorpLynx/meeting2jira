@@ -30,7 +30,19 @@ set "SYNCPS=%SRC%\windows\Invoke-MeetingSync.ps1"
 set "TASKPS=%SRC%\windows\Register-MeetingSyncTask.ps1"
 set "DOCTORPS=%SRC%\windows\Test-Environment.ps1"
 set "CHECKPS=%ROOT%\tools\Invoke-WindowsChecks.ps1"
-set "CONFIG=%LOCALAPPDATA%\meeting2jira\config.json"
+rem Odin's files live under Asgard's folder: ASGARD_HOME\odin when set, else %LOCALAPPDATA%\Asgard\odin.
+rem A folder from before (%LOCALAPPDATA%\meeting2jira) moves there the first time, in one rename, so
+rem the DPAPI token files come across unchanged. Odin doesn't need Asgard installed for this.
+if defined ASGARD_HOME (set "ODINDATA=%ASGARD_HOME%\odin") else (set "ODINDATA=%LOCALAPPDATA%\Asgard\odin")
+if not defined ASGARD_HOME if not exist "%ODINDATA%\" if exist "%LOCALAPPDATA%\meeting2jira\" (
+    if not exist "%LOCALAPPDATA%\Asgard\" mkdir "%LOCALAPPDATA%\Asgard"
+    move "%LOCALAPPDATA%\meeting2jira" "%ODINDATA%" >nul || (
+        echo ERROR: Odin's files are moving to "%ODINDATA%", but "%LOCALAPPDATA%\meeting2jira" couldn't be moved.
+        echo Close anything using that folder, then run this again.
+        exit /b 2
+    )
+)
+set "CONFIG=%ODINDATA%\config.json"
 
 if not exist "%PSEXE%" (
     echo ERROR: Windows PowerShell not found at "%PSEXE%".

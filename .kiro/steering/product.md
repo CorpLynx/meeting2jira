@@ -10,7 +10,7 @@ renamed, deliberately. Treat these as load-bearing and do not rename them casual
 
 | Identifier | Why renaming it is dangerous |
 |---|---|
-| `%LOCALAPPDATA%\meeting2jira` | Holds `state.db`, `config.json` and the DPAPI token. Renaming the folder orphans the dedupe state, and the next run re-creates **every meeting ever synced** as duplicate sub-tasks. Needs a migration, not a rename. |
+| `%LOCALAPPDATA%\Asgard\odin` | Holds `state.db`, `config.json` and the DPAPI token. Moving the folder without `state.db` orphans the dedupe state, and the next run re-creates **every meeting ever synced** as duplicate sub-tasks. It moved here from `%LOCALAPPDATA%\meeting2jira` in Oct 2026: every entry point moves the old folder whole, once (`config.move_legacy_data`), and Odin refuses to run while the old `state.db` sits outside the new folder. `ASGARD_HOME\odin` when that's set. |
 | `Odin/app/src/meeting2jira/` | What `python -m meeting2jira` resolves to. 33 callers and 10 import sites, plus the guardrail wiring tests. |
 | `m2j-<hash>` dedupe label | `recover_created_issue` finds an ambiguously-created sub-task by exact JQL on this label. Changing it strands every existing sub-task. |
 | `meeting2jira.cmd` / `-owa` / `-graph` | The scheduled task's action path points at the filename. |
