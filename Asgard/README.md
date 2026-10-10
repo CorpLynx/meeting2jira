@@ -44,7 +44,7 @@ To upgrade, close Asgard, extract the new zip and run its setup: it replaces `%L
 ## Using Asgard
 
 - **Click a tile** to open the app. Tiles marked **Coming soon** aren't built yet.
-- **Odin** lives outside Asgard, so its tile says **Set up** the first time. Click it and pick the file you normally start Odin with (`.pyw`, `.py`, `.exe`, `.ps1`, `.cmd` or a shortcut). Asgard remembers the choice. If that file's folder, or the folder above it, holds a virtual environment (`.venv`, `venv` or `env`), Asgard runs Odin with that environment's Python.
+- **Odin** ships with Asgard. Its tile opens Today (setup, the last run, what waits), Meetings and My issues; see [Odin](#odin-meetings-and-jira) below.
 - **Right-click a tile** to change its location, open its folder, or view its log.
 - **Type to search.** Arrow keys move between tiles, Enter opens one, and F5 reloads your tiles.
 - If an app closes right after starting, Asgard shows the last lines of its log. Logs are in `%LOCALAPPDATA%\Asgard\logs`.
@@ -149,6 +149,18 @@ back out of Jira). Nothing changes until you approve. When you take a figure, Od
 comment says so, in exactly the words `ai show` showed you.
 
 `baldur.cmd` tries `py -3`, then `py`, then `python`. If your computer blocks `.cmd` files, run `py -3 cli.py` (or `python cli.py`) from the same folder instead. Settings are in `%LOCALAPPDATA%\Asgard\settings\baldur.json`; the Baldur spec explains each one.
+
+## Odin: meetings and Jira
+
+Odin is the only app that writes to Jira. Every weekday it turns the meetings you attended into Jira sub-tasks under the issues you choose and logs their time, reads your Jira issues and worklogs into Muninn for the other apps, and posts the days you approved in Baldur. It never edits or deletes anything in Jira, and re-running it never makes a sub-task or a worklog twice.
+
+1. **Set it up.** Click the Odin tile and choose **Create settings**: set `jira.base_url` and `jira.default_parent` (the issue your meeting sub-tasks go under), and review the filters and rules. Then paste a Jira personal access token (your Jira profile, Personal Access Tokens) and choose **Check the setup**. On the command line it's `odin setup`, in `%LOCALAPPDATA%\Asgard\app\apps\odin`.
+2. **Try it.** **Preview** (`odin preview`) shows what the daily run would create and post, and changes nothing.
+3. **Run it.** **Run now** (`odin`), or every weekday on its own: `odin schedule` registers the "Asgard Odin daily" task, shortly after your working day ends. The first run also reads a year of your Jira issues and worklogs, so it takes longer.
+
+Other commands: `odin status` (the last run, recent sub-tasks, what waits), `odin sync` (Jira into Muninn only), `odin post` (approved Baldur days only; `post --dry-run` lists them), `odin csv FILE` (from an Outlook CSV export instead of Outlook), `odin report` (every sub-task as a CSV for Power BI), `odin doctor` (what this computer allows), `odin cli forget PROJ-123` (push that meeting again). A hidden run that fails leaves `ATTENTION-Odin.txt` on your Desktop until a run works again.
+
+Moving from meeting2jira: your config, token and logs move from `%LOCALAPPDATA%\meeting2jira` to `%LOCALAPPDATA%\Asgard\odin` the first time Odin runs, and its record of which meetings have sub-tasks (`state.db`) moves into Muninn on the first real run, so nothing is created again. `odin schedule` replaces the old `meeting2jira-daily` task. How it works, and what protects Jira: [docs/integration/odin.md](docs/integration/odin.md).
 
 ## Ysildir: Asgard for your AI client
 
@@ -267,7 +279,7 @@ python Asgard.pyw --muninn retention on|off  prune old run records daily (off un
 
 ## Uninstall
 
-Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > Uninstall Asgard**. Valhalla removes what setup recorded: the app folder, the shortcuts and the Settings entry. It asks before deleting your data (tile settings, logs, the Muninn database and its backups). It never deletes anything outside Asgard's own folders, and it doesn't touch apps that live elsewhere, such as Odin. In the packaged build, Windows can't delete Asgard's programs while they run, so the app folder goes a moment after Asgard closes.
+Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > Uninstall Asgard**. Valhalla removes what setup recorded: the app folder, the shortcuts and the Settings entry. It asks before deleting your data (tile settings, logs, the Muninn database and its backups). It also removes Baldur's and Odin's scheduled tasks. It never deletes anything outside Asgard's own folders, and it doesn't touch apps you pointed a tile at elsewhere. In the packaged build, Windows can't delete Asgard's programs while they run, so the app folder goes a moment after Asgard closes.
 
 ## Where things live
 
@@ -285,7 +297,7 @@ Use the **Valhalla** tile, **Settings > Apps > Asgard > Uninstall**, or **... > 
 | `%LOCALAPPDATA%\Asgard\settings\ui.json` | Your choices for the shared window: mode, text size, colours |
 | `%LOCALAPPDATA%\Asgard\settings\heimdall.json` | Heimdall's form file: the SeCcHm catalog item and its fields |
 | `%LOCALAPPDATA%\Asgard\settings\heimdall-templates.json` | Your Heimdall templates. Heimdall won't overwrite this file if it can't read it |
-| `%LOCALAPPDATA%\Asgard\odin` | Odin's own files: its config, DPAPI-protected Jira token, `state.db`, logs and exports. Odin moves its old `%LOCALAPPDATA%\meeting2jira` here the first time it runs |
+| `%LOCALAPPDATA%\Asgard\odin` | Odin's files: `config.json`, its DPAPI-protected Jira token, logs, calendar exports, `last_run.json`; its records are in Muninn. Odin moves its old `%LOCALAPPDATA%\meeting2jira` here the first time it runs, and keeps the old `state.db` as `state.db.migrated-DATE` for 30 days |
 | `%LOCALAPPDATA%\Asgard\heimdall\edge-profile` | The Edge profile Heimdall signs in with; delete it to sign out. Traces from `--trace` go in `heimdall\traces` |
 
 To upgrade, download the new zip and run setup again. Your tile settings stay. Close Asgard first. The packaged build upgrades the same way: run the new download's setup.
@@ -294,7 +306,7 @@ To upgrade, download the new zip and run setup again. Your tile settings stay. C
 
 Asgard creates Muninn the first time it starts, upgrades it when a new Asgard needs a newer schema, and copies it to `backups` once a day. Only Asgard upgrades it. Every app reads and writes through the `asgard.muninn` package, which ships inside Asgard, so there is one copy of the schema and its rules.
 
-An app that lives outside Asgard, such as Odin, loads the package from Asgard's install folder. Asgard sets `ASGARD_APP` when it starts an app; the fallback covers starting the app on its own:
+An app that lives outside Asgard loads the package from Asgard's install folder (apps in `apps/` find it two folders up). Asgard sets `ASGARD_APP` when it starts an app; the fallback covers starting the app on its own:
 
 ```python
 import os
@@ -311,14 +323,14 @@ def load_muninn():
 
 
 muninn = load_muninn()
-con = muninn.open_app("odin", supported=(1, 3))   # schema versions Odin was written for; never upgrades
+con = muninn.open_app("myapp", supported=(5, 5))   # schema versions the app was written for; never upgrades
 ```
 
 `open_app` has no default range: give the versions your app was tested against. It raises `muninn.NotReady` if Asgard hasn't created Muninn yet, `muninn.VersionError` if the schema is outside the app's range, `muninn.CorruptError` if the file is damaged (the message names the newest backup and the restore command), and `muninn.BusyError` if another app held the write lock for 30 s. Each message says what to do.
 
 The connection it returns enforces the rules below. A write to another app's table, a schema change, or a change to protections such as foreign keys is refused with "not authorized". `muninn.guard.describe(exc)` says which table and why. Store Jira keys through `muninn.normalize_key()`. From schema v3 the database refuses a key that isn't in capitals like `PROJ-123`. Each app's contract is in [docs/integration/](docs/integration/README.md).
 
-What Odin calls, by job (`from asgard.muninn import odin`):
+What Odin calls, by job (`from asgard.muninn import odin`; Odin's own flow is [docs/integration/odin.md](docs/integration/odin.md)):
 
 | Job | Calls |
 | --- | --- |
@@ -326,7 +338,7 @@ What Odin calls, by job (`from asgard.muninn import odin`):
 | Assigned to Me view, tracked parents | `odin.assigned_to_me(con)`, `odin.children_of(con, parent_key)` |
 | Keys Baldur and the other apps mention | `odin.unknown_keys(con)`, then `GET /rest/api/2/issue/{key}` and `odin.record_lookup(run, key, json_or_None, ctx)`; `odin.refresh_batches()` keeps their status current |
 | Calendar | `odin.event_from_graph()` or `odin.event_from_outlook()`, `odin.upsert_calendar_event(run, event)`, then `odin.sweep_calendar(run, start, end)` after a whole window |
-| Your worklogs | `/rest/api/2/worklog/updated` and `/worklog/list`, then `odin.upsert_worklog(run, worklog_json, ctx)`; `/worklog/deleted` and `odin.mark_worklog_deleted()` |
+| Your worklogs | the issues you logged time on (`worklogAuthor = currentUser()`) and each one's worklog list, then `odin.upsert_worklog(run, worklog_json, ctx)`; `/worklog/deleted` and `odin.mark_worklog_deleted()` |
 | Post approved Baldur days | `odin.posts_due(con)`, then `odin.begin_post()`, the Jira call, and `odin.finish_post()` or `odin.fail_post()` |
 | Log a meeting, or time typed into Odin | `odin.begin_meeting_post()` or `odin.begin_manual_post()`, then the same finish calls |
 | After a crash | `odin.stuck_posts(con)`: search each issue's worklogs for the marker, then `odin.resolve_stuck(con, id, found_id_or_None, searched=True)`. Without `searched=True` a missing id is refused, because marking a post that reached Jira as failed would post it twice |

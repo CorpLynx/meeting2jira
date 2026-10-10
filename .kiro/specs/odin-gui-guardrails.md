@@ -1,5 +1,7 @@
 # Spec: discover Odin's GUI layer, then build its guardrails and steering
 
+> **Superseded (Oct 10, 2026).** Odin moved into Asgard (`Asgard/apps/odin`). The on-prem Tkinter GUI this spec plans for was not carried over: the off-prem stub (`Odin/gui`) was broken and was dropped, and Odin's window is now pages in Asgard's shared window (`Asgard/apps/odin/ui/`, backend `odin/ui_backend.py`), covered by `Asgard/tests/test_odin_window.py`, `test_ui_qt.py` and `test_dependencies.py` (the window may use PySide6; the daily run may not). If the on-prem Odin still has its Tkinter GUI, the discovery steps below still apply to that tree; map what you find onto `Asgard/apps/odin` rather than `Odin/app`.
+
 **Audience: an AI coding agent running on the on-prem workstation, with the Odin tree in front of
 it.** You have no access to the conversation that produced this file. Everything you need is here.
 

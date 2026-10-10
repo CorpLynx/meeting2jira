@@ -1,42 +1,23 @@
-# Odin (POC)
+# Odin
 
-Turns the meetings on your Outlook/Teams calendar into Jira sub-tasks, with optional worklogs. It is built to run on a locked-down federal Windows 11 workstation. It needs no local admin, no Entra app registration, no PowerShell Gallery modules, and no pip installs.
+**Odin is an Asgard app now** (Oct 10, 2026): its code is [`Asgard/apps/odin`](../Asgard/apps/odin), it installs with Asgard, opens from the Odin tile, and keeps its records in Muninn, Asgard's database. How it works and what protects Jira: [Asgard/docs/integration/odin.md](../Asgard/docs/integration/odin.md). Installing and using it: [INSTALL.md](INSTALL.md) and Asgard's [README](../Asgard/README.md#odin-meetings-and-jira).
+
+Odin turns the meetings on your Outlook/Teams calendar into Jira sub-tasks and logs their time, reads your Jira issues and worklogs into Muninn for Asgard's other apps, and posts the days you approve in Baldur. It is built for a locked-down federal Windows 11 workstation: no local admin, no Entra app registration, no PowerShell Gallery modules, and nothing to pip install for the daily run.
 
 ```
 Outlook calendar ──(PowerShell: COM export, or a CSV you export)──► JSON/CSV file
-      ──(Python, stdlib only: filter → route → dedupe → create)──► Jira sub-tasks (+ worklogs)
+      ──(Python: filter → route → dedupe in Muninn → create)──► Jira sub-tasks (+ worklogs)
+Jira ──(issues, worklogs)──► Muninn ──(approved Baldur days)──► Jira worklogs
 ```
 
-## Quick start
+This folder keeps what isn't part of Asgard:
 
-Copy the **`app/`** folder somewhere in your profile, then from inside it, in a normal (non-admin)
-PowerShell window:
-
-```powershell
-cd app
-.\meeting2jira setup       # environment check, config, token, and connectivity check
-.\meeting2jira preview     # your real calendar, nothing created
-.\meeting2jira             # for real
-```
-
-`app/` is the entire program and needs nothing else from this repo at runtime.
-
-`setup` walks through everything and leaves you with a working config. Step-by-step detail, including
-what to do when something is blocked: **[INSTALL.md](INSTALL.md)**.
-
-Everything is also reachable directly, which is what the entry point calls underneath:
-
-```powershell
-.\src\windows\Test-Environment.ps1                      # read-only environment report
-py -3 -m meeting2jira init                             # %LOCALAPPDATA%\Asgard\odin\config.json
-py -3 -m meeting2jira set-token                        # paste your Jira PAT; stored DPAPI-encrypted
-py -3 -m meeting2jira check                            # Jira access, parent issues, sub-task type
-.\src\windows\Invoke-MeetingSync.ps1 -DryRun            # export + push, creating nothing
-```
-
-Run `py -3 -m meeting2jira ...` from the repo root, because that's how Python finds the package. If `py` isn't available, use the full path to `python.exe`. (`.\meeting2jira` handles this for you.)
-
----
+| | |
+| --- | --- |
+| `graph-app/` | Path D: the calendar from Microsoft Graph (`msal`), for when COM isn't allowed. Hands its export to Asgard's `odin.cmd` |
+| `playwright-app/` | Path C, contingency only: the calendar from OWA through a browser. Hands off the same way |
+| `power-platform/` | Power Automate desktop and Power BI material (`power-bi/report.ps1` wraps `odin report`) |
+| `README.md`, `INSTALL.md`, `ARCHITECTURE.md`, `MODULES.md`, `HANDOFF.md` | This page and its companions; `HANDOFF.md` is the history of Odin before it moved |
 
 ## Design notes
 
@@ -56,16 +37,16 @@ Run `py -3 -m meeting2jira ...` from the repo root, because that's how Python fi
 | **Microsoft Graph** `/me/calendarView`, via `msal` | An Entra app registration with delegated calendar consent, and pip for `msal`. National-cloud endpoints are required for GCC High/DoD. | **The intended primary path (Path D).** It is the only source that works on classic *and* new Outlook, needs no browser automation, and raises no terms-of-service question. Blocked on an IT ticket, not on code. Planned for `graph-app/`; see Roadmap and HANDOFF.md P2-C. |
 | **Outlook object model (COM)** from PowerShell | Classic Outlook, and PowerShell in FullLanguage mode | **Path A (primary).** It reuses your already signed-in Outlook, so there's no auth, no network calls of its own, and no admin. Recurring meetings are expanded for you. |
 | **Outlook CSV export** (Import/Export wizard) | Nothing beyond classic Outlook | **Path B (fallback).** A manual step, but it works even under Constrained Language Mode. The export also expands recurrences. |
-| **OWA's own calendar API**, read through a browser Playwright drives | pip (`playwright`), plus installed Edge | **Path C — contingency only, and dormant. Not part of the installed deliverable.** It lives in `playwright-app/`, which is never copied to the workstation, so `app/` stays stdlib-only. It exists for one scenario: forced onto new Outlook (which removes COM *and* the Import/Export wizard, breaking A and B at once) *and* Graph not yet approved. It reads undocumented internal APIs, so prefer Path D wherever it is available. See `playwright-app/README.md` for its status and removal condition. |
+| **OWA's own calendar API**, read through a browser Playwright drives | pip (`playwright`), plus installed Edge | **Path C — contingency only, and dormant. Not part of the installed deliverable.** It lives in `playwright-app/`, which is never copied to the workstation, so Odin's daily run stays standard library. It exists for one scenario: forced onto new Outlook (which removes COM *and* the Import/Export wizard, breaking A and B at once) *and* Graph not yet approved. It reads undocumented internal APIs, so prefer Path D wherever it is available. See `playwright-app/README.md` for its status and removal condition. |
 | Exchange Web Services (EWS) | — | **No.** Microsoft is disabling EWS in Exchange Online starting Oct 1, 2026. |
 | Published ICS calendar URL | Anonymous calendar publishing | **No.** Usually disabled in federal tenants, and it would require an RRULE parser. |
-| pywin32 / requests / keyring | pip access | **Not needed.** Packages are allowed when declared and pinned, but `app/` still uses only the standard library, so there's nothing to get approved. [MODULES.md](MODULES.md) lists the stdlib modules used in their place, and every package the other folders use with its alternatives. |
-| `msal` | pip access | **Accepted for Path D only**, and in a separate folder — never in `app/`. Hand-rolling OAuth PKCE, a loopback listener and token refresh is the part most likely to be subtly wrong, and `msal` also unlocks brokered sign-in (below). Plain `msal` is pure Python; the `msal[broker]` extra pulls the native `pymsalruntime`, which is a larger approval surface and a deliberate, separate decision. |
+| pywin32 / requests / keyring / jira | pip access | **Not needed.** Packages are allowed when declared and pinned, but Odin's daily run still uses only the standard library, because Asgard's Python install may carry no packages. The `jira` package was reviewed on Oct 10, 2026 and not used: its session retries POSTs on a 503 or a dropped connection, which could create a sub-task twice ([dependency policy](../Asgard/docs/dependency-policy.md#considered-for-odin-and-not-used-oct-10-2026)). [MODULES.md](MODULES.md) lists every package the exporters use with its alternatives. |
+| `msal` | pip access | **Accepted for Path D only**, and in a separate folder — never in Odin's daily run. Hand-rolling OAuth PKCE, a loopback listener and token refresh is the part most likely to be subtly wrong, and `msal` also unlocks brokered sign-in (below). Plain `msal` is pure Python; the `msal[broker]` extra pulls the native `pymsalruntime`, which is a larger approval surface and a deliberate, separate decision. |
 
 ### Why PowerShell *and* Python
 
 - **PowerShell does the Windows-native parts.** It talks to Outlook over COM (Python would need pywin32 for that), registers the scheduled task, and runs environment checks. It is deliberately thin: it dumps what's on the calendar and makes no decisions.
-- **Python does the logic.** That covers filtering, routing rules, templates, dedupe state (sqlite3), Jira HTTP, and credential storage (DPAPI via ctypes). This code is testable offline and easy to iterate on.
+- **Python does the logic.** That covers filtering, routing rules, templates, the record of sub-tasks (in Muninn), Jira HTTP, and credential storage (DPAPI via ctypes). This code is testable offline and easy to iterate on.
   - Python's `urllib` on Windows trusts the **Windows certificate store**, so an agency root CA that Windows trusts just works. `requests` ships its own CA bundle and usually breaks under TLS inspection.
 - **They meet at a versioned JSON file** (see [Export schema](#export-schema-v1)). Anything that can write that file can be a source, which is where a Graph source would plug in later.
 - `Invoke-MeetingSync.ps1` and `Test-Environment.ps1` stick to cmdlets and core types, so they run under Constrained Language Mode. Only `Export-OutlookMeetings.ps1` needs FullLanguage.
@@ -75,8 +56,8 @@ Run `py -3 -m meeting2jira ...` from the repo root, because that's how Python fi
 1. **Filters** are hard exclusions: cancelled, all-day, not ended yet, no attendees, declined, private, shown as free, too short or too long, or a subject pattern match.
 2. **Rules** are evaluated in order, and the first match wins. A match either routes the meeting to a specific parent issue or skips it.
 3. Anything left goes to `jira.default_parent`.
-4. **Dedupe**: the meeting's key and a content hash (subject + start + end) are checked against local state. The content hash means a COM run and a CSV run won't duplicate each other.
-5. The sub-task is created and recorded right away. Then the optional worklog and optional transition happen.
+4. **Dedupe**: the meeting's key and a content hash (subject + start + end) are checked against Muninn's `meeting_subtasks`. The content hash means a COM run and a CSV run won't duplicate each other.
+5. The sub-task is created and recorded right away. Then its time is logged (through a marker-protected worklog, so it is never logged twice) and the optional transition happens.
 
 Safety rails:
 
@@ -88,85 +69,11 @@ Safety rails:
 
 ## Setup
 
-1. **Clear it with your ISSO/supervisor first.** This moves meeting metadata from your mailbox into Jira and runs local scripts. See [Security notes](#security-notes) for a summary you can hand them.
-2. **Put the repo in your profile**, e.g. `%USERPROFILE%\tools\meeting2jira`.
-   - If you downloaded it and your policy is `RemoteSigned`, clear the downloaded-file mark with `Get-ChildItem -Recurse | Unblock-File`.
-   - If `AllSigned` is enforced, the `.ps1` files need signing through your organization's process.
-   - Don't work around policy with `-ExecutionPolicy Bypass`.
-3. **Run `.\src\windows\Test-Environment.ps1`.** It reports your language mode, execution policy, Python, classic Outlook, and proxy/PAC, then tells you which path to use.
-4. **Create the config** with `py -3 -m meeting2jira init`, then edit it (see [Configuration reference](#configuration-reference)). At minimum set `jira.base_url` and `jira.default_parent`, and fix or remove the example `rules`.
-5. **Create a PAT** in Jira: *Profile → Personal Access Tokens*, with an expiry date. Then run `py -3 -m meeting2jira set-token`.
-6. **Run `py -3 -m meeting2jira check` until everything is `OK`.** It confirms that each parent issue exists and isn't itself a sub-task, and that your sub-task type name is valid. If the type name is wrong, it lists the valid ones.
-7. **Dry run, then a real run** (below).
-
-## Usage
-
-### Path A: automatic export via Outlook COM
-
-```powershell
-.\src\windows\Invoke-MeetingSync.ps1 -DryRun            # today so far
-.\src\windows\Invoke-MeetingSync.ps1 -DaysBack 5        # since midnight 5 days ago
-.\src\windows\Invoke-MeetingSync.ps1 -KeepExport -Verbose   # keep the JSON for inspection
-```
-
-This exports your calendar to `%LOCALAPPDATA%\Asgard\odin\exports\`, pushes it, and deletes the export after a successful run. Re-running over the same window is safe.
-
-By default it does not read the organizer. `-IncludeOrganizer` adds it, but Outlook guards that property and may show an "a program is trying to access e-mail address information" prompt, depending on policy.
-
-### Path B: Outlook CSV export (works under Constrained Language Mode)
-
-1. In classic Outlook: *File → Open & Export → Import/Export → Export to a file → Comma Separated Values*.
-2. Pick your **Calendar** folder, choose a file name, and click *Finish*.
-3. Enter the date range when prompted.
-4. Push the file:
-
-```powershell
-.\src\windows\Invoke-MeetingSync.ps1 -Source Csv -CsvPath "$HOME\Documents\calendar.csv" -DryRun
-# or, without PowerShell at all:
-py -3 -m meeting2jira push --csv "%USERPROFILE%\Documents\calendar.csv" --dry-run
-```
-
-5. **Delete the CSV afterwards.** It contains full meeting bodies.
-
-The CSV doesn't include your response status, so declined meetings can't be filtered on this path. Use `skip_subject_patterns` or rules to compensate.
-
-### Scheduling (optional)
-
-```powershell
-.\src\windows\Register-MeetingSyncTask.ps1 -At '16:45'     # weekdays, runs as you, only while logged on
-Start-ScheduledTask -TaskName meeting2jira-daily           # test it now
-.\src\windows\Register-MeetingSyncTask.ps1 -Unregister
-```
-
-The task uses `-DaysBack 1`, so meetings that ended after yesterday's run get picked up. If Group Policy blocks task creation you'll see "Access is denied"; run the sync by hand instead.
-
-### Other commands
-
-```powershell
-.\meeting2jira status                     # last-run health, then recent sub-tasks
-.\meeting2jira doctor                     # environment report, including last-run health
-.\meeting2jira selftest                   # unit tests plus the Windows-only checks
-py -3 -m meeting2jira forget PROJ-456     # after deleting a sub-task in Jira, allow it to be recreated
-py -3 -m meeting2jira push --input <file> --max 100    # raise the per-run cap once (e.g. backfill)
-```
-
-Logs are written to `%LOCALAPPDATA%\Asgard\odin\logs\`: `meeting2jira.log` from Python and `sync_*.log` transcripts from PowerShell. Transcripts older than 30 days are pruned on each run (`-TranscriptRetentionDays`).
-
-Each real run also writes `%LOCALAPPDATA%\Asgard\odin\last_run.json` with the timestamp, counts, exit code, and first error. `status` and `Test-Environment.ps1` read it, so a scheduled task that quietly started failing is visible without opening a log.
-
-### Staying out of trouble
-
-Two things make repeated runs safe:
-
-- **A create that fails ambiguously is not retried blindly.** A proxy timeout or 502/503/504 on the POST that creates an issue may mean Jira created it anyway. Every sub-task carries a deterministic `m2j-<hash>` label, so the next step is an exact JQL lookup for that label. One match is recorded as that meeting's sub-task; zero, several, or a failed search are reported for you to resolve, never guessed at.
-- **A failed worklog is retried.** If the sub-task is created but the worklog call fails, the worklog is retried at the start of the next run, up to three attempts, and never logged twice. Only genuine failures are retried: enabling `log_work` does not backfill sub-tasks created while it was off.
-- **Overlapping runs fail safely.** If a manual run collides with the scheduled one, the second exits 2 with "another run is probably in progress" rather than corrupting the state that prevents duplicates.
-
----
+[INSTALL.md](INSTALL.md) has the steps. In short: clear it with your ISSO/supervisor first (this moves meeting metadata from your mailbox into Jira; [Security notes](#security-notes) is a summary to hand them), install Asgard, open the Odin tile, create the settings, paste a Jira personal access token, check the setup, preview, then run it or schedule it.
 
 ## Configuration reference
 
-The config file is `%LOCALAPPDATA%\Asgard\odin\config.json`. It's JSON, and any key starting with `_` is treated as a comment. Anything you omit falls back to the defaults in `meeting2jira/config.py`.
+The config file is `%LOCALAPPDATA%\Asgard\odin\config.json`. It's JSON, and any key starting with `_` is treated as a comment. Anything you omit falls back to the defaults in `Asgard/apps/odin/odin/config.py`.
 
 **`jira`**
 
@@ -186,6 +93,17 @@ The config file is `%LOCALAPPDATA%\Asgard\odin\config.json`. It's JSON, and any 
 | `ca_bundle` | `null` | PEM file of extra CAs. The Windows store is always used as well. |
 | `proxy` | `null` | e.g. `http://proxy.agency.gov:8080`. `null` means use the static Windows proxy settings. PAC files are not read. |
 
+**`muninn`**: what Odin does with Muninn beyond the meeting push, which always uses it.
+
+| Key | Default | Notes |
+|---|---|---|
+| `sync_issues` | `true` | Your issues, the parents your meetings go under and their children, and keys Asgard's other apps mention, read into Muninn. |
+| `sync_worklogs` | `true` | Your worklogs, read into Muninn, so Baldur sees what Jira already holds. |
+| `post_approved` | `true` | Post the days you approved in Baldur that Jira is missing. Only approved minutes, only after that run's worklog sync, at most `max_posts_per_run`. `odin post` posts whatever this says. |
+| `max_posts_per_run` | `20` | |
+| `history_days` | `365` | How far back the first sync reaches. |
+| `max_issues_per_run` | `500` | Per stream. A bigger first sync carries on next run. |
+
 **`filters`**: see `config.example.json` for the full set. Beyond the on/off switches (`skip_declined`, `skip_private`, `skip_all_day`, `teams_only`, `skip_tentative`, `min_minutes`, `max_minutes`), there are two ways to exclude by text:
 
 | Key | Default | Notes |
@@ -198,7 +116,7 @@ The config file is `%LOCALAPPDATA%\Asgard\odin\config.json`. It's JSON, and any 
 
 The `*_contains` lists match **anywhere in the text, including inside words**, so `"PTO"` also matches `OPTOMETRIST`. When that matters use a regex instead: `"skip_subject_patterns": ["(?i)\\bPTO\\b"]`. A bare string where a list belongs is rejected at load time, because `"OOO"` would otherwise be read as the three substrings `O`, `O`, `O` and skip nearly everything.
 
-Filters are evaluated cheapest-first, so a meeting that is both declined and contains `OOO` reports `declined`. Run `.\meeting2jira preview` to see the exact reason for each skip; the message names the string that matched.
+Filters are evaluated cheapest-first, so a meeting that is both declined and contains `OOO` reports `declined`. Run `odin preview` to see the exact reason for each skip; the message names the string that matched.
 
 **`tour_of_duty`**: your scheduled working hours, in local wall-clock time. Off by default.
 
@@ -220,7 +138,7 @@ How a meeting is classified:
 
 Two deliberate design choices worth knowing:
 
-- **This does not control which days are scanned.** The scan window is `-DaysBack`, and widening it is free because the state database makes re-runs idempotent. So "will I miss a meeting that ran late?" is answered by the window, not by this setting.
+- **This does not control which days are scanned.** The scan window is `-DaysBack`, and widening it is free because Muninn's record of sub-tasks makes re-runs idempotent. So "will I miss a meeting that ran late?" is answered by the window, not by this setting.
 - **`route` and `skip` are applied before `rules`.** Where time worked outside your tour gets recorded is a timekeeping decision, and a subject-matching rule shouldn't quietly redirect it to a project issue. If you'd rather rules won, use `include` or `label` instead.
 
 Two things it doesn't know about:
@@ -233,7 +151,7 @@ Two things it doesn't know about:
 
 | Key | Default | Notes |
 |---|---|---|
-| `desktop_alert` | `true` | On failure, write `ATTENTION-meeting2jira.txt` to your Desktop (OneDrive-relocated Desktops are handled), falling back to the data directory. Deleted automatically by the next successful run. |
+| `desktop_alert` | `true` | On failure, write `ATTENTION-Odin.txt` to your Desktop (OneDrive-relocated Desktops are handled), falling back to the data directory. Deleted automatically by the next successful run. |
 | `alert_after_failures` | `1` | Consecutive failed runs before alerting. `2` rides out a one-off network blip. Tracked as `consecutive_failures` in `last_run.json`. |
 | `use_msg_exe` | `false` | Additionally try `msg.exe`. Absent on some Windows builds, so failure is silent. |
 
@@ -308,12 +226,12 @@ A summary to share with your ISSO:
 - **Credentials**: the Jira PAT is encrypted with Windows DPAPI, bound to your user account on this machine, in `%LOCALAPPDATA%\Asgard\odin\jira_token.dpapi`. It is never logged. Give the PAT an expiry date. The `JIRA_PAT` environment variable overrides the file; it's meant for testing, so don't leave it set.
 - **Transport**: HTTPS only, with certificate verification always on. There is intentionally no option to disable TLS verification.
 - **Data at rest**: everything stays inside `%LOCALAPPDATA%\Asgard\odin` in your own profile, beside Asgard's files (`ASGARD_HOME\odin` when that's set). Odin used `%LOCALAPPDATA%\meeting2jira` before Oct 2026; the first run of any command moves it here whole (INSTALL.md).
-  - `state.db` keeps issue keys, meeting summaries, start times, and durations, because that is what makes re-runs safe.
+  - Muninn (`%LOCALAPPDATA%\Asgard\muninn.db`) keeps issue keys, meeting sub-task summaries, start times and durations (that is what makes re-runs safe), your calendar's times and titles (a private item's title is withheld), and your Jira issues' and worklogs' metadata.
   - JSON exports are deleted after a successful run (kept on failure for diagnosis, or with `-KeepExport`).
-  - Logs contain meeting subjects: `meeting2jira.log` rotates at 1 MB with 3 backups (so ~4 MB at most, size-capped rather than time-limited), and the PowerShell `sync_*.log` transcripts are pruned after 30 days.
+  - Logs contain meeting subjects: `odin.log` rotates at 1 MB with 3 backups (so ~4 MB at most, size-capped rather than time-limited), and the PowerShell `sync_*.log` transcripts are pruned after 30 days.
   - **Subjects of private items are withheld from the logs**, not just from Jira, so `skip_private` keeps them out of scope entirely.
   - The Outlook CSV you export by hand on Path B contains full meeting bodies. Delete it after pushing; nothing here does that for you.
-- **Footprint**: Python standard library only today; any package would be pinned in `app/requirements.txt` and listed in `MODULES.md`. There's no admin requirement and no persistent service beyond the optional per-user scheduled task.
+- **Footprint**: Python standard library only for the daily run; Odin's window uses PySide6, like every Asgard window. Packages are pinned in `Asgard/requirements.txt` and listed in Asgard's `MODULES.md`. There's no admin requirement and no persistent service beyond the optional per-user scheduled task.
 
 ## Troubleshooting
 
@@ -338,10 +256,10 @@ A summary to share with your ISSO:
 ## Known limitations and roadmap
 
 - **Edited past meetings**: only ended meetings are pushed, so this only happens when a past meeting is edited afterwards. On Path A, a changed time creates a second sub-task; on Path B, even a changed subject does. See HANDOFF.md P2-A.
-- **Ambiguous create failures**: if creating an issue times out or gets a 502/504, it is reported rather than retried, because Jira may have created it anyway. Check Jira before re-running. See HANDOFF.md P1-A.
+- **Ambiguous create failures**: if creating an issue times out or gets a 502/504, Odin searches for the sub-task's `m2j-<hash>` label: exactly one match is recorded, anything else is reported for you to check in Jira.
 - **Teams detection** is a heuristic based on the Location field, because reading the body would trigger Outlook's guard. It's only used by `teams_only` and `is_teams` rules.
 - **CSV path**: no response status; English column headers expected; the `Show time as` numbering should be verified against your own export.
-- **Worklog retries**: a failed worklog is recorded as `worklog=no` in `status` but isn't retried yet.
+- **Worklog retries**: a meeting worklog Jira refused is retried by the next runs for 14 days, at most three times; one whose answer was lost is checked against Jira by its marker first.
 - **Tempo**: if your org uses Tempo Timesheets on Data Center, native Jira worklogs normally appear there too. Confirm with your admins.
 - **Phase 2 (Path D): Microsoft Graph source** — the intended primary path, for when COM isn't allowed or new Outlook becomes mandatory. It is the only source that covers classic *and* new Outlook with no browser automation. **Blocked on an IT ticket, not on code.** Ask IT for:
   - An Entra app registration: public client (no secret), redirect URI `http://localhost`, delegated calendar consent, admin consent, and compatibility with your Conditional Access policies.
@@ -354,87 +272,12 @@ A summary to share with your ISSO:
 
   It will live in `graph-app/` and use `msal` — it's a separate folder so the daily run never depends on it. `msal` replaces a hand-rolled PKCE flow, loopback listener and token-refresh logic, and it also offers brokered Windows sign-in (silent, and the device satisfies MFA/device-compliance Conditional Access), which matters for an unattended scheduled task. Note that the broker extra pulls the native `pymsalruntime`, a bigger approval surface than pure-Python `msal`: decide that one with IT. The token cache is DPAPI-protected via the existing `credstore.py`. Nothing downstream changes, and switching sources cannot duplicate sub-tasks because `content_hash` is source-independent. See HANDOFF.md P2-C.
 
-## Repo layout
+## Where things are
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for flowcharts of how these files interact and what happens
-to a single meeting as it moves through the pipeline.
-
-**`Odin/app/` is the whole program.** Copy that one folder to a machine and it runs; nothing in it
-reaches outside itself. Everything beside it is a sibling deliverable, documentation, or development
-support you don't need at runtime.
-
-```
-<repo root>/
-  Odin/                            the product: program, exporters, GUI and docs
-    README.md                        this file
-    INSTALL.md                       step-by-step setup walkthrough
-    ARCHITECTURE.md                  file-interaction and per-meeting flow diagrams
-    HANDOFF.md                       status, risks, backlog, and prompts for continued development (Kiro)
-
-    app/                             <- copy this folder to install
-      meeting2jira.cmd                 entry point on Windows: `.\meeting2jira [command]`
-      m2j                              entry point for development off Windows (no Outlook, no DPAPI)
-      config.example.json              template copied by `init`
-      src/
-        meeting2jira/                  all logic, standard library only
-          __main__.py                    CLI: init, set-token, check, push, status, forget
-          config.py                      defaults, validation, parse_hhmm
-          models.py                      Meeting record, UTC helpers, dedupe identity
-          sources.py                     JSON export + Outlook CSV readers
-          rules.py                       filters, tour of duty, parent routing
-          sync.py                        the push loop, templates, ambiguous-create recovery
-          jira.py                        stdlib Jira Data Center REST v2 client
-          state.py                       sqlite dedupe state
-          credstore.py                   DPAPI token storage (ctypes)
-          gitwork.py                     estimate dev time per Jira issue from local git history
-        windows/                       the Windows-native layer
-          Test-Environment.ps1             read-only preflight (CLM-safe)
-          Export-OutlookMeetings.ps1       Outlook COM -> v1 JSON (needs FullLanguage)
-          Invoke-MeetingSync.ps1           export + push orchestrator (CLM-safe)
-          Register-MeetingSyncTask.ps1     weekday scheduled task for your user
-      tests/                           offline unit tests, fixtures, and guardrail tests
-      tools/
-        Test-PowerShellSyntax.ps1      parse check + PowerShell 7-only syntax detector
-        Invoke-WindowsChecks.ps1       the Windows-only checks (5.1 parsing, DPAPI, JSON handoff, CSV push)
-
-    graph-app/                       Path D: Microsoft Graph source via msal. Needs pip, so it is separate.
-    gui/                             Tkinter frontend (work in progress)
-    playwright-app/                  Path C: dormant contingency exporter for "new Outlook". NOT installed.
-    power-platform/                  Power Automate / Power BI alternatives: feasibility, blockers, blueprints
-
-  .kiro/                           Kiro steering (project rules), subagents and hooks; see KIRO_SETUP.md
-  tools/                           Kiro dev tooling (compact test runner, hook scripts); never shipped
-  infra/windows-test-vm/           Terraform for a throwaway Windows host to run those checks on
-  pyproject.toml, requirements-dev.txt   dev-only pytest/ruff setup; the app itself needs neither
-```
-
-Paths elsewhere in these docs are relative to `Odin/` (so `app/` means `Odin/app/`) unless they start
-with `../` or name one of the root-level tooling folders above.
-
-The tests ship inside `app/` on purpose: running them on the target machine is the quickest proof
-that the install is sound, and they need nothing but the standard library.
-
-Runtime data never lands in `app/` — config, token, state and logs all live in
-`%LOCALAPPDATA%\Asgard\odin`, so you can replace the folder wholesale to upgrade.
-
-## Tests
-
-```powershell
-.\meeting2jira selftest                                    # both of the below
-py -3 -m unittest discover -s tests -v
-powershell.exe -NoProfile -File tools\Test-PowerShellSyntax.ps1
-powershell.exe -NoProfile -File tools\Invoke-WindowsChecks.ps1   # Windows-only behavior
-```
-
-`Invoke-WindowsChecks.ps1` covers what a macOS or Linux checkout cannot: real 5.1 parsing, the DPAPI round trip, the PowerShell-to-Python export handoff, the CSV push path, and the entry point. It does not touch Outlook or Jira, so it is safe to run on the real workstation. `infra/windows-test-vm/` exists to run it without one; see [its README](../infra/windows-test-vm/README.md).
-
-`tests/test_guardrails.py` enforces the project's non-negotiables:
-- every import is the standard library or a package pinned in `app/requirements.txt`, and every pinned package (in `app/`, `graph-app/` and `playwright-app/`) has a section in `MODULES.md`
-- nothing imports Asgard
-- TLS verification never disabled
-- no execution-policy bypass
-- no guarded Outlook properties
-- CLM-safe helper scripts
-
-
-The tests are offline. The Jira client tests use a throwaway local HTTP server on 127.0.0.1. The fixtures cover recurring instances, declined, private, all-day, cancelled, future, and duplicate meetings, plus a CSV with an embedded multi-line description and a malformed row.
+| | |
+| --- | --- |
+| Odin's code | `Asgard/apps/odin/` (package `odin`; `odin.cmd`, `cli.py`, `odin.pyw`, `ui/`, `windows/`, `tools/`) |
+| Its tests | `Asgard/tests/test_odin_*.py`, with `Asgard/tests/fake_jira.py`; the exporters' tests are in their own folders |
+| Its contract with Muninn | [Asgard/docs/integration/odin.md](../Asgard/docs/integration/odin.md) |
+| Its files | `%LOCALAPPDATA%\Asgard\odin\` (config, token, logs, exports, `last_run.json`); its records are in `%LOCALAPPDATA%\Asgard\muninn.db` |
+| How the pieces fit | [ARCHITECTURE.md](ARCHITECTURE.md) |

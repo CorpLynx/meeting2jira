@@ -1,23 +1,23 @@
 ---
 inclusion: auto
 name: debug-playbook
-description: Debugging playbook and known meeting2jira gotchas. Use when a test keeps failing after two fix attempts, or when a failure involves the PowerShell-to-Python export handoff, encoding, PYTHONPATH/paths, JSON parsing, Jira HTTP calls, or the state DB.
+description: Debugging playbook and known Odin gotchas. Use when a test keeps failing after two fix attempts, or when a failure involves the PowerShell-to-Python export handoff, encoding, PYTHONPATH/paths, JSON parsing, Jira HTTP calls, or Muninn.
 ---
 # Debug playbook
 
 ## Narrow it down
 1. Rerun just the one test with more traceback:
    `python tools/run_tests.py test_module.Class.test_name --tb long --trace-lines 60`
-2. Find the deepest frame in OUR code (`Odin/app/src/meeting2jira`), not the stdlib; look there.
+2. Find the deepest frame in OUR code (`Asgard/apps/odin/odin`, `Asgard/asgard/muninn`), not the stdlib; look there.
 3. State one hypothesis, check it with the smallest possible change or a temporary log line, then
    remove it. Never print or log the Jira token while debugging.
 
 ## Known gotchas in this project
-- `ModuleNotFoundError: meeting2jira` or `tests`: under pytest, `pyproject.toml` puts `Odin/app/src` and
-  `Odin/app/` on the path. Plain unittest needs cwd `Odin/app/` with `Odin/app/src` on PYTHONPATH.
+- `ModuleNotFoundError: odin` or `fake_jira`: each test module puts `Asgard/` and `Asgard/apps/odin` on
+  `sys.path` itself (as `cli.py` does). Plain unittest runs from `Asgard/`: `python -m unittest discover -s tests`.
 - A test passes under pytest but fails under plain unittest on the workstation (or the reverse): it
   leaned on pytest behavior (rootdir cwd, assertion rewriting, a fixture). Shipped tests must pass both ways.
-- `init` can't find files: `__main__.py` uses `Path(__file__).resolve().parents[2]` to reach `Odin/app/`.
+- `init` can't find `config.example.json`: `odin/cli.py` finds it from its own location (`apps/odin/`).
   Count the parents again if anything moved.
 - Guardrail tests passing suspiciously after a move: they assert "no offenders found", which passes
   on an empty glob. `GuardrailWiringTests` must fail first; if it doesn't, its paths are stale.
@@ -29,11 +29,13 @@ description: Debugging playbook and known meeting2jira gotchas. Use when a test 
   `Write-Output` instead of `Write-Host`. It takes the last output object as the path.
 - Quotes vanish in arguments to `python.exe`: PS 5.1 mangles embedded `"` in native-command args.
 - A CLM-safe script works in your shell but fails on the workstation: a `[Type]::Member` static,
-  `New-Object` or `Add-Type` slipped in. `test_guardrails.test_clm_safe_scripts` should catch it.
+  `New-Object` or `Add-Type` slipped in. `test_odin_guardrails.test_clm_safe_scripts` should catch it.
 - Outlook `Restrict` returns nothing: date strings must use the machine's short format
   (`ToString('g')`), and `Sort('[Start]')` must come before `IncludeRecurrences = $true`.
 - Duplicate sub-tasks: check the dedupe key (`GlobalAppointmentID|start_utc` vs `csv:` + hash) and
-  that the state row is written right after create, before worklog/transition.
+  that the `meeting_subtasks` row (or the journal) is written right after create, before worklog/transition.
+- `MuninnError: ... schema` in a test: the test opened Muninn before `muninn.prepare()`; use `OdinTestCase`.
+- A Muninn write refused by the guard: Odin may write only the tables it owns (`asgard/muninn/guard.py`).
 - Text filter skips almost everything: a bare string like `"OOO"` was treated as a list of
   one-character needles. Validation must reject non-list values.
 <!-- Add one line each time you or the agent burn more than a couple of turns on something. -->

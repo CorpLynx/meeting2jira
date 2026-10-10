@@ -263,7 +263,7 @@ Incremental runs ask for `updated >= odin.jql_time(cursor)`, two minutes early b
 | `posted_at`, `created_at` | ts | posted requires posted\_at |  |
 | `error` | TEXT |  | Jira's message when a post fails |
 
-Five table checks keep the states honest: a Jira id exists exactly for posted and deleted rows, posted needs `posted_at`, rows found in Jira are never sending or failed, and the origin decides whether `proposal_id` or `calendar_event_id` is set. Odin finds your worklogs with Jira's `/rest/api/2/worklog/updated?since=` and `/worklog/list`, keeping only yours, and `/worklog/deleted?since=` marks removed ones.
+Five table checks keep the states honest: a Jira id exists exactly for posted and deleted rows, posted needs `posted_at`, rows found in Jira are never sending or failed, and the origin decides whether `proposal_id` or `calendar_event_id` is set. Odin finds your worklogs by the issues you logged time on (`worklogAuthor = currentUser()`, then each issue's worklog list), keeping only yours, and `/worklog/deleted?since=` marks removed ones. This deviates from the first design, which read `/worklog/updated?since=`: that lists every worklog in the whole Jira, which on a large Data Center is most of the instance's history ([integration/odin.md](integration/odin.md#worklogs-and-a-deviation-from-the-design)).
 
 **`meeting_subtasks`** (v5): one row per meeting Odin made a Jira sub-task for. It is all that stands between a re-run and a pile of duplicate sub-tasks, so Odin consults it before creating anything and writes it the moment Jira accepts the create, before the worklog and the transition.
 
@@ -751,18 +751,18 @@ Odin never edits or deletes a worklog in Jira. If you lower an approved day afte
 
 ## Moving Odin into Muninn
 
-Odin moves into Muninn, and Asgard 0.2 ships the package it needs. Each step replaces one part of Odin's `state.db` and can ship on its own, so Odin keeps working throughout. Jira stays the source of truth, so Odin re-reads it rather than converting its cache.
+Done on Oct 10, 2026 (Asgard 0.4.0): Odin is an Asgard app (`apps/odin`) and keeps its records in Muninn. Each step of the plan, and what became of it:
 
-1. **Install Asgard 0.2 or later.** It creates Muninn at first start and ships `asgard.muninn`.
-2. **Load the package.** Odin adds the `load_muninn()` function from Asgard's README and opens Muninn with `muninn.open_app("odin", supported=(1, 3))`.
-3. **Issues.** Odin's Jira sync passes each issue's JSON to `odin.upsert_issue()` inside a `muninn.Run`. The Assigned to Me view becomes `odin.assigned_to_me()`, and the tracked-parent pull reads `odin.children_of()`. The list of tracked parents stays in Odin's settings file.
-4. **Calendar and meeting logging.** The meeting sync calls `odin.upsert_calendar_event()`, then `odin.sweep_calendar()` for the window it read. Logging a meeting becomes `odin.begin_meeting_post()`, the Jira call, then `odin.finish_post()`.
-5. **Worklogs.** Odin reads your worklogs from `/worklog/updated` and stores them with `odin.upsert_worklog()`. The first run reaches back a year.
-6. **The new jobs.** Key lookups (`odin.unknown_keys()`, `odin.record_lookup()`), posting approved Baldur days (`odin.posts_due()`, `odin.begin_post()`), and the crash check at start (`odin.stuck_posts()`).
-7. **Carry over what only Odin knows.** A one-time import copies the issue each past meeting was logged to into `calendar_events.logged_as_key`. It also marks Odin's earlier meeting worklogs with `odin.adopt_meeting_worklog()`, so they don't count as development time. Where `state.db` has no record, `odin.classify_meeting_worklogs()` matches strictly by comment, start and length.
-8. **Retire state.db.** Keep it read-only for 30 days, then delete it.
+1. **Asgard installed.** Odin ships with Asgard now; setup installs it, and the packaged build carries it.
+2. **Load the package.** Odin opens Muninn with `muninn.open_app("odin", supported=(5, 5))` and runs on Asgard's Python.
+3. **Issues.** Your issues, each tracked parent (default parent, rules, tour-of-duty parent) and its children, through `odin.upsert_issue()` in a `muninn.Run` per stream. Assigned to Me is `odin.assigned_to_me()`, in Odin's window.
+4. **Calendar and meeting logging.** Every export item goes through `odin.upsert_calendar_event()`; a whole-window export sweeps. A meeting's sub-task is recorded in `meeting_subtasks` (v5), and its time logged through `odin.begin_meeting_post()`.
+5. **Worklogs.** By issue rather than `/worklog/updated` (above); the first run reaches back a year.
+6. **The new jobs.** Key lookups, posting approved Baldur days (after the worklog sync of the same run, capped per run), and the crash check at start.
+7. **What only Odin knew.** `state.db` imported into `meeting_subtasks`; owed worklogs carried, logged ones not; earlier meeting worklogs classified strictly by comment, start and length.
+8. **state.db retired.** Renamed `state.db.migrated-DATE`, deleted after 30 days; kept and consulted if any row couldn't move.
 
-Until step 4 ships, Baldur's meeting policy falls back to `independent`; until step 6, Baldur works report-only.
+Baldur's meeting policy and its posting now have what they waited for: meetings in `calendar_events` and Odin posting approved days.
 
 ## Migrations, backup and retention
 
@@ -800,7 +800,7 @@ Rows are short text, so a year of one engineer's work should stay in the tens of
 - [ ] **Scope.** One database per engineer (this design), or a team view later? A team view needs a server, which this design avoids.
 - [ ] **Raw API payloads.** Keep them for debugging? Default: no, only `sync_runs.error`.
 - [ ] **Versions.** Keep every BLUF and review-draft version, or prune superseded ones once a period closes?
-- [x] **state.db layout.** Settled on 2026-10-10: `state.db` holds one table, `synced`, which Odin's own code defines. v5's `meeting_subtasks` takes its place, and Odin imports it once.
+- [x] **state.db layout.** Settled on 2026-10-10: `state.db` holds one table, `synced`, which Odin's own code defined. v5's `meeting_subtasks` takes its place, and Odin imports it once.
 - [ ] **Posting mode.** Odin posts approved worklogs on its next run (proposed, since approving in Baldur is the consent), or waits for a Post button in Odin?
 - [ ] **Which resolutions count as wins.** Proposed: all except Won't Do, Duplicate and Cannot Reproduce, editable in Freya's settings.
 - [x] **Time zone travel.** Decided (Brandon, Oct 9): US time zones only. A day is local to wherever the laptop is when Baldur estimates it and Odin posts it. The rare shift is accepted rather than pinning a zone in `meta`. Baldur's own worklogs count for their approved day whatever the zone; a worklog logged by hand near midnight can fall in the neighbouring day after a move between US zones (at most 6 hours apart).

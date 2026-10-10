@@ -41,6 +41,16 @@
     "skip_subject_patterns": ["(?i)^lunch\\b", "(?i)focus time", "(?i)^hold\\b", "(?i)\\bPTO\\b"]
   },
 
+  "_muninn": "What Odin does with Muninn, Asgard's database, beyond the meeting push: read your Jira issues and worklogs in for Asgard's other apps, and post the days you approved in Baldur (only approved minutes, only what Jira is missing).",
+  "muninn": {
+    "sync_issues": true,
+    "sync_worklogs": true,
+    "post_approved": true,
+    "max_posts_per_run": 20,
+    "history_days": 365,
+    "max_issues_per_run": 500
+  },
+
   "_tour_of_duty": "Your scheduled working hours, local time. This classifies meetings; it does NOT decide which days are scanned (that is -DaysBack, and re-runs cannot duplicate). A meeting entirely outside your tour triggers outside_action; one that merely runs past the end counts as inside, so work is never dropped.",
   "tour_of_duty": {
     "enabled": false,
@@ -63,7 +73,7 @@
 
   "templates": {
     "summary": "Meeting: {subject} ({start_local:%Y-%m-%d %H:%M})",
-    "description": "Logged automatically from my calendar by meeting2jira.\n\nWhen: {start_local:%Y-%m-%d %H:%M} - {end_local:%H:%M} ({minutes} min)\nOrganizer: {organizer}\nLocation: {location}",
+    "description": "Logged automatically from my calendar by Odin.\n\nWhen: {start_local:%Y-%m-%d %H:%M} - {end_local:%H:%M} ({minutes} min)\nOrganizer: {organizer}\nLocation: {location}",
     "worklog_comment": "Meeting: {subject}"
   },
 

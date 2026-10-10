@@ -10,6 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from unittest import mock  # noqa: E402
+
 from asgard import install, valhalla  # noqa: E402
 
 try:
@@ -106,6 +108,27 @@ class InstallTests(unittest.TestCase):
         result = valhalla.uninstall(purge=False)
         self.assertTrue(result.ok, result.skipped)
         self.assertFalse((self.home / "app").exists())
+
+
+
+class ValhallaTaskTests(unittest.TestCase):
+    def test_uninstall_removes_every_apps_scheduled_task(self) -> None:
+        """Valhalla can't import the apps, so their task names are written out; they must stay in step."""
+        import re
+        sys.path.insert(0, str(ROOT / "apps" / "baldur"))
+        sys.path.insert(0, str(ROOT / "apps" / "odin"))
+        from baldur import cli as baldur_cli
+        from odin import cli as odin_cli
+        task_ps = (ROOT / "apps" / "odin" / "windows" / "Register-MeetingSyncTask.ps1").read_text(encoding="ascii")
+        registered = re.search(r"\[string\]\$TaskName = '([^']+)'", task_ps).group(1)
+        self.assertEqual(registered, odin_cli.TASK_NAME)
+        self.assertLessEqual({baldur_cli.TASK_NAME, odin_cli.TASK_NAME, "meeting2jira-daily"},
+                             set(valhalla.SCHEDULED_TASKS))
+        with mock.patch.object(valhalla.winutil, "IS_WINDOWS", True), \
+                mock.patch.object(valhalla.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=0)
+            self.assertEqual(len(valhalla.remove_scheduled_tasks()), len(valhalla.SCHEDULED_TASKS))
+        self.assertEqual(run.call_args_list[0].args[0][:4], ["schtasks", "/Delete", "/F", "/TN"])
 
 
 if __name__ == "__main__":

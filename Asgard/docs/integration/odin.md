@@ -1,54 +1,80 @@
 # Odin and Muninn
 
-Identity `odin` · package `asgard.muninn.odin` (ready, 0.2+) · Odin's move is being done separately; this page is its contract.
+Identity `odin` · code `apps/odin` (package `odin`), Muninn side `asgard.muninn.odin` · `muninn.open_app("odin", supported=(5, 5))` · an Asgard app since Oct 10, 2026 (Asgard 0.4.0)
 
-Odin is the only app that talks to Jira, in both directions. It mirrors your Jira issues, calendar and worklogs into Muninn, resolves the keys other apps store, and posts the time you approved. It never edits or deletes a worklog in Jira.
+Odin is the only app that talks to Jira, in both directions. It turns your finished meetings into Jira sub-tasks and logs their time, mirrors your Jira issues, calendar and worklogs into Muninn for the other apps, resolves the keys they store, and posts the time you approved in Baldur. It never edits or deletes an issue or a worklog in Jira.
+
+Before Oct 2026 Odin was a separate program (`Odin/app`, package `meeting2jira`) that kept its own `state.db`. It moved into Asgard in the steps of [../muninn-design.md](../muninn-design.md#moving-odin-into-muninn); `Odin/` keeps only the optional Graph and OWA exporters, the Power Platform material and Odin's history.
 
 ## Tables
 
 | Owns | Reads |
 | --- | --- |
-| `work_items`, `work_item_aliases`, `work_item_transitions`, `calendar_events`, `worklogs` | `v_unknown_keys`, `v_worklogs_to_post`, `v_day_status`, `day_proposals` (status only), `identities` |
+| `work_items`, `work_item_aliases`, `work_item_transitions`, `calendar_events`, `worklogs`, `meeting_subtasks` (v5) | `v_unknown_keys`, `v_worklogs_to_post`, `v_day_status`, `v_unpostable_days`, `v_busy_meetings`, `day_proposals` (through the views), `identities` |
 
-Shared operations it uses: `sources`, `identities`, `sync_runs`, `sync_cursors`, `events`.
+Shared operations it uses: `sources` (`jira-dc` and one `calendar:<export>` per export path), `identities` (`jira_user`), `sync_runs`, `sync_cursors`, `events`.
 
-## How Odin calls Muninn
+## Where things are
 
-| Job | Calls | Notes |
+| | |
+| --- | --- |
+| `apps/odin/odin.cmd` | The command line on Windows: `odin`, `odin preview`, `odin setup`, `check`, `status`, `sync`, `post`, `report`, `doctor`, `schedule`, `csv FILE`, `run ARGS`, `cli ARGS` |
+| `apps/odin/cli.py` | The Python entry point (`daily`, `push`, `sync`, `post`, `status`, `forget`, `report`, `init`, `set-token`, `check`) |
+| `apps/odin/odin.pyw`, `ui/` | The window: Asgard's shared window with Today, Meetings and My issues (`odin/ui_backend.py`) |
+| `apps/odin/windows/` | `Invoke-MeetingSync.ps1` (the Outlook export, then `cli.py daily`), `Export-OutlookMeetings.ps1`, `Register-MeetingSyncTask.ps1` (the "Asgard Odin daily" task), `Test-Environment.ps1` (`odin doctor`) |
+| `apps/odin/tools/` | `Invoke-WindowsChecks.ps1` (`odin selftest`), `Test-PowerShellSyntax.ps1` |
+| `%LOCALAPPDATA%\Asgard\odin\` | `config.json`, `jira_token.dpapi`, `logs\`, `exports\`, `last_run.json`, `ATTENTION-Odin.txt` on failure, `odin.lock` during a run, `unrecorded.jsonl` if Muninn ever refused a record, `state.db.migrated-DATE` for 30 days after the import |
+
+## The daily run
+
+`odin` (or the scheduled task) exports yesterday and today from Outlook and runs `cli.py daily` on the file. In order, each write its own short transaction and none held across a Jira call:
+
+1. **What only Odin knew.** Records in the journal (`unrecorded.jsonl`) go into Muninn, then `state.db` is imported once (below).
+2. **Posts nobody saw finish.** `stuck_posts()` → `find_worklog(key, marker)` → `resolve_stuck(..., searched=True)`. Odin runs one at a time (`odin.lock`), so a `sending` row older than a few HTTP timeouts belongs to a run that is over.
+3. **The calendar.** Every item of the export goes into `calendar_events` (a private item with its times and "Private appointment", never its subject), through one `calendar:<export>` source per export path. A JSON export reads a whole window, so its run is `mode="full"` and sweeps; a CSV, or an export that stopped early (`truncated`), only adds and updates. Then meeting worklogs an earlier run couldn't log are retried.
+4. **Meetings to sub-tasks** (`odin/sync.py`). Filters, tour of duty and rules decide; `meeting_subtasks` is checked by calendar key or content hash; the sub-task is created with its `m2j-<hash>` label; the record is written the moment Jira accepts it (or goes to the journal, and the run stops creating); the new sub-task is read back into Muninn; its time is logged through `begin_meeting_post()`; then the transition.
+5. **Jira into Muninn** (`odin/collect.py`), each its own sync run with its own cursor: your issues (`assignee was currentUser()`), each tracked parent and its children, keys other apps mention (one GET each), open issues that aren't yours (in batches of 50), issues no run has seen for a week (only a 404 deletes), and your worklogs.
+6. **Approved Baldur days.** `posts_due()` → `begin_post()` → Jira → `finish_post()` or `fail_post()`, at most `muninn.max_posts_per_run` (20), and only when the worklog sync of the same run finished, so Muninn knows what Jira already holds.
+7. **The breadcrumb.** `last_run.json`, and `ATTENTION-Odin.txt` on the Desktop raised or taken down. A run that stops early (an expired token, Muninn not ready) writes them too.
+
+`push` is steps 1 to 4 and 7, `sync` 1, 2, 5 and 7, `post` 1, 2, the key lookups and worklog sync, then 6 and 7. `--dry-run` (`odin preview`) reads Muninn and `state.db`, writes nothing anywhere, and calls nothing in Jira.
+
+## What protects Jira from Odin
+
+- **A sub-task is made once.** `meeting_subtasks` is consulted before every create and written right after, before the worklog and the transition. A record Muninn can't take goes to `unrecorded.jsonl` (flushed to disk) and the run stops creating; the next run writes it first, and a preview consults it. `odin.lock` keeps a second run out; a lock whose process has gone (a run stopped from the window, or a crash) is taken over at once, and any lock after two hours. A create that fails ambiguously (a timeout, a 502/503/504) is followed by an exact JQL search for its label: exactly one match is adopted, anything else is left for a person.
+- **Time is posted once.** Every worklog goes through a `sending` row with a marker, committed before the call. `fail_post()` only on a definite 4xx (`JiraError.refused`); a timeout, a 5xx or a lost answer leaves it `sending`, and the next start settles it by the marker. The Jira client retries a GET on 429/502/503/504 and a write only on 429, which Jira refuses before doing anything.
+- **Meeting time.** Logged on the meeting's calendar event (`begin_meeting_post()`, which also refuses a twin from another calendar), or, for history without an event, as a manual post with the stored comment. A retry first reads the sub-task's worklogs from Jira: time logged by hand, or by Odin before Muninn, counts. Retries stop 14 days after the sub-task was made, or after three refusals.
+- **Less, never more.** Approved days are posted only for what Jira is missing, after the worklog sync. `log_work` turned on later doesn't post old meetings (`worklog_wanted`).
+- **v3 triggers and `v_double_posts`** as before: a posted worklog only becomes `deleted`, Asgard never sends one over 24 hours, and Odin's tile badge shows anything in Jira twice.
+- **Secrets.** The PAT is DPAPI-encrypted for your Windows user (`jira_token.dpapi`; `JIRA_PAT` overrides it for development). Error text Muninn keeps goes through `scrub()`.
+
+## Worklogs, and a deviation from the design
+
+The design reads `/rest/api/2/worklog/updated`, which lists every worklog in the whole Jira. Odin asks for the issues you logged time on instead (`worklogAuthor = currentUser()`, then each issue's worklog list), which grows with your work rather than the instance's, and applies `/rest/api/2/worklog/deleted` for removals (an issue drops out of that query once your only worklog on it is gone). The first run reaches back `muninn.history_days` (365) and may take a while; the scheduled task allows 45 minutes. A per-run limit (`max_issues_per_run`, 500) never stops inside a burst of updates, so a bulk edit can't stall a cursor.
+
+## state.db, imported once
+
+Each row of `synced` becomes a `meeting_subtasks` row with origin `state_db` and its own creation time. A worklog still owed (wanted, not logged, under three attempts) is carried as `worklog_wanted = 1`; everything else as 0, so nothing already in Jira is sent again. Then `state.db` becomes `state.db.migrated-YYYYMMDD`, deleted after 30 days. If any row can't be imported, `state.db` stays and Odin keeps consulting it, so none of its meetings is made again. When an imported meeting shows up in an export, its record is linked to the calendar event. Meeting worklogs from before Muninn are marked as meeting time by `classify_meeting_worklogs()` with the comment template's prefix (`Meeting: %`), strictly.
+
+## Settings (`config.json`, section `muninn`)
+
+| Key | Default | |
 | --- | --- | --- |
-| Open | `muninn.open_app("odin", supported=(1, 3))` | Needs Asgard's Python (3.9+, and SQLite 3.37+, so 3.11+ on Windows). Odin's own floor is 3.8, so its Muninn path runs only when Asgard is installed; see "Before Odin can import Muninn". |
-| Issue sync | `JiraContext.load`, then per page `run.batch()` → `upsert_issue(run, raw, ctx)`; `run.advance_cursor(parse_time(updated))`; `jql_time(run.cursor)` for the next JQL | Emits created, updated, moved, done, reopened |
-| Deletions | `not_seen_since()` → ask Jira for each → `mark_issue_deleted()` on a 404 only | Leaving Odin's JQL scope is not a deletion |
-| Key lookups | `unknown_keys()` → `GET /issue/{key}` → `record_lookup(run, key, raw_or_None, ctx)` | Writes aliases: current, moved or not_found |
-| Calendar | `upsert_calendar_event(run, event_from_graph(raw) or event_from_outlook(item))`; then `sweep_calendar(run, start, end)` | The sweep needs `mode="full"` and a run with no problems (v3) |
-| Meeting keys | `set_meeting_key(con, event_id, key)` | Stored upper case; refuses anything that isn't a key |
-| Worklog sync | `upsert_worklog(run, raw, ctx)`; `mark_worklog_deleted(run, id)` from `/worklog/deleted` | Only your worklogs are stored; a marker in the comment reconciles a `sending` row |
-| Posting | `posts_due()` → `begin_post()` → Jira → `finish_post()` or `fail_post()` | Same pattern for `begin_meeting_post()` and `begin_manual_post()` |
-| Crash check (start) | `stuck_posts()` → search the issue's worklogs for each marker → `resolve_stuck(con, id, found_id, searched=True)` | Without `searched=True`, a missing id is refused: guessing "not there" would post twice |
-| History | `adopt_meeting_worklog()`, `classify_meeting_worklogs("Meeting:%")` | One-time, strict matching only |
+| `sync_issues` | true | Your issues, tracked parents, key lookups, refreshes |
+| `sync_worklogs` | true | Your worklogs, so Baldur sees what Jira holds |
+| `post_approved` | true | Post approved Baldur days in the daily run (`odin post` posts whatever this says) |
+| `max_posts_per_run` | 20 | |
+| `history_days` | 365 | How far the first sync reaches |
+| `max_issues_per_run` | 500 | Per stream; a bigger first sync carries on next run |
 
-## What protects Odin's data
+## Python and packages
 
-- **Never twice.** A `sending` row and marker are committed before each Jira call. `v_worklogs_to_post` offers nothing for an issue and day while a post is in doubt, and each approval posts at most once.
-- **v3 triggers.** A posted worklog can only become `deleted`; a worklog Asgard sent is never deleted unless it failed; Baldur time needs an approved proposal at insert; Asgard never creates a worklog over 24 hours. Worklogs read from Jira are stored as Jira has them, whatever their length.
-- **`v_double_posts`** and Odin's first tile badge show any approval or meeting in Jira more than once, and `--muninn check` reports it as an error with the worklog ids to delete.
-- **Secrets.** `fail_post` and sync failures store error text through `scrub()`. The Jira PAT stays in Odin's DPAPI file.
+Odin runs on what Asgard runs on: the packaged build's `asgard-cli.exe`, else the Python Asgard was installed with (`install-ledger.json`), else a Python 3.9+ whose SQLite is 3.37 or newer with FTS5 (3.11+ on Windows). `odin.cmd` and the PowerShell scripts look in that order. The daily run uses only the standard library, because the Python install may carry no packages; the window uses PySide6 like every Asgard window. The packages considered for Odin and why none is used yet (`jira` retries POSTs on a 503 or a dropped connection) are in [../dependency-policy.md](../dependency-policy.md#considered-for-odin-and-not-used-oct-10-2026).
 
 ## Events
 
-Emits `work_item.created/.updated/.moved/.done/.reopened/.deleted`, `worklog.posted`, `worklog.failed`. May consume `day_proposal.approved` to post without waiting for its next scheduled run; `posts_due()` already finds the work, so consuming is an optimisation, not a requirement.
+Emits `work_item.created/.updated/.moved/.done/.reopened/.deleted`, `worklog.posted`, `worklog.failed`. It doesn't consume events: `posts_due()` finds approved days by itself.
 
-## Before Odin can import Muninn
+## Tests
 
-These are decisions for whoever moves Odin, recorded so they aren't rediscovered:
-
-1. **The import rule.** Odin's guardrail rejects `import asgard` because `Odin/app/` must run with nothing else installed. Proposed: one Odin module may import `asgard.muninn` from the Asgard install folder; everything else in Odin works unchanged without it, and the guardrail checks that the import is confined to that module and is optional.
-2. **The Python.** Odin's scheduled task runs on whatever Python Odin found. Its Muninn path must run on Asgard's (recorded in `%LOCALAPPDATA%\Asgard\install-ledger.json`), or `open_app` raises its "run it with the same Python as Asgard" error.
-3. **Exit codes stay Odin's.** 2 for config and credential errors is a contract with its scheduled task; Muninn errors map to 2 there too.
-4. **The order.** The eight steps in [../muninn-design.md](../muninn-design.md#moving-odin-into-muninn). Until step 4 ships, Baldur's meeting policy is `independent`; until step 6, Baldur is report-only.
-
-## Tests Odin needs
-
-- Every Muninn call above against a temporary Muninn, through `open_app` (guard on).
-- A post interrupted at each point (before the call, after Jira answered, after a timeout) ends with exactly one worklog in Jira and `integrity.check()` clean.
-- A calendar window synced incrementally never sweeps.
+`tests/test_odin_*.py`, against a temporary Muninn through `open_app` (guard on) and an in-memory Jira (`tests/fake_jira.py`): the pipeline and its filters, ambiguous-create recovery, the calendar and the record of sub-tasks, the journal and the lock, meeting worklogs through every failure (a refusal, an answer lost before or after Jira logged it, a 500, time logged by hand), the Jira sync and its cursors, posting approved days, the `state.db` import, the window backend, the guardrails, and the daily run end to end. `tests/test_ui_qt.py` loads every Odin page offscreen (on Windows CI), and the packaged build runs Odin's dry-run push.

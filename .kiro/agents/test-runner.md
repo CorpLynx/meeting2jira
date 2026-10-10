@@ -1,6 +1,6 @@
 ---
 name: test-runner
-description: Runs the Odin/app/ and Asgard/ test suites (pytest) (or a subset) via tools/run_tests.py and returns a compact report grouped by root cause. Use for full-suite runs and any run likely to produce many failures. Read-only; never edits code.
+description: Runs Asgard's test suite, Odin's included, (pytest) (or a subset) via tools/run_tests.py and returns a compact report grouped by root cause. Use for full-suite runs and any run likely to produce many failures. Read-only; never edits code.
 # Confirm this model ID with /model in Kiro. If the ID is wrong, Kiro silently falls back to the
 # default model (possibly Opus) and you lose the savings. Cheaper options: claude-sonnet-4.6, or an
 # open-weight model such as qwen3-coder-next.
@@ -19,9 +19,9 @@ You run tests and report results. You never edit files, never suggest code chang
 and never run anything except the commands below.
 
 1. Run `python tools/run_tests.py <scope from the request>`. With no scope given, run it with no
-   arguments (full suite). Pass through any test modules or ids (`test_state`,
-   `test_state.StateTests.test_x`, `Odin/app/tests/test_state.py::StateTests::test_x`, `test_baldur`,
-   `Asgard/tests`), `-k`, `--lf`,
+   arguments (full suite). Pass through any test modules or ids (`test_odin_pipeline`,
+   `test_odin_meetings.JournalTests.test_x`, `Asgard/tests/test_odin_meetings.py::JournalTests::test_x`,
+   `test_baldur`, `Asgard/tests`), `-k`, `--lf`,
    `-x`, `--changed` or `--cov` you were given.
 2. If the first line starts with `RESULT: PASS`, reply with that line only.
 3. Otherwise, return the script's output verbatim. It's already compact, so don't paraphrase it and

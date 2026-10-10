@@ -129,6 +129,28 @@ def remove_after_exit(folder: Path, pid: Optional[int] = None) -> List[str]:
     return argv
 
 
+# The scheduled tasks Asgard's apps register (baldur.cli.TASK_NAME, Odin's Register-MeetingSyncTask.ps1,
+# and Odin's name from before it moved into Asgard). Once the code is gone they would fail every day.
+SCHEDULED_TASKS = ("Asgard Baldur collect", "Asgard Odin daily", "meeting2jira-daily")
+CREATE_NO_WINDOW = 0x08000000
+
+
+def remove_scheduled_tasks() -> List[str]:
+    """Delete the apps' scheduled tasks. Returns the ones removed; a task that isn't there is fine."""
+    if not winutil.IS_WINDOWS:
+        return []
+    removed = []
+    for name in SCHEDULED_TASKS:
+        try:
+            done = subprocess.run(["schtasks", "/Delete", "/F", "/TN", name], capture_output=True, timeout=30,
+                                  creationflags=CREATE_NO_WINDOW if os.name == "nt" else 0)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if done.returncode == 0:
+            removed.append(f"scheduled task {name}")
+    return removed
+
+
 def uninstall(purge: bool = False) -> Result:
     data = paths.data_dir()
     try:
@@ -139,6 +161,7 @@ def uninstall(purge: bool = False) -> Result:
     items = list(reversed(ledger.get("items", []))) if ledger else default_items()
     expected_key = ("HKCU\\" + paths.UNINSTALL_SUBKEY).lower()
     res = Result()
+    res.removed.extend(remove_scheduled_tasks())
     for item in items:
         kind, raw = item.get("kind"), str(item.get("path", ""))
         try:

@@ -1,12 +1,11 @@
 # Development tooling only: pytest and ruff config for working on this repo.
-# Nothing here is needed at runtime. Odin/app/ stays stdlib-only and installs by copying the folder;
-# this file is not a package definition and Odin/app/ never reads it.
+# Nothing here is needed at runtime. Asgard (with Odin, one of its apps since Oct 2026) installs by
+# copying its folder; this file is not a package definition and Asgard never reads it.
 # Install the tools with: python -m pip install -r requirements-dev.txt
 
 [tool.pytest.ini_options]
-testpaths = ["Odin/app/tests", "Asgard/tests"]
-# The same layout the entry points use: Odin/app/src for `meeting2jira`, Odin/app for `tests.*`.
-pythonpath = ["Odin/app/src", "Odin/app"]
+testpaths = ["Asgard/tests"]
+# Each test module puts Asgard/ and the app it tests on sys.path itself, as the entry points do.
 # The tests stay plain unittest so they still run on the workstation with no pip; pytest is the
 # dev runner (better failure output, timeouts, coverage).
 addopts = "-q --strict-markers"
@@ -15,7 +14,7 @@ xfail_strict = true
 timeout = 60
 
 [tool.coverage.run]
-source = ["Odin/app/src/meeting2jira"]
+source = ["Asgard/asgard", "Asgard/apps"]
 branch = true
 
 [tool.ruff]

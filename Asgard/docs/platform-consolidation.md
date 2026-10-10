@@ -10,7 +10,7 @@ Asgard's apps were built one at a time, so each carries its own copy of things e
 2. **Move a thing to core when a second app needs it, or when correctness needs exactly one copy** (atomic writes, TLS, secrets, the schema). Not before: a core module with one caller is a guess about the second.
 3. **One rule, one place, one test.** A consolidated module comes with the test that would have caught the drift, and a guardrail that stops a new copy appearing.
 4. **Policies may differ; mechanisms may not.** Two apps can want different behaviour for a broken settings file (refuse vs. reset); they should share the code that reads it and pass the policy in.
-5. **Never centralize what Odin depends on.** Odin must run with no Asgard present (its guardrail). Its Jira write path, DPAPI token, exit codes and PowerShell `Resolve-Python` copies stay Odin's. Its data folder is `%LOCALAPPDATA%\Asgard\odin` (Brandon, Oct 10), found the way `asgard.paths` finds Asgard's, with no import of Asgard. Core may offer equivalents that Odin adopts later by choice, never a dependency Odin must take.
+5. **Odin is an Asgard app (Oct 10, 2026).** It used to have to run with no Asgard present; since Brandon made it an Asgard app (`apps/odin`, on Muninn) it uses `asgard.paths` and Muninn like the others. Its Jira write path, DPAPI token, exit codes and PowerShell `Resolve-Python` copies are still its own, because they carry its no-duplicates guarantees; a shared `asgard.http` would have to keep its retry rules (writes retried only on 429) to replace them.
 6. **Heimdall's on-prem fork is out of scope.** The copy here is a pattern sample; nothing in core is shaped around it.
 
 ## How to interrogate the codebase
@@ -45,7 +45,7 @@ Run this before each release and whenever an app is added; it is how the invento
 
 | # | Concern | Copies today | Verdict |
 | --- | --- | --- | --- |
-| 1 | Data folder | `asgard.paths.data_dir()` (ASGARD_HOME > `%LOCALAPPDATA%\Asgard`); the launcher exports `ASGARD_DATA` to apps, which nothing reads; Odin's `%LOCALAPPDATA%\Asgard\odin` (moved from `%LOCALAPPDATA%\meeting2jira`, Oct 10) | Apps use `asgard.paths` only; drop `ASGARD_DATA` or make it the one override children read. Odin computes the same folder itself (principle 5) |
+| 1 | Data folder | `asgard.paths.data_dir()` (ASGARD_HOME > `%LOCALAPPDATA%\Asgard`); the launcher exports `ASGARD_DATA` to apps, which nothing reads; Odin's `%LOCALAPPDATA%\Asgard\odin` (moved from `%LOCALAPPDATA%\meeting2jira`, Oct 10) | Apps use `asgard.paths` only, Odin included since it became an Asgard app; drop `ASGARD_DATA` or make it the one override children read |
 | 2 | Atomic JSON writes | `baldur/settings.save`, `catalog._write_json`, Heimdall `templates.save`, the install ledger in `install.py` | Consolidate: `asgard.jsonfile`. None has the Windows `PermissionError` retry Muninn's backup needed in the lab |
 | 3 | Reading a broken JSON file | The catalog raises with the line and column; Baldur returns defaults marked `broken` with a warning; the ledger readers fall back silently | Keep the policies, share the reader (principle 4) |
 | 4 | Ledger loading | `install.load_ledger` (empty dict) and `valhalla.load_ledger` (None) | Consolidate into the lifecycle module |
@@ -54,11 +54,11 @@ Run this before each release and whenever an app is added; it is how the invento
 | 7 | Secrets | Odin: DPAPI file + `JIRA_PAT`. Baldur: Credential Manager via ctypes + `BALDUR_GITHUB_TOKEN` | Consolidate Asgard's into `asgard.secrets` (Credential Manager; env override for tests); Odin keeps DPAPI |
 | 8 | HTTP | Odin `jira.py`: retries, ambiguous-write handling, `ca_bundle`, proxy. Baldur `github.py`: ETags; no `ca_bundle`, proxy or retry | Consolidate: `asgard.http`. Bifrost, Loki and Mímir would otherwise each write a third and fourth |
 | 9 | Time helpers | `muninn.db` (`to_ts`, `from_ts`), `muninn.odin.parse_time`, Baldur's local-day maths; tour of duty parsed in Odin and Baldur | Muninn's helpers are the core; Baldur's estimator keeps its own pure maths |
-| 10 | Dead code | Odin `gitwork.py` (wired to nothing; Baldur superseded it) | Delete, with its tests, in Odin's next change |
+| 10 | Dead code | Odin `gitwork.py` (wired to nothing; Baldur superseded it) | Deleted Oct 10, when Odin moved into Asgard |
 | 11 | Child processes | `CREATE_NO_WINDOW` defined in `runner.py` and `gitread.py`; `_tolerant_output` in Baldur and Heimdall CLIs | Consolidate: `asgard.proc` (`run`, `NO_WINDOW`, `tolerant_output`) |
 | 12 | Scheduling | Baldur's `schedule_command` bakes `sys.executable` into the task (a Python upgrade breaks it); Valhalla doesn't remove the task; `run_at_logon` and `commit_hook` settings are validated but unused | Consolidate: `asgard.scheduler`, one recorded task (see [integration/huginn.md](integration/huginn.md)); remove the unused settings |
-| 13 | Finding Python | Four PowerShell `Resolve-Python` copies in Odin (a guardrail compares three); `setup-Asgard.cmd` and `baldur.cmd` try `py -3`, `py`, `python` | Asgard: one locator that reads the ledger's recorded Python. Odin's copies stay |
-| 14 | Python floors | Odin 3.8, Asgard 3.9, Muninn effectively 3.11 on Windows (SQLite 3.37) | Setup must check Muninn's floor (`sqlite_problems()`), not just 3.9 |
+| 13 | Finding Python | Three PowerShell `Resolve-Python` copies in Odin (a guardrail keeps them identical), which since Oct 10 try the packaged build, then the ledger's Python, then one with Muninn's SQLite; `setup-Asgard.cmd` and `baldur.cmd` try `py -3`, `py`, `python` | Asgard: one locator that reads the ledger's recorded Python, as Odin's now does |
+| 14 | Python floors | Asgard and Odin 3.9, Muninn effectively 3.11 on Windows (SQLite 3.37) | Setup must check Muninn's floor (`sqlite_problems()`), not just 3.9 |
 | 15 | UI chrome | Baldur's window imports `LIGHT`/`DARK` from `launcher.py`, pulling in the whole launcher | Consolidate: `asgard.ui` (palette, fonts, DPI, dialogs, worker thread) |
 | 16 | Versions | `VERSION` (Asgard), Odin `__version__ = "0.1.0"`, no VERSION file; `apps.json` `"version": 1` read by nothing; Baldur's `SCHEMA` hardcoded | The manifest (below) |
 | 17 | Updates | None: no mechanism, no version comparison, no downgrade guard | [updates.md](updates.md) |
@@ -94,7 +94,7 @@ Ranked by risk removed per unit of effort; each step ships alone and leaves ever
 1. **`asgard.manifest`** (M). Everything below reads it. Move Baldur's `SCHEMA` into its manifest entry; `open_app` callers read `supported` from it.
 2. **`asgard.lifecycle`** (M). One ledger; scheduled tasks and every app's user data recorded, so Valhalla removes exactly what was installed.
 3. **`asgard.doctor`** (S–M). One place to ask "why doesn't it work" before support calls.
-4. **Retire Odin's `gitwork.py`** (S). Dead code with tests that still run.
+4. *(Done Oct 10.)* Odin's `gitwork.py` retired, with its tests.
 5. **`asgard.pylocate`** (S–M). Setup refuses a Python Muninn can't use, instead of passing on 3.9 and failing later.
 6. **`asgard.jsonfile` and `asgard.applog`** (S). Fixes the Windows replace race in four places.
 7. **`asgard.scheduler`** (M). Fixes the stale task; Huginn builds on it.
@@ -118,4 +118,4 @@ Add each with its module, as tests in `tests/test_platform.py`:
 - [ ] Exit codes: adopt Odin's meanings for every Asgard app (proposed), and Baldur's and Heimdall's 1-for-everything becomes 1 or 2.
 - [ ] `ASGARD_DATA`: remove, or make it the single override child processes read (proposed: remove; `ASGARD_HOME` already exists for tests).
 - [ ] Optional packages (`truststore`, `keyring`): request approval, or stay on the stdlib implementations.
-- [ ] When Odin moves into Muninn, whether it adopts `asgard.http` and `asgard.secrets` (its choice; principle 5).
+- [ ] Now that Odin is an Asgard app, whether it adopts `asgard.http` and `asgard.secrets` once they exist (principle 5: only if they keep its retry rules and its token's migration is planned).

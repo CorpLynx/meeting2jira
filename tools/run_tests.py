@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compact pytest runner for AI agents (Kiro). Development support only; never shipped.
 
-Runs the Odin/app/ and Asgard/ test suites through pytest (config in pyproject.toml), keeps the full output in
+Runs Asgard's test suite, Odin's included, through pytest (config in pyproject.toml), keeps the full output in
 .test-output/last-run.log, and prints a short summary with failures grouped by root cause, so the
 model reads ~20 lines instead of hundreds.
 
@@ -10,9 +10,9 @@ runner is the dev path. Needs `python -m pip install -r requirements-dev.txt`.
 
 Usage (run from anywhere; anything it doesn't recognize is passed straight to pytest):
     python tools/run_tests.py                          # full suite
-    python tools/run_tests.py test_pipeline            # one module (also Odin/app/tests/test_pipeline.py)
-    python tools/run_tests.py test_state.StateTests.test_reopen     # unittest-style id works too
-    python tools/run_tests.py "Odin/app/tests/test_state.py::StateTests::test_reopen"
+    python tools/run_tests.py test_odin_pipeline       # one module (also Asgard/tests/test_odin_pipeline.py)
+    python tools/run_tests.py test_odin_meetings.JournalTests.test_x   # unittest-style id works too
+    python tools/run_tests.py "Asgard/tests/test_odin_meetings.py::JournalTests::test_x"
     python tools/run_tests.py -k worklog               # pytest -k expression
     python tools/run_tests.py --lf                     # only last failures (subTests included)
     python tools/run_tests.py -x                       # stop at first failure
@@ -39,34 +39,35 @@ from typing import Dict, List, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent  # repo root
 
-# Where the product lives, repo-relative. The ONE place that knows the layout: the program and its
-# documentation sit under Odin/, while dev tooling (this script, .kiro/, infra/) stays at the root.
-# If the product folder moves again, this is the only line to change.
-PRODUCT = "Odin"
-APP = f"{PRODUCT}/app"
-
-TESTS = ROOT / PRODUCT / "app" / "tests"
-TESTS_REL = f"{APP}/tests"
-
-# Asgard (launcher, Muninn, Baldur) is a second deliverable with its own plain-unittest suite.
-# pyproject.toml's testpaths collects both; short names like `test_baldur` resolve here too.
+# Where the code lives, repo-relative. Asgard holds the launcher, Muninn and the apps; Odin has been
+# one of its apps (Asgard/apps/odin, package `odin`) since Oct 10, 2026. Odin/ keeps only the
+# optional exporters, which have their own suites. Dev tooling (this script, .kiro/, infra/) stays at
+# the root.
 ASGARD = "Asgard"
 ASGARD_TESTS = ROOT / ASGARD / "tests"
 ASGARD_TESTS_REL = f"{ASGARD}/tests"
-_SUITES = ((TESTS, TESTS_REL), (ASGARD_TESTS, ASGARD_TESTS_REL))
+ODIN_APP = f"{ASGARD}/apps/odin"
+_SUITES = ((ASGARD_TESTS, ASGARD_TESTS_REL),)
+ODIN_TESTS = [f"{ASGARD_TESTS_REL}/{p.name}" for p in sorted(ASGARD_TESTS.glob("test_odin_*.py"))]
+ODIN_GUARDRAILS = f"{ASGARD_TESTS_REL}/test_odin_guardrails.py"
 
 # Files that can't be mapped to tests by import. Keys are repo-relative globs, values are test
-# files. Static PowerShell rules live in test_guardrails; PS runtime behavior can't be tested here
-# at all (see Odin/app/tools/Test-PowerShellSyntax.ps1 and Odin/app/tools/Invoke-WindowsChecks.ps1).
+# files. Static PowerShell rules live in test_odin_guardrails; PS runtime behavior can't be tested
+# here at all (see Asgard/apps/odin/tools/Test-PowerShellSyntax.ps1 and Invoke-WindowsChecks.ps1).
 EXTRA_TEST_MAP: Dict[str, List[str]] = {
-    f"{APP}/src/windows/*.ps1": [f"{APP}/tests/test_guardrails.py"],
-    f"{APP}/tools/*.ps1": [f"{APP}/tests/test_guardrails.py"],
-    f"{APP}/config.example.json": [f"{APP}/tests/test_pipeline.py"],
-    f"{APP}/tests/fixtures/*": [f"{APP}/tests/test_pipeline.py", f"{APP}/tests/test_recovery.py"],
+    f"{ODIN_APP}/windows/*.ps1": [ODIN_GUARDRAILS],
+    f"{ODIN_APP}/tools/*.ps1": [ODIN_GUARDRAILS],
+    f"{ODIN_APP}/*.cmd": [ODIN_GUARDRAILS, f"{ASGARD_TESTS_REL}/test_odin_data_dir.py"],
+    f"{ODIN_APP}/cli.py": [f"{ASGARD_TESTS_REL}/test_odin_pipeline.py"],
+    f"{ODIN_APP}/config.example.json": [f"{ASGARD_TESTS_REL}/test_odin_pipeline.py"],
+    f"{ODIN_APP}/ui/*": [f"{ASGARD_TESTS_REL}/test_odin_window.py", f"{ASGARD_TESTS_REL}/test_ui_qt.py"],
+    f"{ASGARD_TESTS_REL}/fixtures/odin/*": [f"{ASGARD_TESTS_REL}/test_odin_pipeline.py",
+                                             f"{ASGARD_TESTS_REL}/test_odin_recovery.py"],
+    f"{ASGARD_TESTS_REL}/fake_jira.py": ODIN_TESTS,
     # Asgard: Baldur's suite drives Muninn too, so Muninn changes run both.
     f"{ASGARD}/apps/baldur/*": [f"{ASGARD}/tests/test_baldur.py"],
     f"{ASGARD}/asgard/muninn/*": [f"{ASGARD}/tests/test_muninn.py", f"{ASGARD}/tests/test_muninn_schema.py",
-                                  f"{ASGARD}/tests/test_baldur.py"],
+                                  f"{ASGARD}/tests/test_baldur.py"] + ODIN_TESTS,
     f"{ASGARD}/tools/check_muninn_schema.py": [f"{ASGARD}/tests/test_muninn_schema.py"],
     f"{ASGARD}/asgard/catalog.py": [f"{ASGARD}/tests/test_catalog.py"],
     f"{ASGARD}/asgard/apps.json": [f"{ASGARD}/tests/test_catalog.py"],
@@ -75,11 +76,10 @@ EXTRA_TEST_MAP: Dict[str, List[str]] = {
     f"{ASGARD}/asgard/valhalla.py": [f"{ASGARD}/tests/test_install.py"],
     f"{ASGARD}/asgard/paths.py": [f"{ASGARD}/tests"],
 }
-# Changed files under these globs are never reported as "no test mapping". The sibling deliverables
-# (playwright-app, graph-app, gui) have their own suites that this runner does not collect.
-UNMAPPED_IGNORE = ["tools/*", ".kiro/*", "infra/*", f"{PRODUCT}/playwright-app/*",
-                   f"{PRODUCT}/graph-app/*", f"{PRODUCT}/gui/*", f"{PRODUCT}/power-platform/*",
-                   "*.md"]
+# Changed files under these globs are never reported as "no test mapping". Odin's exporters
+# (Odin/playwright-app, Odin/graph-app) have their own suites that this runner does not collect.
+UNMAPPED_IGNORE = ["tools/*", ".kiro/*", "infra/*", "Odin/playwright-app/*", "Odin/graph-app/*",
+                   "Odin/power-platform/*", "*.md"]
 
 OUT_DIR = ROOT / ".test-output"
 LOG_FILE = OUT_DIR / "last-run.log"
@@ -96,8 +96,8 @@ _HEX = re.compile(r"0x[0-9a-fA-F]+")
 _TMP = re.compile(r"(?:/tmp/|[A-Za-z]:\\[^'\" ]*\\Temp\\)[^'\" ]+|pytest-of-[^\\/]+[\\/]pytest-\d+")
 _LOCATION = re.compile(r"^(?P<loc>[^\s:][^:]*\.(?:py|ps1|psm1):\d+):?")
 _CARETS = re.compile(r"^\s*[\^~]+\s*$")  # Python 3.11+ error-position markers: pure noise here
-_IMPORT = re.compile(r"^\s*(?:from\s+meeting2jira(?:\.(\w+))?\s+import\s+([\w\s,()]+)|"
-                     r"import\s+meeting2jira\.(\w+))", re.M)
+_IMPORT = re.compile(r"^\s*(?:from\s+odin(?:\.(\w+))?\s+import\s+([\w\s,()]+)|"
+                     r"import\s+odin\.(\w+))", re.M)
 _SUBFAILED = re.compile(r"^SUBFAILED\((?P<params>.*?)\) (?P<node>\S+)")
 _NUM = re.compile(r"\b\d+(?:\.\d+)?\b")
 _QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
@@ -126,10 +126,9 @@ def _configure_stdout() -> None:
 def normalize_target(arg: str) -> str:
     """Turn the short forms into pytest node ids; leave real paths and options alone.
 
-    test_state                         -> Odin/app/tests/test_state.py
-    test_state.StateTests.test_reopen  -> Odin/app/tests/test_state.py::StateTests::test_reopen
-    tests/test_state.py::X             -> Odin/app/tests/test_state.py::X
-    test_baldur                        -> Asgard/tests/test_baldur.py (module names don't overlap)
+    test_odin_pipeline                 -> Asgard/tests/test_odin_pipeline.py
+    test_odin_meetings.JournalTests.x  -> Asgard/tests/test_odin_meetings.py::JournalTests::x
+    tests/test_baldur.py::X            -> Asgard/tests/test_baldur.py::X
     """
     if arg.startswith("-"):
         return arg
@@ -161,15 +160,15 @@ def _git(*args: str) -> List[str]:
 
 
 def _import_map() -> Dict[str, List[str]]:
-    """meeting2jira module name -> test files that import it."""
+    """odin module name -> test files that import it."""
     result: Dict[str, List[str]] = {}
-    for test_file in sorted(TESTS.glob("test_*.py")):
+    for test_file in sorted(ASGARD_TESTS.glob("test_*.py")):
         text = test_file.read_text(encoding="utf-8", errors="replace")
-        target = f"{TESTS_REL}/{test_file.name}"
+        target = f"{ASGARD_TESTS_REL}/{test_file.name}"
         for m in _IMPORT.finditer(text):
             if m.group(1) or m.group(3):
                 mods = [m.group(1) or m.group(3)]
-            else:  # from meeting2jira import a, b
+            else:  # from odin import a, b
                 mods = [n.strip() for n in re.split(r"[,()\s]+", m.group(2) or "") if n.strip()]
             for mod in mods:
                 result.setdefault(mod, [])
@@ -193,17 +192,16 @@ def changed_targets() -> Tuple[List[str], List[str]]:
         for pattern, mapped in EXTRA_TEST_MAP.items():
             if fnmatch.fnmatch(rel, pattern):
                 hit.extend(mapped)
-        if (rel.startswith(TESTS_REL + "/") or rel.startswith(ASGARD_TESTS_REL + "/")) \
-                and path.name.startswith("test_") and path.suffix == ".py":
+        if rel.startswith(ASGARD_TESTS_REL + "/") and path.name.startswith("test_") and path.suffix == ".py":
             if path.exists():
                 hit.append(rel)
-        elif rel.startswith(f"{APP}/src/meeting2jira/") and path.suffix == ".py":
+        elif rel.startswith(f"{ODIN_APP}/odin/") and path.suffix == ".py":
             hit.extend(imports.get(path.stem, []))
-            # __main__ and helpers are reached through the CLI; the pipeline test drives main().
+            # Helpers are reached through the CLI; the pipeline test drives main().
             if not hit:
-                hit.append(f"{TESTS_REL}/test_pipeline.py")
-        if rel.startswith(f"{APP}/src/"):
-            hit.append(f"{TESTS_REL}/test_guardrails.py")  # cheap, and guards the non-negotiables
+                hit.append(f"{ASGARD_TESTS_REL}/test_odin_pipeline.py")
+        if rel.startswith(f"{ODIN_APP}/"):
+            hit.append(ODIN_GUARDRAILS)  # cheap, and guards the non-negotiables
         if hit:
             targets.extend(hit)
         elif path.suffix in (".py", ".ps1", ".cmd") and not any(
@@ -403,7 +401,7 @@ def main() -> int:
     if importlib.util.find_spec("pytest") is None:
         print("RESULT: ERROR | pytest is not installed for this Python\n"
               "fix: python -m pip install -r requirements-dev.txt\n"
-              "(on a machine without pip, run the stdlib suite from Odin/app/ instead: "
+              "(on a machine without pip, run the stdlib suite from Asgard/ instead: "
               "python -m unittest discover -s tests)")
         return 4
 
@@ -416,7 +414,7 @@ def main() -> int:
                          + (" ..." if len(unmapped) > 8 else "")
                          + " (run the full suite before finishing)")
         if any(p.endswith((".ps1", ".cmd")) for p in _git("diff", "--name-only", "HEAD")):
-            notes.append("note: PowerShell/batch changed; also run Odin/app/tools/Test-PowerShellSyntax.ps1 "
+            notes.append("note: PowerShell/batch changed; also run Asgard/apps/odin/tools/Test-PowerShellSyntax.ps1 "
                          "and say what still needs target-machine verification")
         if not targets:
             print("RESULT: NOTHING TO RUN | no changed files map to tests")

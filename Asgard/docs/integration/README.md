@@ -6,7 +6,7 @@ Muninn is one SQLite file per user (`%LOCALAPPDATA%\Asgard\muninn.db`) that ever
 
 | Page | App | Status |
 | --- | --- | --- |
-| [odin.md](odin.md) | Odin: Jira issues, calendar, worklogs; the only Jira writer | Package ready; Odin's move is in progress elsewhere |
+| [odin.md](odin.md) | Odin: meetings to sub-tasks; Jira issues, calendar and worklogs; the only Jira writer | Built (`apps/odin`, Muninn v5) |
 | [baldur.md](baldur.md) | Baldur: git, GitHub, time estimates and approvals | Integrated |
 | [freya.md](freya.md) | Freya: accomplishments and review drafts | Spec |
 | [loki.md](loki.md) | Loki: meeting recaps, action items, BLUFs | Spec |

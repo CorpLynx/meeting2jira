@@ -204,6 +204,7 @@ class FrozenSetupTests(Home):
         with mock.patch.object(paths, "FROZEN", True), mock.patch.object(paths, "CODE_ROOT", app), \
                 mock.patch.object(valhalla.winutil, "IS_WINDOWS", True), \
                 mock.patch.object(valhalla.winutil, "delete_uninstall_entry", return_value=False), \
+                mock.patch.object(valhalla, "remove_scheduled_tasks", return_value=[]), \
                 mock.patch.object(valhalla.subprocess, "Popen") as popen:
             res = valhalla.uninstall()
         self.assertTrue(app.exists(), "Windows can't delete the programs that are running")

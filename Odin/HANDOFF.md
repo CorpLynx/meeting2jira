@@ -1,5 +1,7 @@
 # Odin: handoff for continued development (Kiro)
 
+> **History, kept for the record (Oct 10, 2026).** This is the handoff for Odin as a standalone program (`Odin/app`, package `meeting2jira`, with its own `state.db`). Odin is now an Asgard app: its code is `Asgard/apps/odin` (package `odin`), its records are in Muninn, and its rules are Asgard's `AGENTS.md`. Paths, commands and the backlog below describe the old layout. What is current: [Asgard/docs/integration/odin.md](../Asgard/docs/integration/odin.md) (the contract and what protects Jira), Asgard's [HANDOFF.md](../Asgard/HANDOFF.md) (where things stand), [INSTALL.md](INSTALL.md) and [README.md](README.md). The backlog's open items still apply and are listed in Asgard's HANDOFF ("What's next", item 4): P0 the target-machine checks, P2-A edited past meetings, P2-B CSV hardening, P2-C the Graph source. P3's `report` is done (`odin report`, from Muninn).
+
 This document hands the Odin proof of concept to an AI coding agent (Kiro) and to the person working with it. It covers:
 
 - where the code stands
