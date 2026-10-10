@@ -154,7 +154,7 @@ Baldur tells you when someone asks for your review, and when someone reviews you
 
 ## Muninn: what Baldur reads and writes
 
-Baldur owns 16 Muninn tables: 13 in schema v1, which ships in Asgard 0.2 and later with the `asgard.muninn` package, `pull_request_commits` in v3, and `agent_estimates` and `agent_estimate_commits` in v4 (Asgard 0.4.0). Schema v2 (Asgard 0.3.1) only takes squash copies out of `v_activity`. Baldur opens Muninn with `supported=(4, 4)`. Baldur records decisions through `baldur.approve()`, `baldur.approve_day()`, `baldur.reject()`, `baldur.reject_day()` and `baldur.change_approval()`, which keep the approval rules in one place; the day versions decide all of a day's tickets in one transaction. The Muninn design doc has every column.
+Baldur owns 16 Muninn tables: 13 in schema v1, which ships in Asgard 0.2 and later with the `asgard.muninn` package, `pull_request_commits` in v3, and `agent_estimates` and `agent_estimate_commits` in v4 (Asgard 0.4.0). Schema v2 (Asgard 0.3.1) only takes squash copies out of `v_activity`. Baldur opens Muninn with `supported=(4, 5)`: v5 adds only Odin's `meeting_subtasks`, which Baldur doesn't read. Baldur records decisions through `baldur.approve()`, `baldur.approve_day()`, `baldur.reject()`, `baldur.reject_day()` and `baldur.change_approval()`, which keep the approval rules in one place; the day versions decide all of a day's tickets in one transaction. The Muninn design doc has every column.
 
 | Table or view | Baldur | Notes |
 | --- | --- | --- |

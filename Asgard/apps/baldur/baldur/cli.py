@@ -27,7 +27,7 @@ from . import agents, assist, calibrate, collect, desk, github, gitread, report,
 from . import estimate as E
 from . import settings as config
 
-SCHEMA = (4, 4)     # 4: agent estimates, which the AI-assisted method reads and writes (v2 and v3 needed nothing)
+SCHEMA = (4, 5)     # 4: agent estimates, which the AI-assisted method reads and writes (v2, v3 and v5 need nothing)
 MAX_DAYS_BACK = 3650
 TASK_NAME = "Asgard Baldur collect"
 ENTRY = Path(__file__).resolve().parent.parent / "cli.py"

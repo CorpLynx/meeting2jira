@@ -66,7 +66,7 @@ your choice to make.
 
 ## Connections
 
-- **Reads:** `muninn.open_app("ysildir", supported=(4, 4), readonly=True)`, one connection per
+- **Reads:** `muninn.open_app("ysildir", supported=(4, 5), readonly=True)`, one connection per
   call. `query_only` is on and the guard refuses every write, so a tool bug can't change data.
   `baldur_day` runs Baldur's own `desk.load_day` on that connection, which proves it writes
   nothing.

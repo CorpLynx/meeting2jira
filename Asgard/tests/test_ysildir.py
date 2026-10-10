@@ -404,7 +404,7 @@ class RecordTests(YsildirCase):
 
     async def test_a_muninn_that_isnt_ready_says_so_in_its_own_words(self):
         p42, _ = self.worked()
-        self.con.execute("PRAGMA user_version = 5")
+        self.con.execute("PRAGMA user_version = 6")
         self.assertIn("newer than ysildir understands", self.refused(await self.call("baldur_estimates")))
         self.assertIn("newer than baldur understands",
                       self.refused(await self.call("baldur_record_estimate", {"report": a_report(p42)})))
@@ -940,7 +940,7 @@ class CheckTests(MuninnCase):
     def test_check_lists_what_an_agent_sees(self):
         lines = server.check()
         self.assertIn("protocol", lines[0])
-        self.assertIn(f"Muninn: version {muninn.SCHEMA_VERSION} (Ysildir understands 4 to 4)", lines)
+        self.assertIn(f"Muninn: version {muninn.SCHEMA_VERSION} (Ysildir understands 4 to 5)", lines)
         self.assertIn("Tools an agent sees: 5 of 12", lines)
         self.assertTrue(any(line.startswith("  off  baldur_day") for line in lines))
         self.assertIn("Prompts: record-estimate", lines)

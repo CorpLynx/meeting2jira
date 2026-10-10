@@ -153,11 +153,11 @@ class IntakeTests(AssistCase):
         self.assertEqual(len(self.events("agent_estimate.withdrawn")), 1)
 
     def test_only_baldur_writes_agent_estimates(self):
-        loki = muninn.open_app("loki", supported=(4, 4), path=self.dir / "muninn.db")
+        loki = muninn.open_app("loki", supported=(4, 5), path=self.dir / "muninn.db")
         self.addCleanup(loki.close)
         with self.assertRaisesRegex(Exception, "not authorized"):
             rules.record_agent_estimate(loki, report(), now=LATER)
-        mine = muninn.open_app("baldur", supported=(4, 4), path=self.dir / "muninn.db")
+        mine = muninn.open_app("baldur", supported=(4, 5), path=self.dir / "muninn.db")
         self.addCleanup(mine.close)
         self.assertEqual(rules.record_agent_estimate(mine, report(), now=LATER).status, "recorded")
 

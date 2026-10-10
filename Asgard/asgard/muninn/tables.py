@@ -25,6 +25,7 @@ MEANINGS: Dict[str, str] = {
     "work_item_transitions": "Each issue's status changes, from Jira's changelog.",
     "calendar_events": "The person's calendar events, from Odin's meeting sync: times, titles and responses.",
     "worklogs": "Time logged in Jira: what Odin posted, and what it read back from Jira.",
+    "meeting_subtasks": "The Jira sub-task Odin made for each meeting, so a re-run never makes a second one.",
     # Baldur
     "repos": "The git repositories Baldur reads, and whether each one counts.",
     "commits": "Commit metadata from those repositories: SHA, time, subject and line counts. No code or bodies.",

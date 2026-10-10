@@ -707,6 +707,66 @@ if one("PRAGMA user_version") >= 4:
     con.execute("RELEASE v4")
 
 # =====================================================================
+# Schema v5: Odin's meeting sub-tasks
+# =====================================================================
+if one("PRAGMA user_version") >= 5:
+    con.execute("SAVEPOINT v5")          # everything here is undone at the end
+    ev5 = one("INSERT INTO calendar_events (source_id, external_id, title, starts_at, ends_at, first_seen_at, "
+              "last_seen_at) VALUES (3, 'v5-meeting', 'Design review', '2026-12-08T15:00:00Z', "
+              "'2026-12-08T16:00:00Z', ?, ?) RETURNING id", (NOW, NOW))
+    MS = ("INSERT INTO meeting_subtasks (meeting_key, content_hash, calendar_event_id, issue_key, parent_key, summary, "
+          "started_at, minutes, worklog_wanted, worklog_comment, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+          "RETURNING id")
+    H = "0123456789abcdef0123456789abcdef"
+    ms = one(MS, ("v5-meeting|2026-12-08T15:00:00Z", H, ev5, "XYZ-51", "XYZ-1", "Meeting: Design review",
+                  "2026-12-08T15:00:00Z", 60, 1, "Meeting: Design review", "odin"))
+    check("a meeting's sub-task is recorded (v5)", ms is not None)
+    one(MS, ("csv:old", "fedcba9876543210fedcba9876543210", None, "A_B2-7", "A_B2-1", "Meeting: Old one",
+             "2025-03-04T14:00:00Z", 30, 0, None, "state_db"))
+    check("history from state.db has no calendar event (v5)",
+          one("SELECT count(*) FROM meeting_subtasks WHERE origin = 'state_db' AND calendar_event_id IS NULL") == 1)
+    good = ["k", H, None, "XYZ-52", "XYZ-1", "s", "2026-12-08T15:00:00Z", 60, 0, None, "odin"]
+    for i, (name, col, value) in enumerate((
+            ("a meeting is recorded once", 0, "v5-meeting|2026-12-08T15:00:00Z"),
+            ("its key isn't empty", 0, ""),
+            ("its content hash is 32 lower-case hex characters", 1, H.upper()),
+            ("its content hash is 32 characters", 1, H[:31]),
+            ("its sub-task is a Jira key in capitals", 3, "xyz-52"),
+            ("its parent is a Jira key in capitals", 4, "XYZ"),
+            ("its summary isn't empty", 5, ""),
+            ("its summary fits Jira's 255 characters", 5, "x" * 256),
+            ("its start is a UTC time", 6, "2026-12-08 15:00"),
+            ("its minutes fit in a day", 7, 1441),
+            ("its minutes aren't negative", 7, -1),
+            ("worklog_wanted is 0 or 1", 8, 2),
+            ("its origin is odin or state_db", 10, "baldur"),
+            ("its calendar event exists", 2, 999999))):
+        params = list(good)
+        params[0] = "k%d" % i
+        params[col] = value
+        rejects(f"a meeting sub-task: {name} (v5)", MS, params)
+    check("two meetings may share a content hash (v5: Outlook keys differ for a moved occurrence)",
+          one(MS, ("v5-other", H, None, "XYZ-53", "XYZ-1", "s", "2026-12-08T15:00:00Z", 60, 0, None, "odin")))
+    for col, value in (("issue_key", "'XYZ-99'"), ("parent_key", "'XYZ-2'"), ("summary", "'renamed'"),
+                       ("minutes", "15"), ("worklog_wanted", "0"), ("worklog_comment", "'other'"),
+                       ("meeting_key", "'moved'"), ("content_hash", "'%s'" % ("a" * 32)), ("origin", "'state_db'"),
+                       ("started_at", "'2026-12-09T15:00:00Z'"), ("created_at", "'2026-01-01T00:00:00Z'")):
+        rejects(f"a meeting sub-task's {col} is never changed (v5)",
+                f"UPDATE meeting_subtasks SET {col} = {value} WHERE id = ?", (ms,))
+    con.execute("UPDATE meeting_subtasks SET calendar_event_id = NULL WHERE id = ?", (ms,))
+    con.execute("UPDATE meeting_subtasks SET calendar_event_id = ? WHERE id = ?", (ev5, ms))
+    check("its calendar event can be cleared and filled in (v5)",
+          one("SELECT calendar_event_id FROM meeting_subtasks WHERE id = ?", (ms,)) == ev5)
+    con.execute("DELETE FROM calendar_events WHERE id = ?", (ev5,))
+    check("removing the calendar event keeps the record (v5)",
+          one("SELECT calendar_event_id IS NULL FROM meeting_subtasks WHERE id = ?", (ms,)) == 1)
+    con.execute("DELETE FROM meeting_subtasks WHERE id = ?", (ms,))
+    check("forgetting a meeting removes its record, so it can be pushed again (v5)",
+          one("SELECT count(*) FROM meeting_subtasks WHERE id = ?", (ms,)) == 0)
+    con.execute("ROLLBACK TO v5")
+    con.execute("RELEASE v5")
+
+# =====================================================================
 # Housekeeping
 # =====================================================================
 run2 = one("INSERT INTO sync_runs (app, source_id, stream) VALUES ('odin',1,'issues') RETURNING id")
@@ -788,6 +848,12 @@ if one("PRAGMA user_version") >= 4:
         "ix_agent_estimates_day")
     plans["Baldur: agent estimates citing a commit (v4)"] = (
         "SELECT estimate_id FROM agent_estimate_commits WHERE sha = 'b1c2d3e'", "ix_agent_estimate_commits_sha")
+if one("PRAGMA user_version") >= 5:
+    plans["Odin: has this meeting a sub-task (v5)"] = (
+        "SELECT issue_key FROM meeting_subtasks WHERE content_hash = '0123456789abcdef0123456789abcdef'",
+        "ix_meeting_subtasks_hash")
+    plans["Odin: the meeting record of a sub-task (v5)"] = (
+        "SELECT id FROM meeting_subtasks WHERE issue_key = 'XYZ-51'", "ix_meeting_subtasks_issue")
 for name, (sql, want) in plans.items():
     plan = " | ".join(r[3] for r in con.execute("EXPLAIN QUERY PLAN " + sql))
     check("index used: " + name, want in plan, plan)

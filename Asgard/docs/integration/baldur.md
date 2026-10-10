@@ -68,7 +68,7 @@ cursor.
 
 ## Schema range
 
-`baldur.cli.SCHEMA = (4, 4)`. The AI-assisted method reads `agent_estimates` on every day view,
+`baldur.cli.SCHEMA = (4, 5)` (v5 adds only Odin's `meeting_subtasks`). The AI-assisted method reads `agent_estimates` on every day view,
 so Baldur needs v4.
 
 ## Still to do

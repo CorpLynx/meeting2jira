@@ -50,7 +50,8 @@ def _own(app: str, *tables: str) -> None:
 
 
 _own("muninn", "meta")
-_own("odin", "work_items", "work_item_transitions", "work_item_aliases", "calendar_events", "worklogs")
+_own("odin", "work_items", "work_item_transitions", "work_item_aliases", "calendar_events", "worklogs",
+     "meeting_subtasks")
 _own("baldur", "repos", "commits", "commit_work_items", "reflog_entries", "pull_requests", "pull_request_commits",
      "pr_reviews",
      "estimate_runs", "work_sessions", "session_commits", "session_allocations", "day_proposals",

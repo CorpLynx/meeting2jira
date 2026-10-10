@@ -14,7 +14,7 @@ from typing import Iterator, Optional, Tuple
 
 from asgard import muninn
 
-SCHEMA = (4, 4)     # the Muninn versions Ysildir understands; equal to Baldur's cli.SCHEMA (a test checks)
+SCHEMA = (4, 5)     # the Muninn versions Ysildir understands; equal to Baldur's cli.SCHEMA (a test checks)
 MAX_DAYS = 31       # the most days one call covers
 
 
